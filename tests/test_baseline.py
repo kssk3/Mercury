@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 from typing import cast
 
 import pytest
 
 from agent_harness.baseline import VerificationBaseline
+from agent_harness.development import DevelopmentVerificationResult
+from agent_harness.evidence import build_evidence_report
+from agent_harness.final import TechnicalDecisionKind, decide_technical_outcome
 from agent_harness.runner import CommandResult
 
 
@@ -133,3 +137,54 @@ def test_baseline_compares_duplicate_commands_by_position() -> None:
 
     assert delta.new_failures == (current[0],)
     assert delta.recovered == (current[1],)
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "timed_out"),
+    [(False, False), (0.0, False), (0, 0), (0, None), (0, "")],
+    ids=[
+        "boolean-exit",
+        "float-exit",
+        "integer-timeout",
+        "null-timeout",
+        "text-timeout",
+    ],
+)
+@pytest.mark.parametrize("preexisting", [False, True])
+def test_malformed_results_never_pass_direct_profile_or_evidence(
+    tmp_path: Path, exit_code: object, timed_out: object, preexisting: bool
+) -> None:
+    command = ("check",)
+    malformed = result(
+        command,
+        exit_code=cast(int, exit_code),
+        timed_out=cast(bool, timed_out),
+    )
+    previous = malformed if preexisting else result(command, exit_code=0)
+    baseline = VerificationBaseline((previous,))
+    current = (malformed,)
+    profile = DevelopmentVerificationResult(
+        baseline, current, baseline.compare(current)
+    )
+    decision = decide_technical_outcome(profile)
+    evidence = build_evidence_report(tmp_path, "candidate", profile, decision, ())
+
+    expected = (
+        TechnicalDecisionKind.BLOCKED if preexisting else TechnicalDecisionKind.FAIL
+    )
+    assert decision.kind is expected
+    assert evidence.overall_kind is expected
+    assert not profile.delta.unchanged_successes
+    assert not profile.delta.recovered
+    failures = (
+        profile.delta.preexisting_failures
+        if preexisting
+        else profile.delta.new_failures
+    )
+    assert failures == current
+
+    recovered = baseline.compare((result(command, exit_code=0),))
+    if preexisting:
+        assert len(recovered.recovered) == 1
+    else:
+        assert len(recovered.unchanged_successes) == 1

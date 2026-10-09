@@ -58,4 +58,9 @@ def _commands(results: tuple[CommandResult, ...]) -> tuple[tuple[str, ...], ...]
 
 
 def _is_successful(result: CommandResult) -> bool:
-    return result.exit_code == 0 and not result.timed_out
+    return (
+        isinstance(result.exit_code, int)
+        and not isinstance(result.exit_code, bool)
+        and result.exit_code == 0
+        and result.timed_out is False
+    )

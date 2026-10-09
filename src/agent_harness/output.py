@@ -24,8 +24,12 @@ class OutputStore:
         max_bytes: int,
         redactor: Callable[[str], str],
     ) -> None:
-        if max_bytes <= 0:
-            raise ValueError("max_bytes must be positive")
+        if (
+            not isinstance(max_bytes, int)
+            or isinstance(max_bytes, bool)
+            or max_bytes <= 0
+        ):
+            raise ValueError("max_bytes must be a positive integer")
 
         self._state_directory = Path(state_directory)
         self._max_bytes = max_bytes

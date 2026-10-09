@@ -878,3 +878,102 @@ def test_missing_restored_and_type_transition_are_net_file_changes(
     delta = compare_observations(restored, RepositoryObservation.capture(repository))
     assert delta.modified == ("base.txt",)
     assert not delta.added and not delta.deleted
+
+
+@pytest.mark.parametrize("old_mode,new_mode", [(0o600, 0o666), (0o755, 0o777)])
+def test_permission_only_changes_reach_scope(
+    repository: Path, old_mode: int, new_mode: int
+) -> None:
+    from agent_harness.scope import evaluate_scope
+    from agent_harness.turn import RepositoryObservation, compare_observations
+
+    path = repository / "base.txt"
+    path.chmod(old_mode)
+    before = RepositoryObservation.capture(repository)
+    path.chmod(new_mode)
+    after = RepositoryObservation.capture(repository)
+    assert before.status == after.status
+    assert compare_observations(before, after).modified == ("base.txt",)
+    decision = evaluate_scope(
+        TaskContract("observe", (), ("base.txt",), ("done",)), before, after
+    )
+    assert decision.protected_paths == ("base.txt",)
+    assert not decision.proceed
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ("--skip-worktree",),
+        ("--assume-unchanged",),
+        ("--skip-worktree", "--assume-unchanged"),
+    ],
+)
+def test_index_flags_change_observation_and_scope(
+    repository: Path, flags: tuple[str, ...]
+) -> None:
+    from agent_harness.scope import evaluate_scope
+    from agent_harness.turn import RepositoryObservation, compare_observations
+
+    name = "tab\tnewline\n한글"
+    (repository / name).write_bytes(b"content")
+    git(repository, "add", "--", name)
+    before = RepositoryObservation.capture(repository)
+    previous = before
+    for flag in flags:
+        git(repository, "update-index", flag, "--", name)
+        current = RepositoryObservation.capture(repository)
+        assert current.index_sha256 != previous.index_sha256
+        previous = current
+    after = RepositoryObservation.capture(repository)
+    assert before.status == after.status
+    assert before.files == after.files
+    assert compare_observations(before, after).index_changed
+    assert not evaluate_scope(
+        TaskContract("observe", (), (), ("done",)), before, after
+    ).proceed
+    for flag in reversed(flags):
+        git(repository, "update-index", flag.replace("--", "--no-", 1), "--", name)
+    assert RepositoryObservation.capture(repository) == before
+
+
+@pytest.mark.parametrize("contents", [b"", b'{"event":"existing"}\n'])
+def test_hardlinked_journal_rejected_before_turn(
+    repository: Path, tmp_path: Path, contents: bytes
+) -> None:
+    target = repository / "external-target"
+    target.write_bytes(contents)
+    journal = EventJournal(tmp_path / "state")
+    journal.path.parent.mkdir()
+    os.link(target, journal.path)
+    marker = tmp_path / "ran"
+    executable = fake(
+        tmp_path, f"import pathlib\npathlib.Path({str(marker)!r}).touch()\n"
+    )
+    with pytest.raises(ValueError, match="link"):
+        invoke(repository, executable, journal.path.parent)
+    assert target.read_bytes() == contents
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("contents", [b"", b'{"event":"existing"}\n'])
+def test_terminal_hardlink_refusal_is_typed_and_preserves_target(
+    repository: Path, tmp_path: Path, contents: bytes
+) -> None:
+    from agent_harness.turn import TurnObservationError
+
+    journal = EventJournal(tmp_path / "state")
+    target = tmp_path / "target"
+    target.write_bytes(contents)
+    executable = fake(
+        tmp_path,
+        "import pathlib, os, sys\nsys.stdin.buffer.read()\n"
+        f"pathlib.Path({str(journal.path)!r}).unlink()\n"
+        f"os.link({str(target)!r}, {str(journal.path)!r})\n",
+    )
+    with pytest.raises(TurnObservationError) as raised:
+        invoke(repository, executable, journal.path.parent)
+    assert raised.value.code == "terminal_append_failed"
+    assert not raised.value.terminal_recorded
+    assert raised.value.adapter_result is not None
+    assert target.read_bytes() == contents

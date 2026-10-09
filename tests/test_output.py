@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -116,3 +117,26 @@ def test_store_does_not_create_an_artifact_when_redaction_fails(tmp_path: Path) 
 def test_store_rejects_non_positive_byte_caps(max_bytes: int, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="positive"):
         OutputStore(tmp_path / "state", max_bytes=max_bytes, redactor=lambda text: text)
+
+
+@pytest.mark.parametrize(
+    "max_bytes", [True, False, 1.5, float("nan"), float("inf"), "10", None]
+)
+@pytest.mark.parametrize("existing_state", [False, True])
+def test_store_rejects_malformed_caps_before_state_mutation(
+    max_bytes: object, existing_state: bool, tmp_path: Path
+) -> None:
+    state = tmp_path / "state"
+    sentinel = state / "outputs" / "preserved.txt"
+    if existing_state:
+        sentinel.parent.mkdir(parents=True)
+        sentinel.write_bytes(b"preserved")
+
+    with pytest.raises(ValueError, match="positive"):
+        OutputStore(state, max_bytes=cast(int, max_bytes), redactor=lambda text: text)
+
+    if existing_state:
+        assert sentinel.read_bytes() == b"preserved"
+        assert list(sentinel.parent.iterdir()) == [sentinel]
+    else:
+        assert not state.exists()

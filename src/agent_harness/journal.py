@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
@@ -19,8 +21,21 @@ class EventJournal:
         if self.path.is_symlink():
             raise ValueError("journal path must not be a symbolic link")
         serialized = json.dumps(dict(event), separators=(",", ":"), sort_keys=True)
-        with self.path.open("a", encoding="utf-8") as journal_file:
-            journal_file.write(f"{serialized}\n")
+        descriptor = os.open(
+            self.path,
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+            0o666,
+        )
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise ValueError("journal must be a regular file with one link")
+            with os.fdopen(
+                descriptor, "a", encoding="utf-8", closefd=False
+            ) as journal_file:
+                journal_file.write(f"{serialized}\n")
+        finally:
+            os.close(descriptor)
 
     def read(self) -> list[dict[str, object]]:
         if not self.path.exists():

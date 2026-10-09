@@ -36,6 +36,7 @@ class FileFingerprint:
     sha256: str | None
     size_bytes: int | None
     executable: bool | None
+    mode: int | None = None
 
 
 @dataclass(frozen=True)
@@ -57,11 +58,11 @@ class RepositoryObservation:
     def capture(cls, repository: Path | str) -> RepositoryObservation:
         root = resolve_repository_root(repository)
         _reject_special_entries(root)
-        index = _git(root, "ls-files", "--stage", "-z")
+        index = _git(root, "ls-files", "--stage", "-v", "-z")
         paths: set[str] = set()
         for entry in _records(index):
             metadata, separator, path = entry.partition(b"\t")
-            if not separator or metadata.split(b" ")[0] not in {
+            if not separator or metadata[2:].split(b" ")[0] not in {
                 b"100644",
                 b"100755",
                 b"120000",
@@ -192,7 +193,12 @@ def _fingerprint(root: Path, relative: str) -> FileFingerprint:
                 digest.update(chunk)
                 size += len(chunk)
             return FileFingerprint(
-                relative, "regular", digest.hexdigest(), size, bool(mode & 0o111)
+                relative,
+                "regular",
+                digest.hexdigest(),
+                size,
+                bool(mode & 0o111),
+                stat.S_IMODE(mode),
             )
         finally:
             os.close(descriptor)
@@ -424,8 +430,9 @@ def _validate_journal(journal: EventJournal, root: Path) -> None:
         if path.is_symlink():
             raise ValueError("journal must not be a symlink")
         if path.exists():
-            if not stat.S_ISREG(path.lstat().st_mode):
-                raise ValueError("journal must be a regular file")
+            metadata = path.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise ValueError("journal must be a regular file with one link")
             with path.open("rb") as stream:
                 if stream.seek(0, os.SEEK_END):
                     stream.seek(-1, os.SEEK_END)
