@@ -261,7 +261,9 @@ def _reject_special_entries(root: Path) -> None:
             with os.scandir(directory) as entries:
                 for entry in entries:
                     if entry.name.casefold() == ".git":
-                        continue
+                        if directory == root and entry.name == ".git":
+                            continue
+                        raise ValueError("unsupported nested Git metadata entry")
                     path = Path(entry.path)
                     mode = entry.stat(follow_symlinks=False).st_mode
                     if stat.S_ISLNK(mode) or stat.S_ISREG(mode):
@@ -315,6 +317,7 @@ def run_observed_turn(
     )
     _validate_journal(journal, root)
     before = RepositoryObservation.capture(root)
+    _reject_allowed_symlinks(contract, before)
     attempt_id = uuid.uuid4().hex
     intent: dict[str, object] = {
         "event": "turn_intent",
@@ -365,6 +368,61 @@ def run_observed_turn(
             "terminal_append_failed", attempt_id, result, False
         ) from None
     return ObservedTurnResult(attempt_id, result, before, after, delta)
+
+
+def _reject_allowed_symlinks(
+    contract: TaskContract, snapshot: RepositoryObservation
+) -> None:
+    # Existing link targets can change without changing link fingerprints. Reject
+    # links inside allowed boundaries and link ancestors of allowed descendants.
+    for entry in snapshot.files:
+        if entry.kind != "symlink":
+            continue
+        path = entry.path.casefold()
+        for allowed in contract.allowed_paths:
+            boundary = allowed.casefold()
+            if (
+                path == boundary
+                or path.startswith(boundary + "/")
+                or boundary.startswith(path + "/")
+            ):
+                raise ValueError("allowed paths must not traverse observed symlinks")
+
+    # Admission also permits ignored/untracked paths absent from the observation.
+    # Inspect only admitted paths, their ancestors and directory descendants,
+    # using lstat/scandir without following links or entering Git metadata.
+    root = Path(snapshot.repository_root)
+    pending: list[Path] = []
+    try:
+        for allowed in contract.allowed_paths:
+            current = root
+            for component in PurePosixPath(allowed).parts:
+                if component.casefold() == ".git":
+                    raise ValueError("allowed paths must not traverse Git metadata")
+                current /= component
+                try:
+                    mode = current.lstat().st_mode
+                except FileNotFoundError:
+                    break
+                if stat.S_ISLNK(mode):
+                    raise ValueError("allowed paths must not traverse symlinks")
+                if not stat.S_ISDIR(mode):
+                    break
+            else:
+                pending.append(current)
+        while pending:
+            directory = pending.pop()
+            with os.scandir(directory) as entries:
+                for filesystem_entry in entries:
+                    if filesystem_entry.name.casefold() == ".git":
+                        raise ValueError("unsupported nested Git metadata entry")
+                    mode = filesystem_entry.stat(follow_symlinks=False).st_mode
+                    if stat.S_ISLNK(mode):
+                        raise ValueError("allowed paths must not traverse symlinks")
+                    if stat.S_ISDIR(mode):
+                        pending.append(Path(filesystem_entry.path))
+    except OSError as error:
+        raise ValueError("could not inspect allowed paths") from error
 
 
 def _validate_turn(

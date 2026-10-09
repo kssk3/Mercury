@@ -106,6 +106,7 @@ def test_snapshot_includes_rename_source_and_not_copy_source(
     repository = tmp_path / "repository"
     expected_command = [
         "git",
+        "--no-optional-locks",
         "-C",
         str(repository.resolve()),
         "status",
@@ -205,3 +206,35 @@ def test_snapshot_ignores_inherited_git_selectors_without_mutation(
     assert set(snapshot.untracked_paths) == {"requested-new.txt"}
     assert [repository_contents(repository) for repository in repositories] == before
     assert dict(os.environ) == parent_environment
+
+
+def test_capture_preserves_stale_stat_index_bytes_and_timestamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repository"
+    git(tmp_path, "init", "--quiet", str(repository))
+    tracked = repository / "tracked"
+    tracked.write_bytes(b"same content")
+    git(repository, "add", ".")
+    git(
+        repository,
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-qm",
+        "base",
+    )
+    stale = tracked.stat().st_mtime_ns - 10_000_000_000
+    os.utime(tracked, ns=(stale, stale))
+    index = repository / ".git/index"
+    before = (index.read_bytes(), index.stat().st_mtime_ns)
+    monkeypatch.setenv("GIT_OPTIONAL_LOCKS", "0")
+
+    snapshot = WorkspaceSnapshot.capture(repository)
+
+    assert snapshot == WorkspaceSnapshot((), (), ())
+    assert (index.read_bytes(), index.stat().st_mtime_ns) == before
+    assert not (repository / ".git/index.lock").exists()
+    assert os.environ["GIT_OPTIONAL_LOCKS"] == "0"

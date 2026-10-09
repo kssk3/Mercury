@@ -1109,3 +1109,133 @@ def test_same_commit_head_identity_change_is_not_scope_clear(
     assert not evaluate_scope(
         TaskContract("scope", (), (), ("verified",)), before, after
     ).proceed
+
+
+@pytest.mark.parametrize("name", [".git", ".GIT"])
+@pytest.mark.parametrize("kind", ["directory", "file", "symlink"])
+def test_nested_git_entry_is_not_a_usable_observation(
+    repository: Path, tmp_path: Path, name: str, kind: str
+) -> None:
+    from agent_harness.turn import RepositoryObservation
+
+    parent = repository / "outside"
+    parent.mkdir()
+    entry = parent / name
+    if kind == "directory":
+        entry.mkdir()
+        (entry / "payload").write_bytes(b"unobserved")
+    elif kind == "file":
+        entry.write_bytes(b"unobserved")
+    else:
+        entry.symlink_to(tmp_path / "external")
+    with pytest.raises(ValueError):
+        RepositoryObservation.capture(repository)
+
+
+def test_linked_worktree_root_git_file_remains_observable(
+    repository: Path, tmp_path: Path
+) -> None:
+    from agent_harness.turn import RepositoryObservation
+
+    linked = tmp_path / "linked"
+    git(repository, "worktree", "add", "--detach", str(linked))
+    assert (linked / ".git").is_file()
+    observation = RepositoryObservation.capture(linked)
+    assert observation.head == RepositoryObservation.capture(repository).head
+    assert {entry.path for entry in observation.files} == {"base.txt"}
+
+
+@pytest.mark.parametrize("location", ["exact", "ancestor", "descendant"])
+def test_ignored_admitted_symlink_refused_before_native_write(
+    repository: Path, tmp_path: Path, location: str
+) -> None:
+    from agent_harness.turn import RepositoryObservation, run_observed_turn
+
+    (repository / ".gitignore").write_text("ignored/\n")
+    ignored = repository / "ignored"
+    ignored.mkdir()
+    target = tmp_path / "external"
+    if location == "ancestor":
+        target.mkdir()
+        victim = target / "payload"
+        relative = "ignored/link/payload"
+        allowed = relative
+        link = ignored / "link"
+    else:
+        victim = target
+        if location == "descendant":
+            (ignored / "directory").mkdir()
+            link = ignored / "directory/link"
+            relative = "ignored/directory/link"
+            allowed = "ignored/directory"
+        else:
+            link = ignored / "link"
+            relative = "ignored/link"
+            allowed = relative
+    victim.write_bytes(b"original")
+    link.symlink_to(target, target_is_directory=location == "ancestor")
+    assert not any(
+        entry.path.startswith("ignored/")
+        for entry in RepositoryObservation.capture(repository).files
+    )
+    marker = tmp_path / "ran"
+    executable = fake(
+        tmp_path,
+        "import pathlib, sys\nsys.stdin.buffer.read()\n"
+        + f"pathlib.Path({str(marker)!r}).touch()\npathlib.Path({relative!r}).write_bytes(b'changed')\n",
+    )
+    task = TaskContract("admitted ignored path", (allowed,), (), ("verified",))
+    admission = record_admission(
+        task, approver="human", approved_at="2026-10-09T00:00:00Z"
+    )
+    context = build_context_packet(
+        repository, source_paths=["base.txt"], budget_bytes=4096
+    )
+    journal = EventJournal(tmp_path / "state")
+    with pytest.raises(ValueError, match="symlink"):
+        run_observed_turn(
+            CodexCLIAdapter(executable),
+            task,
+            admission,
+            context,
+            journal=journal,
+            budgets=TurnBudgets(3, 16000, 128, 128, 128),
+        )
+    assert not marker.exists()
+    assert victim.read_bytes() == b"original"
+    assert not journal.path.exists()
+
+
+@pytest.mark.parametrize("path_kind", ["missing", "ignored_regular"])
+def test_allowed_path_inspection_preserves_missing_regular_and_unrelated_links(
+    repository: Path, tmp_path: Path, path_kind: str
+) -> None:
+    from agent_harness.turn import run_observed_turn
+
+    (repository / ".gitignore").write_text("ignored/\n")
+    ignored = repository / "ignored"
+    ignored.mkdir()
+    external = tmp_path / "external"
+    external.write_bytes(b"original")
+    (ignored / "unrelated").symlink_to(external)
+    allowed = "new/missing" if path_kind == "missing" else "ignored/regular"
+    if path_kind == "ignored_regular":
+        (repository / allowed).write_bytes(b"regular")
+    marker = tmp_path / "ran"
+    executable = fake(
+        tmp_path,
+        "import pathlib, sys\nsys.stdin.buffer.read()\n"
+        + f"pathlib.Path({str(marker)!r}).touch()\n",
+    )
+    task = TaskContract("allowed inspection", (allowed,), (), ("verified",))
+    result = run_observed_turn(
+        CodexCLIAdapter(executable),
+        task,
+        record_admission(task, approver="human", approved_at="2026-10-09T00:00:00Z"),
+        build_context_packet(repository, source_paths=["base.txt"], budget_bytes=4096),
+        journal=EventJournal(tmp_path / "state"),
+        budgets=TurnBudgets(3, 16000, 128, 128, 128),
+    )
+    assert result.adapter_result.process_status == "successful_exit"
+    assert marker.exists()
+    assert external.read_bytes() == b"original"

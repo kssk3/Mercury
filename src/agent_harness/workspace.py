@@ -19,6 +19,7 @@ class WorkspaceSnapshot:
         result = subprocess.run(
             [
                 "git",
+                "--no-optional-locks",
                 "-C",
                 str(Path(repository).resolve()),
                 "status",

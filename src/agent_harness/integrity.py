@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
+from os import fstat
 from pathlib import Path, PurePosixPath
 from stat import S_IMODE, S_ISDIR, S_ISREG
 
@@ -122,6 +123,9 @@ def _validate_relative_path(path: object) -> str:
 def _file_digest(path: Path) -> str:
     digest = sha256()
     with path.open("rb") as stream:
+        opened = fstat(stream.fileno())
+        if not S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+            raise OSError("protected input must be a single-link regular file")
         while chunk := stream.read(64 * 1024):
             digest.update(chunk)
     return digest.hexdigest()

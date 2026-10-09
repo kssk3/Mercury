@@ -658,3 +658,85 @@ def test_unchanged_and_deleted_allowed_symlinks_remain_clear(repository: Path) -
     assert evaluate_scope(
         contract("link"), before, RepositoryObservation.capture(repository)
     ).proceed
+
+
+@pytest.mark.parametrize("boundary", ["link", "src", "link/payload"])
+@pytest.mark.parametrize("target_kind", ["external", "protected"])
+def test_existing_allowed_symlink_refused_before_native_write(
+    repository: Path, tmp_path: Path, boundary: str, target_kind: str
+) -> None:
+    target = (
+        tmp_path / "external" if target_kind == "external" else repository / "guard"
+    )
+    is_directory = boundary == "link/payload"
+    if is_directory:
+        target.mkdir()
+        victim = target / "payload"
+    else:
+        victim = target
+    victim.write_bytes(b"original")
+    link = repository / ("src/link" if boundary == "src" else "link")
+    link.parent.mkdir(exist_ok=True)
+    link.symlink_to(target, target_is_directory=is_directory)
+    git(repository, "add", "--", str(link.relative_to(repository)))
+    written_path = (
+        "link/payload" if is_directory else link.relative_to(repository).as_posix()
+    )
+    marker = tmp_path / "ran"
+    executable = fake(
+        tmp_path,
+        "import pathlib, sys\nsys.stdin.buffer.read()\n"
+        + f"pathlib.Path({str(marker)!r}).touch()\npathlib.Path({written_path!r}).write_bytes(b'changed')\n",
+    )
+    journal = EventJournal(tmp_path / "state")
+    task = contract(
+        boundary, protected=("guard",) if target_kind == "protected" else ()
+    )
+    with pytest.raises(ValueError, match="symlink"):
+        invoke(repository, executable, journal, task=task)
+    assert not marker.exists()
+    assert victim.read_bytes() == b"original"
+    assert not journal.path.exists()
+
+
+def test_unrelated_existing_symlink_does_not_block_native_turn(
+    repository: Path, tmp_path: Path
+) -> None:
+    target = tmp_path / "external"
+    target.write_bytes(b"original")
+    (repository / "link").symlink_to(target)
+    executable = fake(
+        tmp_path,
+        "import pathlib, sys\nsys.stdin.buffer.read()\npathlib.Path('base.txt').write_bytes(b'allowed')\n",
+    )
+    result = invoke(
+        repository,
+        executable,
+        EventJournal(tmp_path / "state"),
+        task=contract("base.txt"),
+    )
+    assert result.decision.proceed
+    assert target.read_bytes() == b"original"
+
+
+def test_nested_git_created_by_native_turn_is_failed_observation(
+    repository: Path, tmp_path: Path
+) -> None:
+    from agent_harness.turn import TurnObservationError
+
+    executable = fake(
+        tmp_path,
+        "import pathlib, sys\nsys.stdin.buffer.read()\npathlib.Path('outside/.git').mkdir(parents=True)\npathlib.Path('outside/.git/payload').write_bytes(b'outside')\n",
+    )
+    journal = EventJournal(tmp_path / "state")
+    with pytest.raises(TurnObservationError) as raised:
+        invoke(repository, executable, journal)
+    assert raised.value.code == "after_observation_failed"
+    assert raised.value.terminal_recorded
+    assert raised.value.adapter_result is not None
+    assert raised.value.adapter_result.process_status == "successful_exit"
+    assert [event["event"] for event in journal.read()] == [
+        "turn_intent",
+        "turn_observation_failed",
+    ]
+    assert (repository / "outside/.git/payload").read_bytes() == b"outside"

@@ -495,6 +495,9 @@ def test_protected_hashing_streams_binary_files_in_bounded_reads(
         def __init__(self, stream: BinaryIO) -> None:
             self.stream = stream
 
+        def fileno(self) -> int:
+            return self.stream.fileno()
+
         def read(self, size: int = -1) -> bytes:
             assert 0 < size <= 256 * 1024, "hashing must use bounded reads"
             read_sizes.append(size)
@@ -559,6 +562,9 @@ def test_stream_read_failure_preserves_error_classification_and_continues(
         def __init__(self, stream: BinaryIO) -> None:
             self.stream = stream
             self.first_read = True
+
+        def fileno(self) -> int:
+            return self.stream.fileno()
 
         def read(self, size: int = -1) -> bytes:
             if not self.first_read:
@@ -652,3 +658,77 @@ def test_protected_directory_mode_remains_outside_contents_contract(
         integrity.verify_protected_directories(tmp_path, captured)[0].state
         is ProtectedInputState.UNCHANGED
     )
+
+
+@pytest.mark.parametrize("directory", [False, True])
+@pytest.mark.parametrize("operation", ["capture", "verify"])
+def test_ignored_protected_hardlink_refused_despite_same_bytes_and_mode(
+    tmp_path: Path, directory: bool, operation: str
+) -> None:
+    from test_loop import _repository
+
+    from agent_harness.turn import RepositoryObservation
+
+    root = _repository(tmp_path)
+    (root / ".git/info/exclude").write_text("protected/\n")
+    (root / "protected").mkdir()
+    target = root / "protected/input"
+    target.write_bytes(b"private bytes")
+    target.chmod(0o600)
+    captured_files = capture_protected_inputs(root, ("protected/input",))
+    captured_directories = integrity.capture_protected_directories(root, ("protected",))
+    before = RepositoryObservation.capture(root)
+    outside = tmp_path / "outside"
+    outside.write_bytes(target.read_bytes())
+    outside.chmod(0o600)
+    target.unlink()
+    target.hardlink_to(outside)
+    assert target.stat().st_nlink == 2
+    assert RepositoryObservation.capture(root) == before
+    if operation == "capture":
+        with pytest.raises(ValueError):
+            if directory:
+                integrity.capture_protected_directories(root, ("protected",))
+            else:
+                capture_protected_inputs(root, ("protected/input",))
+    else:
+        checks = (
+            integrity.verify_protected_directories(root, captured_directories)
+            if directory
+            else verify_protected_inputs(root, captured_files)
+        )
+        assert checks[0].state is ProtectedInputState.UNVERIFIABLE
+    assert outside.read_bytes() == b"private bytes"
+
+
+@pytest.mark.parametrize("operation", ["capture", "verify"])
+def test_actual_opened_protected_hardlink_is_refused_and_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    target = tmp_path / "safe"
+    target.write_bytes(b"same")
+    fingerprints = capture_protected_inputs(tmp_path, ("safe",))
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"same")
+    original_open = Path.open
+    opened: list[BinaryIO] = []
+
+    @contextmanager
+    def substituted_open(path: Path, mode: str = "r") -> Iterator[BinaryIO]:
+        assert path == target and mode == "rb"
+        target.unlink()
+        target.hardlink_to(outside)
+        with original_open(path, "rb") as stream:
+            opened.append(stream)
+            yield stream
+
+    monkeypatch.setattr(Path, "open", substituted_open)
+    if operation == "capture":
+        with pytest.raises(ValueError):
+            capture_protected_inputs(tmp_path, ("safe",))
+    else:
+        assert (
+            verify_protected_inputs(tmp_path, fingerprints)[0].state
+            is ProtectedInputState.UNVERIFIABLE
+        )
+    assert len(opened) == 1 and opened[0].closed
