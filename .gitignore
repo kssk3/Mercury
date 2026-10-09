@@ -1,0 +1,44 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+.DS_Store
+
+# Local credentials and key material.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.cert
+.netrc
+.aws/
+.secrets/
+
+# Runtime artifacts belong outside the target repository.
+.project-state/
+.agent-harness/
+.harness-state/
+runtime-state/
+/current.json
+events.jsonl
+outputs/
+
+# Local personal configuration and private records.
+.codex/
+.claude/
+conv-logs/
+review-notes/
+private-export/
+
+# The synthetic development fixture and public example stay versioned.
+!tests/fixtures/project-state-v1.json
+!examples/quickstart.py
