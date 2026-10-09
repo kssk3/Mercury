@@ -1101,3 +1101,28 @@ def test_h4_retry_composes_with_real_h2_and_h3_without_persistence_mutation(
     assert decision.completed_retries == 0
     assert decision.repeated_failures == 1
     assert (journal.path.read_bytes(), store.path.read_bytes()) == before
+
+
+@pytest.mark.parametrize("mode", [0o600, 0o666, 0o755, 0o777])
+def test_actual_observation_json_roundtrip_retains_permissions(
+    repository: Path, mode: int
+) -> None:
+    from agent_harness.attempt import _observation
+
+    (repository / "base.txt").chmod(mode)
+    snapshot = RepositoryObservation.capture(repository)
+    decoded = _observation(json.loads(json.dumps(asdict(snapshot))))
+
+    assert decoded == snapshot
+    assert decoded.files[0].mode == mode
+
+
+def test_legacy_observation_does_not_invent_permissions(repository: Path) -> None:
+    from agent_harness.attempt import _observation
+
+    payload = asdict(RepositoryObservation.capture(repository))
+    for entry in payload["files"]:
+        entry.pop("mode")
+    decoded = _observation(json.loads(json.dumps(payload)))
+
+    assert all(entry.mode is None for entry in decoded.files)

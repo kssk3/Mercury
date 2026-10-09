@@ -566,3 +566,57 @@ def test_forged_invalid_contract_never_clear_or_launch(
     with pytest.raises((TypeError, ValueError)):
         invoke(repository, executable, journal, task=task)
     assert not marker.exists() and not journal.path.exists()
+
+
+@pytest.mark.parametrize(
+    "mode,kind,executable",
+    [
+        (True, "regular", False),
+        (False, "regular", False),
+        (420.0, "regular", False),
+        (-1, "regular", True),
+        (0o10000, "regular", False),
+        (0o644, "regular", True),
+        (0o755, "regular", False),
+        (0o644, "symlink", None),
+        (0, "missing", None),
+    ],
+)
+def test_supplied_permission_mode_must_be_consistent(
+    repository: Path, mode: object, kind: str, executable: bool | None
+) -> None:
+    from dataclasses import replace
+    from typing import Any, cast
+
+    from agent_harness.scope import evaluate_scope
+
+    snapshot = RepositoryObservation.capture(repository)
+    entry = replace(
+        snapshot.files[0],
+        mode=cast(Any, mode),
+        kind=cast(Any, kind),
+        executable=executable,
+    )
+    if kind == "missing":
+        entry = replace(entry, sha256=None, size_bytes=None)
+    malformed = replace(snapshot, files=(entry,))
+
+    with pytest.raises(ValueError, match="observation"):
+        evaluate_scope(contract("base.txt"), malformed, malformed)
+
+
+@pytest.mark.parametrize("mode", [None, 0, 0o600, 0o755, 0o7777])
+def test_legacy_and_valid_permission_modes_remain_usable(
+    repository: Path, mode: int | None
+) -> None:
+    from dataclasses import replace
+
+    from agent_harness.scope import evaluate_scope
+
+    snapshot = RepositoryObservation.capture(repository)
+    entry = replace(
+        snapshot.files[0], mode=mode, executable=bool(mode & 0o111) if mode else False
+    )
+    compatible = replace(snapshot, files=(entry,))
+
+    assert evaluate_scope(contract(), compatible, compatible).proceed

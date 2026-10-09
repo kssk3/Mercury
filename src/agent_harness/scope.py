@@ -171,6 +171,14 @@ def _validate_observation(snapshot: RepositoryObservation) -> None:
                     else entry.executable is None
                 )
             )
+        if entry.mode is not None:
+            valid = (
+                valid
+                and entry.kind == "regular"
+                and type(entry.mode) is int
+                and 0 <= entry.mode <= 0o7777
+                and entry.executable is bool(entry.mode & 0o111)
+            )
         if not valid:
             raise ValueError("invalid scope observation")
     statuses: set[GitStatusEntry] = set()

@@ -601,3 +601,80 @@ def test_incomplete_inventory_or_changed_stage_refused_before_writes(
     assert (repo / "modify").read_bytes() == b"agent"
     if mutation != "omit_tracked_missing":
         assert (repo / "delete").read_bytes() == b"delete"
+
+
+@pytest.mark.parametrize("modes", [(0o600, 0o666), (0o755, 0o777)])
+def test_flagged_permission_only_patch_restores_exact_snapshot(
+    repo: Path, tmp_path: Path, modes: tuple[int, int]
+) -> None:
+    from agent_harness.recovery import capture_patch, recover_patch, seal_patch
+    from agent_harness.turn import RepositoryObservation
+
+    name = "tab\tnewline\n한글"
+    (repo / name).write_bytes(b"unchanged")
+    git(repo, "add", "--", name)
+    git(repo, "update-index", "--skip-worktree", "--", name)
+    git(repo, "update-index", "--assume-unchanged", "--", name)
+    path = repo / "modify"
+    path.chmod(modes[0])
+    before = capture_patch(repo, contract(), "a", ("modify",))
+    path.chmod(modes[1])
+    after = capture_patch(repo, contract(), "a", ("modify",))
+    assert before.observation.status == after.observation.status
+    ref = seal_patch(before, after, tmp_path.resolve() / "artifact")
+    assert recover_patch(repo, contract(), "a", ref).status == "restored"
+    assert RepositoryObservation.capture(repo) == before.observation
+    assert path.stat().st_mode & 0o777 == modes[0]
+
+
+def test_capture_rejects_image_permission_disagreement(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    import agent_harness.recovery as recovery
+
+    (repo / "modify").chmod(0o600)
+    original = recovery._image
+
+    def mismatched(root: Path, relative: str) -> recovery.FileImage:
+        return replace(original(root, relative), mode=0o666)
+
+    monkeypatch.setattr(recovery, "_image", mismatched)
+    with pytest.raises(ValueError, match="observation disagreement"):
+        recovery.capture_patch(repo, contract(), "a", ("modify",))
+    assert (repo / "modify").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("boundary", ["seal", "recover"])
+def test_image_permission_disagreement_refused_before_writes(
+    repo: Path, tmp_path: Path, boundary: str
+) -> None:
+    import hashlib
+    import json
+    from dataclasses import replace
+
+    from agent_harness.recovery import capture_patch, recover_patch, seal_patch
+    from agent_harness.turn import RepositoryObservation
+
+    (repo / "modify").chmod(0o600)
+    before = capture_patch(repo, contract(), "a", ("modify",))
+    (repo / "modify").write_bytes(b"agent")
+    after = capture_patch(repo, contract(), "a", ("modify",))
+    untouched = RepositoryObservation.capture(repo)
+    artifact = tmp_path.resolve() / "artifact"
+    if boundary == "seal":
+        forged = replace(before, images=(replace(before.images[0], mode=0o666),))
+        with pytest.raises(ValueError, match="observation disagreement"):
+            seal_patch(forged, after, artifact)
+        assert not artifact.exists()
+    else:
+        ref = seal_patch(before, after, artifact)
+        payload = json.loads(artifact.read_bytes())
+        payload["before"]["images"][0]["mode"] = 0o666
+        raw = json.dumps(payload).encode()
+        artifact.write_bytes(raw)
+        trusted = replace(ref, sha256=hashlib.sha256(raw).hexdigest())
+        with pytest.raises(ValueError, match="observation disagreement"):
+            recover_patch(repo, contract(), "a", trusted)
+    assert RepositoryObservation.capture(repo) == untouched

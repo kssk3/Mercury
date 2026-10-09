@@ -413,6 +413,7 @@ def _observation(value: object) -> RepositoryObservation:
                 cast(str | None, entry["sha256"]),
                 cast(int | None, entry["size_bytes"]),
                 cast(bool | None, entry["executable"]),
+                cast(int | None, entry.get("mode")),
             )
         )
     statuses: list[GitStatusEntry] = []

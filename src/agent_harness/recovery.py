@@ -158,6 +158,7 @@ def capture_patch(
             or entry.sha256 != hashlib.sha256(image.data).hexdigest()
             or entry.size_bytes != len(image.data)
             or entry.executable != bool((image.mode or 0) & 0o111)
+            or entry.mode != image.mode
         ):
             raise ValueError("recovery image observation disagreement")
     return PatchSnapshot(after, _digest(contract), attempt_id, images)
@@ -231,6 +232,7 @@ def _tracked_paths(root: Path, expected_index: str) -> set[str]:
                 str(root),
                 "ls-files",
                 "--stage",
+                "-v",
                 "-z",
             ],
             capture_output=True,
@@ -252,7 +254,7 @@ def _tracked_paths(root: Path, expected_index: str) -> set[str]:
     paths: set[str] = set()
     for record in records:
         metadata, separator, raw_path = record.partition(b"\t")
-        if not separator or metadata.split(b" ")[0] not in {
+        if not separator or metadata[2:].split(b" ")[0] not in {
             b"100644",
             b"100755",
             b"120000",
@@ -323,6 +325,7 @@ def _validate_snapshot(snapshot: PatchSnapshot) -> None:
                 and fingerprint.sha256 == hashlib.sha256(image.data).hexdigest()
                 and fingerprint.size_bytes == len(image.data)
                 and fingerprint.executable == bool(image.mode & 0o111)
+                and fingerprint.mode == image.mode
             )
             total += len(image.data)
         if not valid:
