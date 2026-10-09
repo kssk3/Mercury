@@ -553,3 +553,99 @@ def _native_fixture(
         executable.write_text(executable.read_text() + "import os; os.mkfifo('fifo')\n")
     executable.chmod(0o700)
     return executable
+
+
+@pytest.mark.parametrize("boundary", ["protected_check", "recapture", "acceptance"])
+@pytest.mark.parametrize("elapsed", [49.0, 50.0, 51.0])
+def test_final_cleanup_obeys_elapsed_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str, elapsed: float
+) -> None:
+    """Post-command checks and evidence acceptance count toward the loop limit."""
+    from agent_harness import loop
+    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.admission import record_admission
+    from agent_harness.attempt import AttemptJournal
+    from agent_harness.context import ContextPacket
+    from agent_harness.integrity import verify_protected_inputs
+    from agent_harness.journal import EventJournal
+    from agent_harness.retry import RetryLimits
+    from agent_harness.state import CurrentStateStore
+    from agent_harness.turn import RepositoryObservation
+
+    root = _repository(tmp_path)
+    launches = tmp_path / "verify-launches"
+    executable = _native_fixture(
+        tmp_path, root, tmp_path / "native-launches", "pass", 0
+    )
+    (root / "protected").write_text("original")
+    command = (
+        sys.executable,
+        "-c",
+        f"from pathlib import Path; p=Path({str(launches)!r}); p.write_text(p.read_text()+'x' if p.exists() else 'x'); assert Path('value').read_text()=='new'",
+    )
+    task = TaskContract("change value", ("value",), ("protected",), ("new value",))
+    journal = EventJournal(tmp_path / "state")
+    now = 0.0
+
+    def final_command_finished() -> bool:
+        return launches.exists() and launches.read_text() == "xxx"
+
+    if boundary == "protected_check":
+        original_check = verify_protected_inputs
+
+        def slow_check(*args: object, **kwargs: object) -> object:
+            nonlocal now
+            result = original_check(*args, **kwargs)  # type: ignore[arg-type]
+            if final_command_finished():
+                now = elapsed
+            return result
+
+        monkeypatch.setattr(loop, "verify_protected_inputs", slow_check)
+    elif boundary == "recapture":
+        original_capture = RepositoryObservation.capture
+
+        def slow_capture(*args: object, **kwargs: object) -> object:
+            nonlocal now
+            result = original_capture(*args, **kwargs)  # type: ignore[arg-type]
+            if final_command_finished():
+                now = elapsed
+            return result
+
+        monkeypatch.setattr(RepositoryObservation, "capture", slow_capture)
+    else:
+        original_record = AttemptJournal.record_verification
+
+        def slow_record(*args: object, **kwargs: object) -> object:
+            nonlocal now
+            result = original_record(*args, **kwargs)  # type: ignore[arg-type]
+            if final_command_finished():
+                now = elapsed
+            return result
+
+        monkeypatch.setattr(AttemptJournal, "record_verification", slow_record)
+
+    result = loop.run_loop(
+        CodexCLIAdapter(executable),
+        task,
+        record_admission(task, approver="human", approved_at="2026-10-06T00:00:00Z"),
+        ContextPacket(str(root), 4096, ()),
+        policy=VerificationPolicy((command,), ".", 2),
+        criterion_commands={"new value": (command,)},
+        journal=journal,
+        state_store=CurrentStateStore(tmp_path / "state"),
+        budgets=TurnBudgets(2, 16000, 128, 128, 128),
+        limits=RetryLimits(2, 2, 7, 50),
+        redactor=lambda text: text,
+        max_output_bytes=128,
+        monotonic=lambda: now,
+    )
+    assert launches.read_text() == "xxx"
+    assert result.usage.commands == 4
+    assert result.usage.elapsed_seconds == elapsed
+    assert result.status == ("stopped" if elapsed > 50 else "pass")
+    assert result.reason == ("time_budget" if elapsed > 50 else "final_verification")
+    if elapsed <= 50:
+        assert result.criteria and all(item.passed for item in result.criteria)
+    else:
+        assert not result.criteria
+    assert journal.read()[-1]["status"] == result.status

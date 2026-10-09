@@ -977,3 +977,135 @@ def test_terminal_hardlink_refusal_is_typed_and_preserves_target(
     assert not raised.value.terminal_recorded
     assert raised.value.adapter_result is not None
     assert target.read_bytes() == contents
+
+
+@pytest.mark.parametrize("tracked", [True, False])
+def test_same_bytes_and_mode_hardlink_cannot_produce_observation(
+    repository: Path, tmp_path: Path, tracked: bool
+) -> None:
+    from agent_harness.turn import RepositoryObservation
+
+    path = repository / ("base.txt" if tracked else "untracked")
+    path.write_bytes(b"initial")
+    path.chmod(0o600)
+    before = RepositoryObservation.capture(repository)
+    outside = tmp_path / "outside"
+    outside.write_bytes(path.read_bytes())
+    outside.chmod(0o600)
+    path.unlink()
+    os.link(outside, path)
+    with pytest.raises(ValueError):
+        RepositoryObservation.capture(repository)
+    assert before.files
+    assert outside.read_bytes() == b"initial"
+
+
+def test_worktree_hardlink_refused_before_adapter_invocation(
+    repository: Path, tmp_path: Path
+) -> None:
+    os.link(repository / "base.txt", tmp_path / "outside")
+    marker = tmp_path / "ran"
+    executable = fake(
+        tmp_path, f"import pathlib\npathlib.Path({str(marker)!r}).touch()\n"
+    )
+    journal = EventJournal(tmp_path / "state")
+    with pytest.raises(ValueError):
+        invoke(repository, executable, journal.path.parent)
+    assert not marker.exists()
+    assert not journal.path.exists()
+
+
+def test_protected_hardlink_substitution_yields_typed_failure_not_scope_clear(
+    repository: Path, tmp_path: Path
+) -> None:
+    from agent_harness.scope import run_scoped_turn
+    from agent_harness.turn import TurnObservationError
+
+    target = repository / "base.txt"
+    target.chmod(0o600)
+    outside = tmp_path / "outside"
+    outside.write_bytes(target.read_bytes())
+    outside.chmod(0o600)
+    executable = fake(
+        tmp_path,
+        "import os, pathlib, sys\nsys.stdin.buffer.read()\n"
+        "pathlib.Path('base.txt').unlink()\n"
+        f"os.link({str(outside)!r}, 'base.txt')\n",
+    )
+    policy = TaskContract("observe", ("added",), ("base.txt",), ("scope clear",))
+    admission = record_admission(
+        policy, approver="human", approved_at="2026-10-01T00:00:00Z"
+    )
+    context = build_context_packet(
+        repository, source_paths=["base.txt"], budget_bytes=4096
+    )
+    journal = EventJournal(tmp_path / "state")
+    with pytest.raises(TurnObservationError) as raised:
+        run_scoped_turn(
+            CodexCLIAdapter(executable),
+            policy,
+            admission,
+            context,
+            journal=journal,
+            budgets=TurnBudgets(3, 16000, 128, 128, 128),
+        )
+    assert raised.value.code == "after_observation_failed"
+    assert raised.value.terminal_recorded
+    assert raised.value.adapter_result is not None
+    assert raised.value.adapter_result.process_status == "successful_exit"
+    assert [event["event"] for event in journal.read()] == [
+        "turn_intent",
+        "turn_observation_failed",
+    ]
+    assert target.read_bytes() == outside.read_bytes() == b"initial"
+
+
+def test_observation_checks_opened_hardlink_and_closes_descriptor(
+    repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_harness.turn import RepositoryObservation
+
+    target = repository / "base.txt"
+    outside = tmp_path / "outside"
+    outside.write_bytes(target.read_bytes())
+    outside.chmod(target.stat().st_mode & 0o777)
+    original = os.open
+    opened: list[int] = []
+
+    def substituted(
+        path: object, flags: int, mode: int = 0o777, *, dir_fd: int | None = None
+    ) -> int:
+        if path == target:
+            target.unlink()
+            os.link(outside, target)
+        descriptor = original(path, flags, mode, dir_fd=dir_fd)  # type: ignore[arg-type]
+        if path == target:
+            opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(os, "open", substituted)
+    with pytest.raises(ValueError):
+        RepositoryObservation.capture(repository)
+    assert len(opened) == 1
+    with pytest.raises(OSError):
+        os.fstat(opened[0])
+
+
+@pytest.mark.parametrize("change", ["switch", "detach"])
+def test_same_commit_head_identity_change_is_not_scope_clear(
+    repository: Path, change: str
+) -> None:
+    from agent_harness.scope import evaluate_scope
+    from agent_harness.turn import RepositoryObservation, compare_observations
+
+    before = RepositoryObservation.capture(repository)
+    if change == "switch":
+        git(repository, "switch", "-c", "other")
+    else:
+        git(repository, "switch", "--detach")
+    after = RepositoryObservation.capture(repository)
+    assert before.head == after.head
+    assert compare_observations(before, after).head_changed
+    assert not evaluate_scope(
+        TaskContract("scope", (), (), ("verified",)), before, after
+    ).proceed

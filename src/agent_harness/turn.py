@@ -53,6 +53,7 @@ class RepositoryObservation:
     head: str | None
     index_sha256: str
     status: tuple[GitStatusEntry, ...]
+    head_ref: str | None = None
 
     @classmethod
     def capture(cls, repository: Path | str) -> RepositoryObservation:
@@ -89,10 +90,15 @@ class RepositoryObservation:
             if len(entry) < 4 or entry[2:3] != b" ":
                 raise ValueError("malformed Git status")
             statuses.append(GitStatusEntry(_path(entry[3:]), entry[:2].decode("ascii")))
+        symbolic = _git_result(root, "symbolic-ref", "-q", "HEAD")
+        if symbolic.returncode not in {0, 1}:
+            raise ValueError("could not observe HEAD identity")
+        head_ref = (
+            os.fsdecode(symbolic.stdout).strip() if symbolic.returncode == 0 else None
+        )
         head_result = _git_result(root, "rev-parse", "--verify", "HEAD")
         if head_result.returncode:
             # An unborn branch has no HEAD object; other failures are not a snapshot.
-            symbolic = _git_result(root, "symbolic-ref", "-q", "HEAD")
             if (
                 symbolic.returncode
                 or _git_result(
@@ -117,6 +123,7 @@ class RepositoryObservation:
                 b"\0".join(sorted(_records(index))) + (b"\0" if index else b"")
             ).hexdigest(),
             tuple(sorted(statuses, key=lambda entry: os.fsencode(entry.path))),
+            head_ref,
         )
 
 
@@ -184,8 +191,9 @@ def _fingerprint(root: Path, relative: str) -> FileFingerprint:
             raise ValueError("unsupported repository observation file")
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         try:
-            mode = os.fstat(descriptor).st_mode
-            if not stat.S_ISREG(mode):
+            metadata = os.fstat(descriptor)
+            mode = metadata.st_mode
+            if not stat.S_ISREG(mode) or metadata.st_nlink != 1:
                 raise ValueError("unsupported repository observation file")
             digest = hashlib.sha256()
             size = 0
@@ -237,7 +245,7 @@ def compare_observations(
             )
         ),
         tuple(sorted(old.keys() - new.keys(), key=os.fsencode)),
-        before.head != after.head,
+        before.head != after.head or before.head_ref != after.head_ref,
         before.index_sha256 != after.index_sha256,
         before.status != after.status,
     )

@@ -68,11 +68,19 @@ def evaluate_scope(
             for item in contract.protected_paths
         )
     )
+    changed_symlinks = {
+        entry.path
+        for entry in after.files
+        if entry.kind == "symlink" and entry.path in delta.added + delta.modified
+    }
     outside = tuple(
         path
         for path in paths
         if path not in protected
-        and not any(_matches(path, item) for item in contract.allowed_paths)
+        and (
+            path in changed_symlinks
+            or not any(_matches(path, item) for item in contract.allowed_paths)
+        )
     )
     return ScopeDecision(
         delta,
@@ -126,6 +134,22 @@ def _validate_contract(contract: TaskContract) -> None:
         raise ValueError("invalid scope contract") from None
 
 
+def _valid_head_ref(value: object) -> bool:
+    if not isinstance(value, str) or not value.startswith("refs/"):
+        return False
+    return (
+        not any(ord(character) < 33 or ord(character) == 127 for character in value)
+        and not any(character in value for character in "~^:?*[\\")
+        and ".." not in value
+        and "@{" not in value
+        and not value.endswith(".")
+        and all(
+            part and not part.startswith(".") and not part.endswith(".lock")
+            for part in value.split("/")
+        )
+    )
+
+
 def _validate_observation(snapshot: RepositoryObservation) -> None:
     if not isinstance(snapshot, RepositoryObservation):
         raise TypeError("invalid scope observation")
@@ -140,6 +164,7 @@ def _validate_observation(snapshot: RepositoryObservation) -> None:
         or snapshot.repository_id != hashlib.sha256(os.fsencode(root)).hexdigest()
         or not _digest(snapshot.index_sha256)
         or (snapshot.head is not None and not _digest(snapshot.head, (40, 64)))
+        or (snapshot.head_ref is not None and not _valid_head_ref(snapshot.head_ref))
         or not isinstance(snapshot.files, tuple)
         or not isinstance(snapshot.status, tuple)
     ):

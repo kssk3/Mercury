@@ -429,6 +429,7 @@ def _observation(value: object) -> RepositoryObservation:
         cast(str | None, data["head"]),
         cast(str, data["index_sha256"]),
         tuple(statuses),
+        cast(str | None, data.get("head_ref")),
     )
     _validate_observation(snapshot)
     return snapshot

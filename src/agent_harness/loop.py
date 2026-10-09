@@ -418,15 +418,23 @@ def _run_loop(
             directory_inputs = capture_protected_directories(root, directories)
         if resumed is not None:
             file_inputs = tuple(
-                ProtectedInputFingerprint(**row)
-                for row in cast(list[dict[str, str]], resumed["protected_files"])
+                ProtectedInputFingerprint(
+                    cast(str, row["path"]),
+                    cast(str, row["sha256"]),
+                    cast(int | None, row.get("mode")),
+                )
+                for row in cast(list[dict[str, object]], resumed["protected_files"])
             )
             directory_inputs = tuple(
                 ProtectedDirectoryFingerprint(
                     cast(str, row["path"]),
                     tuple(
-                        ProtectedInputFingerprint(**item)
-                        for item in cast(list[dict[str, str]], row["files"])
+                        ProtectedInputFingerprint(
+                            cast(str, item["path"]),
+                            cast(str, item["sha256"]),
+                            cast(int | None, item.get("mode")),
+                        )
+                        for item in cast(list[dict[str, object]], row["files"])
                     ),
                 )
                 for row in cast(
@@ -716,11 +724,15 @@ def _run_loop(
                     )
                     if verification_before != RepositoryObservation.capture(root):
                         return finish("blocked", "verification_workspace_changed")
+                    if monotonic() - started > limits.max_seconds:
+                        return finish("stopped", "time_budget")
                     if (
                         report.overall_kind is not TechnicalDecisionKind.PASS
                         or phase == "final"
                     ):
                         attempts.record_verification(active_id, report, refresh=True)
+                        if monotonic() - started > limits.max_seconds:
+                            return finish("stopped", "time_budget")
                         state = advance(
                             state,
                             ExecutionEvent.VERIFICATION_RESULT,

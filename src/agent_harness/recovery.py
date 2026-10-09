@@ -411,6 +411,7 @@ def seal_patch(
         or before.observation.repository_id != after.observation.repository_id
         or tuple(i.path for i in before.images) != tuple(i.path for i in after.images)
         or before.observation.head != after.observation.head
+        or before.observation.head_ref != after.observation.head_ref
         or before.observation.index_sha256 != after.observation.index_sha256
     ):
         raise ValueError("incompatible recovery snapshots")
@@ -490,6 +491,7 @@ def _load_snapshot(
             "repository_id",
             "files",
             "head",
+            "head_ref",
             "index_sha256",
             "status",
         }
@@ -504,6 +506,7 @@ def _load_snapshot(
         repository_id=observation["repository_id"],
         files=tuple(FileFingerprint(**i) for i in observation["files"]),
         head=observation["head"],
+        head_ref=observation["head_ref"],
         index_sha256=observation["index_sha256"],
         status=tuple(GitStatusEntry(**i) for i in observation["status"]),
     )
@@ -575,6 +578,7 @@ def recover_patch(
             or tuple(i.path for i in before.images)
             != tuple(i.path for i in after.images)
             or before.observation.head != after.observation.head
+            or before.observation.head_ref != after.observation.head_ref
             or before.observation.index_sha256 != after.observation.index_sha256
         ):
             raise ValueError("invalid recovery correlation")

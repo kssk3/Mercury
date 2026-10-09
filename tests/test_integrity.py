@@ -6,6 +6,7 @@ from dataclasses import FrozenInstanceError
 from hashlib import sha256
 from os import mkfifo, stat_result
 from pathlib import Path
+from stat import S_IMODE
 from typing import BinaryIO
 
 import pytest
@@ -36,8 +37,16 @@ def test_capture_returns_frozen_fingerprints_in_declared_order(tmp_path: Path) -
     fingerprints = capture_protected_inputs(tmp_path, (first_path, second_path))
 
     assert fingerprints == (
-        ProtectedInputFingerprint(first_path, sha256(first_bytes).hexdigest()),
-        ProtectedInputFingerprint(second_path, sha256(second_bytes).hexdigest()),
+        ProtectedInputFingerprint(
+            first_path,
+            sha256(first_bytes).hexdigest(),
+            S_IMODE((tmp_path / first_path).stat().st_mode),
+        ),
+        ProtectedInputFingerprint(
+            second_path,
+            sha256(second_bytes).hexdigest(),
+            S_IMODE((tmp_path / second_path).stat().st_mode),
+        ),
     )
     with pytest.raises(FrozenInstanceError):
         fingerprints[0].path = "tests/replaced.py"  # type: ignore[misc]
@@ -367,15 +376,31 @@ def test_directory_fingerprint_normalizes_and_freezes_file_collection(
     (directory / "z.py").write_bytes(b"z")
     (directory / "a.py").write_bytes(b"a")
     entries = [
-        ProtectedInputFingerprint("z.py", sha256(b"z").hexdigest()),
-        ProtectedInputFingerprint("a.py", sha256(b"a").hexdigest()),
+        ProtectedInputFingerprint(
+            "z.py",
+            sha256(b"z").hexdigest(),
+            S_IMODE((directory / "z.py").stat().st_mode),
+        ),
+        ProtectedInputFingerprint(
+            "a.py",
+            sha256(b"a").hexdigest(),
+            S_IMODE((directory / "a.py").stat().st_mode),
+        ),
     ]
     fingerprint = integrity.ProtectedDirectoryFingerprint("tests", entries)  # type: ignore[arg-type]
     entries.clear()
 
     assert fingerprint.files == (
-        ProtectedInputFingerprint("a.py", sha256(b"a").hexdigest()),
-        ProtectedInputFingerprint("z.py", sha256(b"z").hexdigest()),
+        ProtectedInputFingerprint(
+            "a.py",
+            sha256(b"a").hexdigest(),
+            S_IMODE((directory / "a.py").stat().st_mode),
+        ),
+        ProtectedInputFingerprint(
+            "z.py",
+            sha256(b"z").hexdigest(),
+            S_IMODE((directory / "z.py").stat().st_mode),
+        ),
     )
     assert integrity.capture_protected_directories(tmp_path, ["tests"]) == (
         fingerprint,
@@ -452,9 +477,16 @@ def test_protected_hashing_streams_binary_files_in_bounded_reads(
     contents = bytes(range(256)) * 4096 + b"\x00\xfffinal-block"
     target.write_bytes(contents)
     digest = sha256(contents).hexdigest()
-    file_fingerprint = ProtectedInputFingerprint("protected/binary.dat", digest)
+    file_fingerprint = ProtectedInputFingerprint(
+        "protected/binary.dat", digest, S_IMODE(target.stat().st_mode)
+    )
     directory_fingerprint = integrity.ProtectedDirectoryFingerprint(
-        "protected", (ProtectedInputFingerprint("binary.dat", digest),)
+        "protected",
+        (
+            ProtectedInputFingerprint(
+                "binary.dat", digest, S_IMODE(target.stat().st_mode)
+            ),
+        ),
     )
     original_open = Path.open
     read_sizes: list[int] = []
@@ -554,4 +586,69 @@ def test_stream_read_failure_preserves_error_classification_and_continues(
     assert checks == (
         ProtectedInputCheck(paths[0], ProtectedInputState.UNVERIFIABLE),
         ProtectedInputCheck(paths[1], ProtectedInputState.UNCHANGED),
+    )
+
+
+@pytest.mark.parametrize("directory", [False, True])
+def test_protected_ignored_permission_only_change_is_modified(
+    tmp_path: Path, directory: bool
+) -> None:
+    from test_loop import _repository
+
+    from agent_harness.turn import RepositoryObservation
+
+    root = _repository(tmp_path)
+    (root / ".git/info/exclude").write_text("protected/\n")
+    protected = root / "protected"
+    protected.mkdir()
+    target = protected / "private.dat"
+    target.write_bytes(b"unchanged private contents")
+    target.chmod(0o600)
+    before = RepositoryObservation.capture(root)
+    captured = (
+        integrity.capture_protected_directories(root, ("protected",))
+        if directory
+        else capture_protected_inputs(root, ("protected/private.dat",))
+    )
+    target.chmod(0o777)
+    assert RepositoryObservation.capture(root) == before
+    checks = (
+        integrity.verify_protected_directories(root, captured)  # type: ignore[arg-type]
+        if directory
+        else verify_protected_inputs(root, captured)  # type: ignore[arg-type]
+    )
+    assert checks[0].state is ProtectedInputState.MODIFIED
+
+
+@pytest.mark.parametrize("mode", [True, 1.5, -1, 0o10000])
+def test_protected_fingerprint_rejects_malformed_mode(mode: object) -> None:
+    with pytest.raises(ValueError, match="mode"):
+        ProtectedInputFingerprint("safe", "a" * 64, mode)  # type: ignore[arg-type]
+
+
+def test_legacy_protected_fingerprint_retains_content_only_evidence(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "safe"
+    target.write_bytes(b"same")
+    legacy = ProtectedInputFingerprint("safe", sha256(b"same").hexdigest())
+    target.chmod(0o777)
+    assert legacy.mode is None
+    assert (
+        verify_protected_inputs(tmp_path, (legacy,))[0].state
+        is ProtectedInputState.UNCHANGED
+    )
+
+
+def test_protected_directory_mode_remains_outside_contents_contract(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "protected"
+    directory.mkdir()
+    (directory / "safe").write_bytes(b"same")
+    captured = integrity.capture_protected_directories(tmp_path, ("protected",))
+    directory.chmod(0o777)
+    assert (
+        integrity.verify_protected_directories(tmp_path, captured)[0].state
+        is ProtectedInputState.UNCHANGED
     )

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
-from stat import S_ISDIR, S_ISREG
+from stat import S_IMODE, S_ISDIR, S_ISREG
 
 
 class ProtectedInputState(StrEnum):
@@ -19,9 +19,14 @@ class ProtectedInputState(StrEnum):
 class ProtectedInputFingerprint:
     path: str
     sha256: str
+    mode: int | None = None
 
     def __post_init__(self) -> None:
         _validate_relative_path(self.path)
+        if self.mode is not None and (
+            type(self.mode) is not int or not 0 <= self.mode <= 0o7777
+        ):
+            raise ValueError("mode must be an integer permission mode")
         if len(self.sha256) != 64 or any(
             character not in "0123456789abcdef" for character in self.sha256
         ):
@@ -57,13 +62,7 @@ def capture_protected_inputs(
 ) -> tuple[ProtectedInputFingerprint, ...]:
     root = Path(repository_root).expanduser().resolve()
     paths = _normalize_paths(protected_paths)
-    return tuple(
-        ProtectedInputFingerprint(
-            path=path,
-            sha256=_read_capturable_digest(root, path),
-        )
-        for path in paths
-    )
+    return tuple(_read_capturable_fingerprint(root, path) for path in paths)
 
 
 def verify_protected_inputs(
@@ -128,7 +127,7 @@ def _file_digest(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _read_capturable_digest(root: Path, path: str) -> str:
+def _read_capturable_fingerprint(root: Path, path: str) -> ProtectedInputFingerprint:
     candidate = root / path
     if candidate.is_symlink() or not candidate.is_file():
         raise ValueError("protected input must be an existing regular non-symlink file")
@@ -139,7 +138,9 @@ def _read_capturable_digest(root: Path, path: str) -> str:
     if not resolved.is_relative_to(root):
         raise ValueError("protected input must resolve inside the repository root")
     try:
-        return _file_digest(candidate)
+        return ProtectedInputFingerprint(
+            path, _file_digest(candidate), S_IMODE(candidate.stat().st_mode)
+        )
     except OSError as error:
         raise ValueError("protected input must be readable") from error
 
@@ -160,9 +161,12 @@ def _state_for(
         return ProtectedInputState.UNVERIFIABLE
     try:
         actual_digest = _file_digest(candidate)
+        actual_mode = S_IMODE(candidate.stat().st_mode)
     except OSError:
         return ProtectedInputState.UNVERIFIABLE
-    if actual_digest == fingerprint.sha256:
+    if actual_digest == fingerprint.sha256 and (
+        fingerprint.mode is None or actual_mode == fingerprint.mode
+    ):
         return ProtectedInputState.UNCHANGED
     return ProtectedInputState.MODIFIED
 
@@ -233,7 +237,13 @@ def _directory_state_for(
         return ProtectedInputState.UNVERIFIABLE
     return (
         ProtectedInputState.UNCHANGED
-        if actual == fingerprint.files
+        if len(actual) == len(fingerprint.files)
+        and all(
+            current.path == saved.path
+            and current.sha256 == saved.sha256
+            and (saved.mode is None or current.mode == saved.mode)
+            for current, saved in zip(actual, fingerprint.files, strict=True)
+        )
         else ProtectedInputState.MODIFIED
     )
 
@@ -262,7 +272,9 @@ def _read_directory_files(directory: Path) -> tuple[ProtectedInputFingerprint, .
                 pending.append(entry)
             elif S_ISREG(mode):
                 files.append(
-                    ProtectedInputFingerprint(relative_path, _file_digest(entry))
+                    ProtectedInputFingerprint(
+                        relative_path, _file_digest(entry), S_IMODE(mode)
+                    )
                 )
             else:
                 raise ValueError(

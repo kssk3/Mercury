@@ -678,3 +678,28 @@ def test_image_permission_disagreement_refused_before_writes(
         with pytest.raises(ValueError, match="observation disagreement"):
             recover_patch(repo, contract(), "a", trusted)
     assert RepositoryObservation.capture(repo) == untouched
+
+
+def test_recovery_rejects_same_commit_branch_switch(repo: Path, tmp_path: Path) -> None:
+    from agent_harness.recovery import capture_patch, recover_patch, seal_patch
+
+    before = capture_patch(repo, contract(), "branch", ("modify",))
+    (repo / "modify").write_bytes(b"agent")
+    after = capture_patch(repo, contract(), "branch", ("modify",))
+    reference = seal_patch(before, after, tmp_path.resolve() / "artifact")
+    git(repo, "switch", "-c", "other")
+    with pytest.raises(ValueError, match="workspace conflict"):
+        recover_patch(repo, contract(), "branch", reference)
+    assert (repo / "modify").read_bytes() == b"agent"
+
+
+def test_recovery_seal_rejects_same_commit_head_identity_change(
+    repo: Path, tmp_path: Path
+) -> None:
+    from agent_harness.recovery import capture_patch, seal_patch
+
+    before = capture_patch(repo, contract(), "branch", ("modify",))
+    git(repo, "switch", "--detach")
+    after = capture_patch(repo, contract(), "branch", ("modify",))
+    with pytest.raises(ValueError, match="incompatible"):
+        seal_patch(before, after, tmp_path.resolve() / "artifact")

@@ -620,3 +620,41 @@ def test_legacy_and_valid_permission_modes_remain_usable(
     compatible = replace(snapshot, files=(entry,))
 
     assert evaluate_scope(contract(), compatible, compatible).proceed
+
+
+@pytest.mark.parametrize("target", ["guard/secret", "../external"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_changed_allowed_symlink_is_rejected(
+    repository: Path, target: str, existing: bool
+) -> None:
+    from agent_harness.scope import evaluate_scope
+
+    link = repository / "link"
+    if existing:
+        link.symlink_to("base.txt")
+    before = RepositoryObservation.capture(repository)
+    if existing:
+        link.unlink()
+    link.symlink_to(target)
+    decision = evaluate_scope(
+        contract("link", protected=("guard",)),
+        before,
+        RepositoryObservation.capture(repository),
+    )
+    assert not decision.proceed
+    assert "link" in decision.out_of_scope_paths
+
+
+def test_unchanged_and_deleted_allowed_symlinks_remain_clear(repository: Path) -> None:
+    from agent_harness.scope import evaluate_scope
+
+    link = repository / "link"
+    link.symlink_to("../external")
+    before = RepositoryObservation.capture(repository)
+    assert evaluate_scope(
+        contract("link"), before, RepositoryObservation.capture(repository)
+    ).proceed
+    link.unlink()
+    assert evaluate_scope(
+        contract("link"), before, RepositoryObservation.capture(repository)
+    ).proceed

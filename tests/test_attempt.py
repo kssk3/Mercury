@@ -1126,3 +1126,66 @@ def test_legacy_observation_does_not_invent_permissions(repository: Path) -> Non
     decoded = _observation(json.loads(json.dumps(payload)))
 
     assert all(entry.mode is None for entry in decoded.files)
+
+
+def test_symbolic_head_observation_roundtrip_retains_identity(repository: Path) -> None:
+    from agent_harness.attempt import _observation
+
+    snapshot = RepositoryObservation.capture(repository)
+    payload = json.loads(json.dumps(asdict(snapshot)))
+    expected = (
+        subprocess.run(
+            ["git", "-C", str(repository), "symbolic-ref", "HEAD"],
+            check=True,
+            capture_output=True,
+            timeout=10,
+        )
+        .stdout.decode()
+        .strip()
+    )
+    assert payload.get("head_ref") == expected
+    assert _observation(payload) == snapshot
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [True, "HEAD", "refs/heads/../other", "refs/heads/bad.lock", "refs/heads/a b"],
+)
+def test_malformed_head_identity_is_rejected(
+    repository: Path, identity: object
+) -> None:
+    from agent_harness.attempt import _observation
+
+    payload = json.loads(json.dumps(asdict(RepositoryObservation.capture(repository))))
+    payload["head_ref"] = identity
+    with pytest.raises(ValueError):
+        _observation(payload)
+
+
+@pytest.mark.parametrize("change", ["switch", "detach"])
+def test_attempt_journal_retains_same_commit_head_change(
+    repository: Path, tmp_path: Path, complete_events: list[dict[str, Any]], change: str
+) -> None:
+    from agent_harness.attempt import _observation
+    from agent_harness.turn import compare_observations
+
+    args = ["switch", "-c", "other"] if change == "switch" else ["switch", "--detach"]
+    subprocess.run(
+        ["git", "-C", str(repository), *args],
+        check=True,
+        capture_output=True,
+        timeout=10,
+    )
+    after = RepositoryObservation.capture(repository)
+    before = _observation(complete_events[0]["before"])
+    delta = compare_observations(before, after)
+    assert before.head == after.head
+    assert delta.head_changed
+    complete_events[1]["after"] = asdict(after)
+    complete_events[1]["delta"] = asdict(delta)
+    complete_events[2]["delta"] = asdict(delta)
+    complete_events[2]["proceed"] = False
+    journal = EventJournal(tmp_path / "state")
+    write_events(journal, complete_events)
+    entry = api(repository, journal, CurrentStateStore(tmp_path / "state")).read()[0]
+    assert entry["scope"]["proceed"] is False

@@ -260,10 +260,12 @@ def _protected_metadata(event: dict[str, object]) -> None:
     paths = []
     for raw in files:
         row = _mapping(raw)
-        if set(row) != {"path", "sha256"}:
+        if set(row) not in ({"path", "sha256"}, {"path", "sha256", "mode"}):
             raise ValueError("invalid_verification_checkpoint")
         item = ProtectedInputFingerprint(
-            cast(str, row["path"]), cast(str, row["sha256"])
+            cast(str, row["path"]),
+            cast(str, row["sha256"]),
+            cast(int | None, row.get("mode")),
         )
         paths.append(item.path)
     for raw in directories:
@@ -273,11 +275,13 @@ def _protected_metadata(event: dict[str, object]) -> None:
         members = []
         for value in cast(list[object], row["files"]):
             member = _mapping(value)
-            if set(member) != {"path", "sha256"}:
+            if set(member) not in ({"path", "sha256"}, {"path", "sha256", "mode"}):
                 raise ValueError("invalid_verification_checkpoint")
             members.append(
                 ProtectedInputFingerprint(
-                    cast(str, member["path"]), cast(str, member["sha256"])
+                    cast(str, member["path"]),
+                    cast(str, member["sha256"]),
+                    cast(int | None, member.get("mode")),
                 )
             )
         directory = ProtectedDirectoryFingerprint(

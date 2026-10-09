@@ -465,3 +465,95 @@ print(json.dumps({{'status':result.status,'commands':result.usage.commands,'atte
     assert startup.status == "completed"
     assert startup.usage is not None and startup.usage[0] == 4
     assert sum(e.get("event") == "attempt_verification" for e in journal.read()) == 1
+
+
+@pytest.mark.parametrize("directory", [False, True])
+@pytest.mark.parametrize("changed_mode", [False, True])
+def test_checkpoint_roundtrip_preserves_protected_permission_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, directory: bool, changed_mode: bool
+) -> None:
+    import sys
+
+    from test_loop import _native_fixture, _repository
+
+    from agent_harness import loop
+    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.admission import record_admission
+    from agent_harness.context import ContextPacket
+    from agent_harness.contract import TaskContract
+    from agent_harness.journal import EventJournal
+    from agent_harness.policy import VerificationPolicy
+    from agent_harness.retry import RetryLimits
+    from agent_harness.state import CurrentStateStore
+
+    root = _repository(tmp_path)
+    (root / ".git/info/exclude").write_text("protected/\n")
+    (root / "protected").mkdir()
+    target = root / "protected/private.dat"
+    target.write_bytes(b"same contents")
+    target.chmod(0o600)
+    task = TaskContract(
+        "change value",
+        ("value",),
+        ("protected" if directory else "protected/private.dat",),
+        ("new value",),
+    )
+    native = tmp_path / "native-count"
+    adapter = CodexCLIAdapter(_native_fixture(tmp_path, root, native, "pass", 0))
+    command = (sys.executable, "-c", "assert True")
+    journal = EventJournal(tmp_path / "state")
+    store = CurrentStateStore(tmp_path / "state")
+    args = (
+        adapter,
+        task,
+        record_admission(task, approver="human", approved_at="2026-10-06T00:00:00Z"),
+        ContextPacket(str(root), 4096, ()),
+    )
+    kwargs = dict(
+        policy=VerificationPolicy((command,), ".", 2),
+        criterion_commands={"new value": (command,)},
+        journal=journal,
+        state_store=store,
+        budgets=TurnBudgets(2, 16000, 128, 128, 128),
+        limits=RetryLimits(0, 2, 4, 50),
+        redactor=lambda x: x,
+        max_output_bytes=128,
+    )
+    original = store.write
+
+    class Interrupted(BaseException):
+        pass
+
+    def interrupt(value: dict[str, object]) -> None:
+        original(value)
+        if journal.read()[-1].get("pending_phase") == "final":
+            raise Interrupted
+
+    monkeypatch.setattr(store, "write", interrupt)
+    with pytest.raises(Interrupted):
+        loop.run_loop(*args, **kwargs, checkpoint_verification=True)  # type: ignore[arg-type]
+    checkpoint = journal.read()[-1]
+    row = cast(
+        list[dict[str, object]],
+        checkpoint["protected_directories" if directory else "protected_files"],
+    )[0]
+    if directory:
+        row = cast(list[dict[str, object]], row["files"])[0]
+    assert row.get("mode") == 0o600
+    monkeypatch.setattr(store, "write", original)
+    if changed_mode:
+        target.chmod(0o777)
+    result = loop.continue_verification(*args, **kwargs)  # type: ignore[arg-type]
+    if changed_mode:
+        assert result.status != "pass", result.reason
+        assert any(
+            event.get("event") == "loop_protected_inputs"
+            and any(
+                row.get("state") == "modified"
+                for row in cast(list[dict[str, object]], event["checks"])
+            )
+            for event in journal.read()
+        ), result.reason
+    else:
+        assert result.status == "pass", result.reason
+    assert native.read_text() == "x"
