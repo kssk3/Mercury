@@ -37,7 +37,11 @@ class RepositoryLock:
         now: Callable[[], float] = time.time,
         owner_token: str | None = None,
     ) -> None:
-        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        if (
+            isinstance(timeout_seconds, bool)
+            or not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+        ):
             raise ValueError("timeout_seconds must be finite and positive")
 
         self._state_directory = Path(state_directory)

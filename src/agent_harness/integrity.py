@@ -60,7 +60,7 @@ def capture_protected_inputs(
     return tuple(
         ProtectedInputFingerprint(
             path=path,
-            sha256=sha256(_read_capturable_bytes(root, path)).hexdigest(),
+            sha256=_read_capturable_digest(root, path),
         )
         for path in paths
     )
@@ -120,7 +120,15 @@ def _validate_relative_path(path: object) -> str:
     return path
 
 
-def _read_capturable_bytes(root: Path, path: str) -> bytes:
+def _file_digest(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(64 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _read_capturable_digest(root: Path, path: str) -> str:
     candidate = root / path
     if candidate.is_symlink() or not candidate.is_file():
         raise ValueError("protected input must be an existing regular non-symlink file")
@@ -131,7 +139,7 @@ def _read_capturable_bytes(root: Path, path: str) -> bytes:
     if not resolved.is_relative_to(root):
         raise ValueError("protected input must resolve inside the repository root")
     try:
-        return candidate.read_bytes()
+        return _file_digest(candidate)
     except OSError as error:
         raise ValueError("protected input must be readable") from error
 
@@ -151,7 +159,7 @@ def _state_for(
     except (OSError, RuntimeError):
         return ProtectedInputState.UNVERIFIABLE
     try:
-        actual_digest = sha256(candidate.read_bytes()).hexdigest()
+        actual_digest = _file_digest(candidate)
     except OSError:
         return ProtectedInputState.UNVERIFIABLE
     if actual_digest == fingerprint.sha256:
@@ -254,9 +262,7 @@ def _read_directory_files(directory: Path) -> tuple[ProtectedInputFingerprint, .
                 pending.append(entry)
             elif S_ISREG(mode):
                 files.append(
-                    ProtectedInputFingerprint(
-                        relative_path, sha256(entry.read_bytes()).hexdigest()
-                    )
+                    ProtectedInputFingerprint(relative_path, _file_digest(entry))
                 )
             else:
                 raise ValueError(

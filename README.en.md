@@ -59,7 +59,7 @@ Run this from an empty working location. It explicitly selects the branch
 containing the example.
 
 ```sh
-git clone --branch Venus/public-export-20261009 --single-branch https://github.com/kssk3/Mercury.git mercury-demo
+git clone --branch main --single-branch https://github.com/kssk3/Mercury.git mercury-demo
 cd mercury-demo
 ```
 

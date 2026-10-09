@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import agent_harness.runner as runner_module
 from agent_harness.policy import VerificationPolicy
 from agent_harness.runner import ControlledCommandRunner
 
@@ -316,16 +317,6 @@ def test_overflow_cleans_real_group_reaps_child_and_preserves_original_error(
             start_new_session=start_new_session,
         )
         processes.append(process)
-        communicate = process.communicate
-
-        def record_real_communicate(*, timeout: int) -> tuple[bytes, bytes]:
-            try:
-                return communicate(timeout=timeout)
-            except OverflowError as error:
-                errors.append(error)
-                raise
-
-        monkeypatch.setattr(process, "communicate", record_real_communicate)
         deadline = time.monotonic() + 5
         while not ready.exists():
             if time.monotonic() >= deadline:
@@ -341,6 +332,21 @@ def test_overflow_cleans_real_group_reaps_child_and_preserves_original_error(
                     time.sleep(0.01)
         return process
 
+    collect = runner_module._collect_output
+
+    def record_real_collect(
+        process: subprocess.Popen[bytes],
+        stdout: runner_module._OutputBuffer,
+        stderr: runner_module._OutputBuffer,
+        timeout: int,
+    ) -> None:
+        try:
+            collect(process, stdout, stderr, timeout)
+        except OverflowError as error:
+            errors.append(error)
+            raise
+
+    monkeypatch.setattr(runner_module, "_collect_output", record_real_collect)
     monkeypatch.setattr(subprocess, "Popen", launch_ready_process)
     try:
         started = time.monotonic()
@@ -370,3 +376,85 @@ def test_overflow_cleans_real_group_reaps_child_and_preserves_original_error(
         _cleanup_fixture_processes((child_pid,))
         unrelated.kill()
         unrelated.wait(timeout=2)
+
+
+@pytest.mark.parametrize("size", [4095, 4096, 4097, 2000000])
+def test_runner_bounds_each_stream_and_marks_only_excess(
+    tmp_path: Path, size: int
+) -> None:
+    cap = 4096
+    command = (
+        sys.executable,
+        "-c",
+        f"import os; os.write(1, b'a' * {size}); os.write(2, b'b' * {size})",
+    )
+    result = ControlledCommandRunner(max_output_bytes=cap).run(
+        VerificationPolicy((command,), ".", 5), tmp_path
+    )[0]
+    assert result.exit_code == 0
+    assert not result.timed_out
+    for text, byte in ((result.stdout, b"a"), (result.stderr, b"b")):
+        output = text.encode("utf-8", errors="surrogateescape")
+        assert len(output) <= cap
+        if size <= cap:
+            assert output == byte * size
+        else:
+            assert output.startswith(byte * 100)
+            assert b"[output truncated]" in output
+
+
+def test_runner_default_budget_is_one_mib_per_stream(tmp_path: Path) -> None:
+    command = (
+        sys.executable,
+        "-c",
+        "import os; os.write(1, b'a' * 2000000); os.write(2, b'b' * 2000000)",
+    )
+    result = ControlledCommandRunner().run(
+        VerificationPolicy((command,), ".", 5), tmp_path
+    )[0]
+    assert result.exit_code == 0
+    for output in (result.stdout, result.stderr):
+        assert len(output.encode()) <= 1024 * 1024
+        assert "[output truncated]" in output
+
+
+def test_runner_drains_continuous_output_until_timeout_and_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_communicate(*args: object, **kwargs: object) -> None:
+        pytest.fail("runner must never buffer output through communicate")
+
+    monkeypatch.setattr(subprocess.Popen, "communicate", no_communicate)
+    read = os.read
+    sizes: list[int] = []
+
+    def bounded_read(fd: int, size: int) -> bytes:
+        assert 0 < size <= 65536
+        sizes.append(size)
+        return read(fd, size)
+
+    monkeypatch.setattr(os, "read", bounded_read)
+    command = (
+        sys.executable,
+        "-c",
+        "import os\nwhile True: os.write(1, b'a' * 8192); os.write(2, b'b' * 8192)",
+    )
+    later = (sys.executable, "-c", "print('after noise')")
+    started = time.monotonic()
+    results = ControlledCommandRunner(max_output_bytes=4096).run(
+        VerificationPolicy((command, later), ".", 1), tmp_path
+    )
+    assert time.monotonic() - started < 4
+    assert results[0].timed_out
+    assert results[0].exit_code is None
+    for output in (results[0].stdout, results[0].stderr):
+        assert len(output.encode()) <= 4096
+        assert "[output truncated]" in output
+    assert results[1].stdout == "after noise\n"
+    assert sizes
+
+
+@pytest.mark.parametrize("cap", [True, False, 0, -1, 1.5, "4096", 1])
+def test_runner_rejects_invalid_output_budgets(cap: object) -> None:
+    with pytest.raises(ValueError, match="max_output_bytes"):
+        ControlledCommandRunner(max_output_bytes=cap)  # type: ignore[arg-type]

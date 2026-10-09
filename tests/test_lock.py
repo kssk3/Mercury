@@ -326,6 +326,36 @@ def test_nonfinite_or_nonpositive_timeout_is_rejected(
         RepositoryLock(tmp_path / "state", timeout_seconds=timeout_seconds)
 
 
+@pytest.mark.parametrize("timeout_seconds", [True, False])
+@pytest.mark.parametrize("existing_lease", [True, False])
+def test_boolean_timeout_is_rejected_without_changing_state(
+    tmp_path: Path, timeout_seconds: bool, existing_lease: bool
+) -> None:
+    state = tmp_path / "state"
+    owner = RepositoryLock(state, timeout_seconds=10, now=lambda: 100.0)
+    if existing_lease:
+        owner.acquire()
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(ValueError):
+        RepositoryLock(state, timeout_seconds=timeout_seconds, now=lambda: 102.0)
+
+    assert {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    } == before
+    if existing_lease:
+        owner.heartbeat()
+        owner.release()
+    else:
+        assert not state.exists()
+
+
 @pytest.mark.parametrize("action", ["acquire", "heartbeat", "release"])
 @pytest.mark.parametrize(
     ("owner_token", "heartbeat_at"),

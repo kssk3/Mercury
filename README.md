@@ -54,7 +54,7 @@ AI의 설명은 실제 검사 결과를 대신하지 않습니다. 범위를 관
 빈 작업 위치에서 아래 명령을 실행합니다. 예제가 포함된 브랜치를 정확히 선택합니다.
 
 ```sh
-git clone --branch Venus/public-export-20261009 --single-branch https://github.com/kssk3/Mercury.git mercury-demo
+git clone --branch main --single-branch https://github.com/kssk3/Mercury.git mercury-demo
 cd mercury-demo
 ```
 

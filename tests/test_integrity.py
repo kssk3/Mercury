@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import FrozenInstanceError
 from hashlib import sha256
 from os import mkfifo, stat_result
 from pathlib import Path
+from typing import BinaryIO
 
 import pytest
 
@@ -328,7 +331,7 @@ def test_directory_comparison_contains_unsafe_replacements_and_continues(
     )
 
 
-@pytest.mark.parametrize("operation", ("lstat", "iterdir", "read_bytes"))
+@pytest.mark.parametrize("operation", ("lstat", "iterdir", "open"))
 def test_directory_inspection_contains_permission_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
 ) -> None:
@@ -339,12 +342,12 @@ def test_directory_inspection_contains_permission_errors(
     (tmp_path / "later").mkdir()
     captured = integrity.capture_protected_directories(tmp_path, ("tests", "later"))
     original = getattr(Path, operation)
-    denied_path = denied_file if operation == "read_bytes" else directory
+    denied_path = denied_file if operation == "open" else directory
 
-    def fail_on_denied(path: Path) -> object:
+    def fail_on_denied(path: Path, *args: object, **kwargs: object) -> object:
         if path == denied_path:
             raise PermissionError("denied inspection")
-        return original(path)
+        return original(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, operation, fail_on_denied)
 
@@ -433,4 +436,122 @@ def test_directory_verification_contains_root_resolution_failure(
     assert integrity.verify_protected_directories(loop, captured) == (
         ProtectedInputCheck("tests", ProtectedInputState.UNVERIFIABLE),
         ProtectedInputCheck("policy", ProtectedInputState.UNVERIFIABLE),
+    )
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["capture_file", "verify_file", "capture_directory", "verify_directory"],
+)
+def test_protected_hashing_streams_binary_files_in_bounded_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    directory = tmp_path / "protected"
+    directory.mkdir()
+    target = directory / "binary.dat"
+    contents = bytes(range(256)) * 4096 + b"\x00\xfffinal-block"
+    target.write_bytes(contents)
+    digest = sha256(contents).hexdigest()
+    file_fingerprint = ProtectedInputFingerprint("protected/binary.dat", digest)
+    directory_fingerprint = integrity.ProtectedDirectoryFingerprint(
+        "protected", (ProtectedInputFingerprint("binary.dat", digest),)
+    )
+    original_open = Path.open
+    read_sizes: list[int] = []
+
+    class BoundedReader:
+        def __init__(self, stream: BinaryIO) -> None:
+            self.stream = stream
+
+        def read(self, size: int = -1) -> bytes:
+            assert 0 < size <= 256 * 1024, "hashing must use bounded reads"
+            read_sizes.append(size)
+            return self.stream.read(size)
+
+    @contextmanager
+    def bounded_open(path: Path, mode: str = "r") -> Iterator[BoundedReader]:
+        assert mode == "rb"
+        with original_open(path, "rb") as stream:
+            yield BoundedReader(stream)
+
+    monkeypatch.setattr(Path, "open", bounded_open)
+    if operation == "capture_file":
+        assert capture_protected_inputs(tmp_path, ("protected/binary.dat",)) == (
+            file_fingerprint,
+        )
+    elif operation == "capture_directory":
+        assert integrity.capture_protected_directories(tmp_path, ("protected",)) == (
+            directory_fingerprint,
+        )
+    else:
+
+        def verify() -> tuple[ProtectedInputCheck, ...]:
+            if operation == "verify_file":
+                return verify_protected_inputs(tmp_path, (file_fingerprint,))
+            return integrity.verify_protected_directories(
+                tmp_path, (directory_fingerprint,)
+            )
+
+        assert verify()[0].state is ProtectedInputState.UNCHANGED
+        with original_open(target, "ab") as stream:
+            stream.write(b"changed")
+        assert verify()[0].state is ProtectedInputState.MODIFIED
+    assert len(read_sizes) > 1
+
+
+@pytest.mark.parametrize("directory_mode", [False, True])
+def test_stream_read_failure_preserves_error_classification_and_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, directory_mode: bool
+) -> None:
+    denied_directory = tmp_path / "denied"
+    later_directory = tmp_path / "later"
+    denied_directory.mkdir()
+    later_directory.mkdir()
+    denied = denied_directory / "input.bin"
+    denied.write_bytes(b"x" * (1024 * 1024))
+    (later_directory / "input.bin").write_bytes(b"unaffected")
+    paths = (
+        ("denied", "later")
+        if directory_mode
+        else ("denied/input.bin", "later/input.bin")
+    )
+    file_capture = capture_protected_inputs(
+        tmp_path, ("denied/input.bin", "later/input.bin")
+    )
+    directory_capture = integrity.capture_protected_directories(
+        tmp_path, ("denied", "later")
+    )
+    original_open = Path.open
+
+    class FailingReader:
+        def __init__(self, stream: BinaryIO) -> None:
+            self.stream = stream
+            self.first_read = True
+
+        def read(self, size: int = -1) -> bytes:
+            if not self.first_read:
+                raise OSError("device failed during read")
+            self.first_read = False
+            return self.stream.read(size)
+
+    @contextmanager
+    def failing_open(path: Path, mode: str = "r") -> Iterator[BinaryIO | FailingReader]:
+        assert mode == "rb"
+        with original_open(path, "rb") as stream:
+            yield FailingReader(stream) if path == denied else stream
+
+    monkeypatch.setattr(Path, "open", failing_open)
+    with pytest.raises(ValueError):
+        if directory_mode:
+            integrity.capture_protected_directories(tmp_path, paths)
+        else:
+            capture_protected_inputs(tmp_path, paths)
+    checks = (
+        integrity.verify_protected_directories(tmp_path, directory_capture)
+        if directory_mode
+        else verify_protected_inputs(tmp_path, file_capture)
+    )
+    assert checks == (
+        ProtectedInputCheck(paths[0], ProtectedInputState.UNVERIFIABLE),
+        ProtectedInputCheck(paths[1], ProtectedInputState.UNCHANGED),
     )

@@ -8,6 +8,9 @@ the failure before fixing it and retain meaningful safety/recovery assertions.
 Use disposable Git fixtures for tests. Preserve unrelated work and never put
 credentials, private paths, native transcripts, or runtime artifacts in a patch.
 
+Follow the [project workflow](docs/project/WORKFLOW.md) for reviewing an existing
+pull request, repairing findings, authorized delivery, and branch cleanup.
+
 ## Development checks
 
 Requirements: Python 3.12+, Git, and uv. Run from the repository root:
