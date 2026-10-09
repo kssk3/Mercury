@@ -16,6 +16,8 @@ class DevelopmentVerificationResult:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "results", tuple(self.results))
+        if self.delta != self.baseline.compare(self.results):
+            raise ValueError("delta must match the baseline comparison of results")
 
 
 def run_development_profile(
