@@ -127,10 +127,14 @@ def validate_boundaries(events: list[dict[str, object]]) -> None:
             loop_count += 1
         if kind == "turn_intent":
             native_count += 1
-        if kind == "turn_observation":
+        if kind in {"turn_observation", "callback_observation"}:
             observed = event
-        if kind == "scope_decision":
+        if kind in {"scope_decision", "callback_scope_decision"}:
             scope = event
+        if kind == "callback_observation_failed":
+            observed = None
+            scope = None
+            stored = None
         if kind == "native_output_stored":
             stored = event.get("attempt_id")
         if kind == "attempt_verification" and first is not None:

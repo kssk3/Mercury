@@ -153,3 +153,16 @@ def test_contract_copies_caller_owned_scope_collections() -> None:
     assert contract.allowed_paths == ("src/a.py",)
     assert contract.protected_paths == ("pyproject.toml",)
     assert contract.completion_criteria == ("tests pass",)
+
+
+@pytest.mark.parametrize("field", ["allowed_paths", "protected_paths"])
+@pytest.mark.parametrize(
+    "path", [".git", ".git/config", "nested/.GIT/config", "nested/.GiT"]
+)
+def test_git_metadata_scope_is_rejected_at_contract_construction(
+    field: str, path: str
+) -> None:
+    kwargs: dict[str, tuple[str, ...]] = {"allowed_paths": (), "protected_paths": ()}
+    kwargs[field] = (path,)
+    with pytest.raises(ValueError, match="Git metadata"):
+        TaskContract("Task", completion_criteria=("tests",), **kwargs)

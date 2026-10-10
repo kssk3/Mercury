@@ -1287,3 +1287,43 @@ def test_ignored_allowed_hardlink_refused_before_native_write(
     assert not marker.exists()
     assert victim.read_bytes() == b"original"
     assert not journal.path.exists()
+
+
+@pytest.mark.parametrize("failure_type", [KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("failure_append", [False, True])
+def test_adapter_cancellation_preserves_original_object_after_failure_record_attempt(
+    repository: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_type: type[BaseException],
+    failure_append: bool,
+) -> None:
+    class Journal(EventJournal):
+        def append(self, event: Mapping[str, object]) -> None:
+            if failure_append and event["event"] != "turn_intent":
+                raise OSError("journal unavailable")
+            super().append(event)
+
+    cancellation = failure_type("cancelled")
+    adapter = CodexCLIAdapter(tmp_path / "unused")
+
+    def cancel(*args: object, **kwargs: object) -> CodexTurnResult:
+        raise cancellation
+
+    monkeypatch.setattr(adapter, "run", cancel)
+    journal = Journal(tmp_path / "state")
+    with pytest.raises(failure_type) as raised:
+        invoke(
+            repository,
+            tmp_path / "unused",
+            tmp_path / "state",
+            journal=journal,
+            adapter=adapter,
+        )
+    assert raised.value is cancellation
+    events = journal.read()
+    assert len(events) == (1 if failure_append else 2)
+    if not failure_append:
+        assert events[1]["event"] == "turn_observation_failed"
+        assert events[1]["attempt_id"] == events[0]["attempt_id"]
+        assert events[1]["classification"] == "adapter_raised"

@@ -42,6 +42,9 @@ _RUNTIME_KINDS = {
     "turn_intent",
     "turn_observation",
     "turn_observation_failed",
+    "callback_observation",
+    "callback_scope_decision",
+    "callback_observation_failed",
     "scope_decision",
     "native_output_stored",
     "attempt_verification",
@@ -237,13 +240,19 @@ def _decide(
     observations = [
         event
         for event in events
-        if event.get("event") in {"turn_intent", "turn_observation"}
+        if event.get("event")
+        in {
+            "turn_intent",
+            "turn_observation",
+            "callback_observation",
+            "callback_observation_failed",
+        }
     ]
-    if observations:
+    if observations and observations[-1]["event"] != "callback_observation_failed":
         latest = observations[-1]
         observation = _observation(
             latest["after"]
-            if latest["event"] == "turn_observation"
+            if latest["event"] in {"turn_observation", "callback_observation"}
             else latest["before"]
         )
         base = replace(base, workspace_delta=compare_observations(observation, live))

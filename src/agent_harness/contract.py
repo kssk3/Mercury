@@ -77,6 +77,8 @@ class TaskContract:
             pure_path = PurePath(path)
             if pure_path.is_absolute():
                 raise ValueError("paths must be relative")
+            if any(part.casefold() == ".git" for part in pure_path.parts):
+                raise ValueError("paths must not contain Git metadata")
             if ".." in pure_path.parts:
                 raise ValueError("paths must not contain parent traversal")
             if str(pure_path) != path or path in {"", "."}:

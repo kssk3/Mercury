@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
+import selectors
+import signal
 import subprocess
 import sys
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -130,21 +136,13 @@ def test_flood_retained_bytes_and_invalid_utf8_are_bounded(
         assert output.truncated
 
 
-@pytest.mark.parametrize("mode", ["sleep", "blocked_stdin", "held_pipes"])
-def test_timeout_includes_stdin_and_inherited_pipes(
-    repository: Path, tmp_path: Path, mode: str
+def test_timeout_includes_startup_and_blocked_stdin(
+    repository: Path, tmp_path: Path
 ) -> None:
     from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
 
-    body = "import os, sys, time\n"
-    if mode == "held_pipes":
-        body += "sys.stdin.buffer.read()\nif os.fork() != 0:\n    sys.exit(0)\n"
-    elif mode == "sleep":
-        body += "sys.stdin.buffer.read()\nos.write(1, b'before timeout')\n"
-    body += "time.sleep(30)\n"
-    executable = fake(tmp_path, body)
-    goal = "a" * 300000 if mode == "blocked_stdin" else "acknowledge"
-    contract = TaskContract(goal, (), (), ("reply",))
+    executable = fake(tmp_path, "import time\ntime.sleep(30)\n")
+    contract = TaskContract("a" * 300000, (), (), ("reply",))
     admission = record_admission(
         contract, approver="human", approved_at="2026-10-01T00:00:00Z"
     )
@@ -154,11 +152,91 @@ def test_timeout_includes_stdin_and_inherited_pipes(
     )
     assert result.process_status == "timeout"
     assert result.duration_seconds < 4
-    if mode == "sleep":
-        assert result.stdout.text == "before timeout"
-    if mode == "held_pipes":
-        assert result.exit_code == 0
     assert result.final_output_status == "missing"
+
+
+@contextmanager
+def ready_timeout_process(
+    tmp_path: Path, mode: str
+) -> Iterator[subprocess.Popen[bytes]]:
+    ready_read, ready_write = os.pipe()
+    process: subprocess.Popen[bytes] | None = None
+    marker = tmp_path / "descendant-marker"
+    script = "import os, pathlib, sys, time\n"
+    if mode == "held_pipes":
+        script += "if os.fork() != 0:\n    sys.exit(0)\n"
+    else:
+        script += "os.write(1, b'before timeout')\n"
+    script += (
+        f"os.write({ready_write}, b'R')\nos.close({ready_write})\n"
+        "sys.stdin.buffer.read()\n"
+        "time.sleep(2)\n"
+        f"pathlib.Path({str(marker)!r}).touch()\n"
+        "time.sleep(30)\n"
+    )
+    try:
+        process = subprocess.Popen(
+            (sys.executable, "-c", script),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            pass_fds=(ready_write,),
+            start_new_session=True,
+        )
+        os.close(ready_write)
+        ready_write = -1
+        deadline = time.monotonic() + 5
+        with selectors.DefaultSelector() as selector:
+            selector.register(ready_read, selectors.EVENT_READ)
+            assert selector.select(max(0, deadline - time.monotonic())), (
+                "child did not become ready"
+            )
+            assert os.read(ready_read, 1) == b"R"
+        if mode == "held_pipes":
+            assert process.wait(timeout=max(0, deadline - time.monotonic())) == 0
+        yield process
+    finally:
+        os.close(ready_read)
+        if ready_write != -1:
+            os.close(ready_write)
+        if process is not None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=1)
+            finally:
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
+
+
+@pytest.mark.parametrize("mode", ["sleep", "held_pipes"])
+def test_ready_child_timeout_preserves_output_exit_and_descendant_cleanup(
+    tmp_path: Path, mode: str
+) -> None:
+    from agent_harness import adapter
+
+    with ready_timeout_process(tmp_path, mode) as process:
+        stdout = adapter._Capture(100)
+        stderr = adapter._Capture(100)
+        started = time.monotonic()
+        timed_out = adapter._communicate_bounded(
+            process, b"complete prompt", stdout, stderr, started, 1
+        )
+        assert timed_out
+        assert time.monotonic() - started < 4
+        if mode == "sleep":
+            assert stdout.result().text == "before timeout"
+        else:
+            assert process.returncode == 0
+        assert adapter._read_final(tmp_path / "final.txt", 100) == (None, "missing")
+        assert process.stdin is not None and process.stdin.closed
+        assert process.stdout is not None and process.stdout.closed
+        assert process.stderr is not None and process.stderr.closed
+        time.sleep(2.1)
+        assert not (tmp_path / "descendant-marker").exists()
 
 
 @pytest.mark.parametrize(

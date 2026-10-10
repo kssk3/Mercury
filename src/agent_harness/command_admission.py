@@ -7,6 +7,7 @@ These checks are point-in-time checks, not a concurrent-filesystem sandbox.
 from __future__ import annotations
 
 import hashlib
+import os
 import stat
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -96,14 +97,21 @@ def _selected_path(root: Path, relative: str, *, directory: bool) -> Path:
 
 def _source_hash(root: Path, source_path: str) -> str:
     selected = _selected_path(root, source_path, directory=False)
+    descriptor: int | None = None
     try:
+        descriptor = os.open(selected, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+            raise ValueError("selected source must be a single-link regular file")
         digest = hashlib.sha256()
-        with selected.open("rb") as source:
-            while chunk := source.read(65536):
-                digest.update(chunk)
+        while chunk := os.read(descriptor, 65536):
+            digest.update(chunk)
         return digest.hexdigest()
     except OSError as error:
         raise ValueError("could not read selected source") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def discover_command(

@@ -65,6 +65,9 @@ class AttemptJournal:
             if kind not in {
                 "turn_intent",
                 "turn_observation",
+                "callback_observation",
+                "callback_scope_decision",
+                "callback_observation_failed",
                 "turn_observation_failed",
                 "scope_decision",
                 "native_output_stored",
@@ -118,8 +121,39 @@ class AttemptJournal:
                 entry["verification"] = _verification(event, entry)
                 continue
             _require(entry["verification"] is None)
-            if kind in {"turn_observation", "turn_observation_failed"}:
-                _require(entry["observation"] is None)
+            if kind == "callback_observation_failed":
+                _require(entry["observation"] is not None and entry["outputs"] is None)
+                _require(event["repository_id"] == before.repository_id)
+                _require(event["classification"] == "after_observation_failed")
+                failed_process = _process(event["process"])
+                previous = _mapping(entry["observation"])
+                _require(
+                    previous["status"] == "observed"
+                    and previous["process"] == failed_process
+                )
+                entry["observation"] = {
+                    "status": "failed",
+                    "classification": "after_observation_failed",
+                    "process": failed_process,
+                }
+                entry["after_head"] = None
+                entry["scope"] = None
+                snapshots[attempt_id] = (before, None)
+                continue
+            if kind in {
+                "turn_observation",
+                "turn_observation_failed",
+                "callback_observation",
+            }:
+                if kind == "callback_observation":
+                    _require(
+                        entry["observation"] is not None
+                        and entry["scope"] is not None
+                        and entry["outputs"] is None
+                    )
+                    entry["scope"] = None
+                else:
+                    _require(entry["observation"] is None)
                 if kind == "turn_observation_failed":
                     _require(
                         event["classification"]
@@ -150,7 +184,7 @@ class AttemptJournal:
             else:
                 _require(after is not None)
                 _require(event["repository_id"] == before.repository_id)
-                if kind == "scope_decision":
+                if kind in {"scope_decision", "callback_scope_decision"}:
                     _require(entry["scope"] is None)
                     delta = _delta(event["delta"])
                     _require(

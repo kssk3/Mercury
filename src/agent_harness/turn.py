@@ -73,13 +73,23 @@ class RepositoryObservation:
         paths.update(
             _path(path)
             for path in _records(
-                _git(root, "ls-files", "--others", "--exclude-standard", "-z")
+                _git(
+                    root,
+                    "-c",
+                    "core.ignorecase=false",
+                    "ls-files",
+                    "--others",
+                    "--exclude-standard",
+                    "-z",
+                )
             )
         )
         statuses: list[GitStatusEntry] = []
         for entry in _records(
             _git(
                 root,
+                "-c",
+                "core.ignorecase=false",
                 "status",
                 "--porcelain=v1",
                 "-z",
@@ -342,8 +352,15 @@ def run_observed_turn(
         result = adapter.run(
             contract, admission, context, budgets=budgets, sandbox=sandbox
         )
-    except BaseException:
+    except Exception:
         raise _failure(journal, root, "adapter_raised", attempt_id, None) from None
+    except BaseException:
+        try:
+            _failure(journal, root, "adapter_raised", attempt_id, None)
+        except BaseException:
+            # Failed-record errors cannot replace caller cancellation.
+            pass
+        raise
     try:
         after = RepositoryObservation.capture(root)
         delta = compare_observations(before, after)

@@ -5,6 +5,7 @@ import json
 import math
 import os
 import shutil
+import stat
 import tempfile
 import time
 import uuid
@@ -26,6 +27,9 @@ class LockOwnershipError(RuntimeError):
 class RepositoryLease:
     owner_token: str
     heartbeat_at: float
+
+
+_MAX_LEASE_BYTES = 65536
 
 
 class RepositoryLock:
@@ -70,18 +74,19 @@ class RepositoryLock:
         self._state_directory.mkdir(parents=True, exist_ok=True)
 
         with self._ownership_transition():
+            sampled_at = self._sample_now()
             while True:
                 try:
                     self.path.mkdir()
                 except FileExistsError:
                     lease = self._read_lease()
-                    if not self._is_expired(lease):
+                    if not self._is_expired(lease, sampled_at):
                         raise LockUnavailableError(
                             "repository lock is active"
                         ) from None
                     self._reclaim_expired_lock()
                 else:
-                    lease = RepositoryLease(self._owner_token, self._now())
+                    lease = RepositoryLease(self._owner_token, sampled_at)
                     try:
                         self._write_lease(lease)
                     except BaseException:
@@ -92,7 +97,7 @@ class RepositoryLock:
     def heartbeat(self) -> RepositoryLease:
         with self._ownership_transition():
             self._require_owner()
-            lease = RepositoryLease(self._owner_token, self._now())
+            lease = RepositoryLease(self._owner_token, self._sample_now())
             self._write_lease(lease)
             return lease
 
@@ -101,14 +106,50 @@ class RepositoryLock:
             self._require_owner()
             shutil.rmtree(self.path)
 
-    def _is_expired(self, lease: RepositoryLease) -> bool:
-        return self._now() - lease.heartbeat_at > self._timeout_seconds
+    def _sample_now(self) -> float:
+        sample = self._now()
+        if isinstance(sample, bool) or not isinstance(sample, (int, float)):
+            raise ValueError("clock sample must be a finite numeric timestamp")
+        try:
+            timestamp = float(sample)
+        except OverflowError as error:
+            raise ValueError(
+                "clock sample must be a finite numeric timestamp"
+            ) from error
+        if not math.isfinite(timestamp):
+            raise ValueError("clock sample must be a finite numeric timestamp")
+        return timestamp
+
+    def _is_expired(self, lease: RepositoryLease, sampled_at: float) -> bool:
+        return sampled_at - lease.heartbeat_at > self._timeout_seconds
 
     def _read_lease(self) -> RepositoryLease:
+        descriptor: int | None = None
         try:
-            payload = json.loads(self._metadata_path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, ValueError) as error:
+            descriptor = os.open(
+                self._metadata_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+            )
+            opened = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_nlink != 1
+                or opened.st_size > _MAX_LEASE_BYTES
+            ):
+                raise ValueError("unsafe lease metadata")
+            contents = bytearray()
+            while len(contents) <= _MAX_LEASE_BYTES:
+                chunk = os.read(descriptor, _MAX_LEASE_BYTES + 1 - len(contents))
+                if not chunk:
+                    break
+                contents.extend(chunk)
+            if len(contents) > _MAX_LEASE_BYTES:
+                raise ValueError("lease metadata exceeds the read budget")
+            payload = json.loads(contents.decode("utf-8"))
+        except (OSError, ValueError) as error:
             raise LockUnavailableError("repository lock metadata is invalid") from error
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
 
         if not isinstance(payload, dict):
             raise LockUnavailableError("repository lock metadata is invalid")
@@ -136,6 +177,8 @@ class RepositoryLock:
             separators=(",", ":"),
             sort_keys=True,
         )
+        if len(serialized.encode("utf-8")) > _MAX_LEASE_BYTES:
+            raise ValueError("repository lock metadata exceeds the read budget")
         try:
             with tempfile.NamedTemporaryFile(
                 "w",

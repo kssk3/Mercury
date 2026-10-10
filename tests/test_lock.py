@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import os
+import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from multiprocessing.process import BaseProcess
@@ -476,4 +478,153 @@ def test_default_owner_token_supports_lease_lifecycle(tmp_path: Path) -> None:
     assert isinstance(lease.owner_token, str) and lease.owner_token
     assert lock.heartbeat().owner_token == lease.owner_token
     lock.release()
+    assert not lock.path.exists()
+
+
+@pytest.mark.parametrize("action", ["create", "heartbeat", "expiry"])
+@pytest.mark.parametrize(
+    "sample",
+    [float("nan"), float("inf"), -float("inf"), True, False, None, "100", 10**1000],
+)
+def test_invalid_clock_samples_preserve_healthy_leases_or_leave_no_new_lock(
+    tmp_path: Path, action: str, sample: object
+) -> None:
+    current: object = 100.0
+
+    def now() -> float:
+        return current  # type: ignore[return-value]
+
+    lock = RepositoryLock(
+        tmp_path / "state", timeout_seconds=10, now=now, owner_token="owner"
+    )
+    if action != "create":
+        lock.acquire()
+        before = (lock.path / "lease.json").read_bytes()
+    current = sample
+    with pytest.raises(ValueError, match="clock"):
+        (lock.heartbeat if action == "heartbeat" else lock.acquire)()
+    if action == "create":
+        assert not lock.path.exists()
+    else:
+        assert (lock.path / "lease.json").read_bytes() == before
+        lock.release()
+
+
+@pytest.mark.parametrize("action", ["create", "heartbeat", "expiry"])
+@pytest.mark.parametrize("failure_type", [RuntimeError, KeyboardInterrupt])
+def test_clock_exceptions_preserve_original_failure_and_lock_state(
+    tmp_path: Path, action: str, failure_type: type[BaseException]
+) -> None:
+    failure = failure_type("clock failed")
+    fail = False
+
+    def now() -> float:
+        if fail:
+            raise failure
+        return 100.0
+
+    lock = RepositoryLock(
+        tmp_path / "state", timeout_seconds=10, now=now, owner_token="owner"
+    )
+    if action != "create":
+        lock.acquire()
+        before = (lock.path / "lease.json").read_bytes()
+    fail = True
+    with pytest.raises(failure_type) as raised:
+        (lock.heartbeat if action == "heartbeat" else lock.acquire)()
+    assert raised.value is failure
+    if action == "create":
+        assert not lock.path.exists()
+    else:
+        assert (lock.path / "lease.json").read_bytes() == before
+        lock.release()
+
+
+@pytest.mark.parametrize("action", ["acquire", "heartbeat", "release"])
+def test_fifo_lease_is_rejected_without_waiting_for_a_writer(
+    tmp_path: Path, action: str
+) -> None:
+    lock = RepositoryLock(tmp_path / "state", timeout_seconds=10, owner_token="owner")
+    lock.acquire()
+    metadata = lock.path / "lease.json"
+    metadata.unlink()
+    os.mkfifo(metadata)
+    script = (
+        "from agent_harness.lock import RepositoryLock, LockUnavailableError\n"
+        f"lock = RepositoryLock({str(tmp_path / 'state')!r}, timeout_seconds=10, owner_token='owner')\n"
+        "try:\n"
+        f"    lock.{action}()\n"
+        "except LockUnavailableError:\n    pass\n"
+        "else:\n    raise RuntimeError('unsafe lease accepted')\n"
+    )
+    result = subprocess.run(
+        (sys.executable, "-c", script), capture_output=True, timeout=1
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    assert metadata.exists()
+
+
+@pytest.mark.parametrize("action", ["acquire", "heartbeat", "release"])
+@pytest.mark.parametrize("kind", ["symlink", "hardlink", "directory", "oversized"])
+def test_unsafe_lease_inputs_are_rejected_without_external_mutation(
+    tmp_path: Path, action: str, kind: str
+) -> None:
+    lock = RepositoryLock(
+        tmp_path / "state", timeout_seconds=10, now=lambda: 100.0, owner_token="owner"
+    )
+    lock.acquire()
+    metadata = lock.path / "lease.json"
+    original = metadata.read_bytes()
+    external = tmp_path / "external.json"
+    external.write_bytes(original)
+    metadata.unlink()
+    if kind == "symlink":
+        metadata.symlink_to(external)
+    elif kind == "hardlink":
+        metadata.hardlink_to(external)
+    elif kind == "directory":
+        metadata.mkdir()
+    else:
+        metadata.write_bytes(original + b" " * (1024 * 1024))
+    with pytest.raises(LockUnavailableError, match="metadata is invalid"):
+        getattr(lock, action)()
+    assert lock.path.exists()
+    assert external.read_bytes() == original
+    assert metadata.lstat()
+
+
+def test_unsafe_opened_lease_descriptor_is_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock = RepositoryLock(tmp_path / "state", timeout_seconds=10, owner_token="owner")
+    lock.acquire()
+    metadata = lock.path / "lease.json"
+    (tmp_path / "alias").hardlink_to(metadata)
+    opened: list[int] = []
+    actual_open = os.open
+
+    def record_open(
+        path: str | Path, flags: int, mode: int = 0o777, *, dir_fd: int | None = None
+    ) -> int:
+        descriptor = actual_open(path, flags, mode, dir_fd=dir_fd)
+        if Path(path) == metadata:
+            opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(os, "open", record_open)
+    with pytest.raises(LockUnavailableError):
+        lock.release()
+    for descriptor in opened:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+
+
+def test_oversized_owner_metadata_cannot_create_an_unreadable_lease(
+    tmp_path: Path,
+) -> None:
+    lock = RepositoryLock(
+        tmp_path / "state", timeout_seconds=10, owner_token="owner" * 100000
+    )
+    with pytest.raises(ValueError, match="metadata"):
+        lock.acquire()
     assert not lock.path.exists()

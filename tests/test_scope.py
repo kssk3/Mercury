@@ -507,13 +507,13 @@ def test_incomplete_f2_observation_propagates_and_never_scope_clears(
 def test_unsafe_contract_path_rejects_before_process_or_intent(
     repository: Path, tmp_path: Path
 ) -> None:
-    task = contract(".git/config")
     marker = tmp_path / "ran"
     executable = fake(
         tmp_path, f"import pathlib\npathlib.Path({str(marker)!r}).touch()\n"
     )
     journal = EventJournal(tmp_path / "state")
     with pytest.raises(ValueError):
+        task = contract(".git/config")
         invoke(repository, executable, journal, task=task)
     assert not marker.exists() and not journal.path.exists()
 

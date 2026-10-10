@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-import io
+import os
 import subprocess
+import sys
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
@@ -26,7 +27,7 @@ def test_discovery_is_immutable_explicit_attribution_without_execution(
     repository: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     actual_run = subprocess.run
-    actual_open = Path.open
+    actual_open = os.open
     calls: list[list[str]] = []
     reads: list[Path] = []
 
@@ -41,14 +42,13 @@ def test_discovery_is_immutable_explicit_attribution_without_execution(
         calls.append(argv)
         return actual_run(argv, **kwargs)  # type: ignore[call-overload,no-any-return]
 
-    def selected_only(path: Path, mode: str = "r", **kwargs: object) -> object:
+    def selected_only(path: Path, flags: int) -> int:
         assert path == repository / "docs/commands.bin"
-        assert mode == "rb"
         reads.append(path)
-        return actual_open(path, mode, **kwargs)  # type: ignore[call-overload]
+        return actual_open(path, flags)
 
     monkeypatch.setattr(subprocess, "run", git_only)
-    monkeypatch.setattr(Path, "open", selected_only)
+    monkeypatch.setattr(os, "open", selected_only)
     argv = ["sh", "-c", "touch SHOULD_NOT_EXIST", "$(literal)"]
     result = commands.discover_command(
         repository / "docs",
@@ -311,7 +311,7 @@ def test_unreadable_selected_source_fails_explicitly(
     def denied(path: Path, *args: object, **kwargs: object) -> object:
         raise PermissionError("denied")
 
-    monkeypatch.setattr(Path, "open", denied)
+    monkeypatch.setattr(os, "open", denied)
     with pytest.raises(ValueError, match="source"):
         if conversion:
             commands.admit_command(repository, candidate, contract, approval)
@@ -418,21 +418,25 @@ def test_large_source_hashing_uses_bounded_reads_and_preserves_identity(
         30,
     )
     approval = approve(candidate, contract)
-    actual_open = Path.open
+    actual_open = os.open
+    actual_read = os.read
+    descriptors: set[int] = set()
+    sizes: list[int] = []
 
-    class BoundedReader(io.BufferedReader):
-        def read(self, size: int | None = -1) -> bytes:
-            assert size is not None and 0 < size <= 1024 * 1024, (
-                "source hashing must use bounded reads"
-            )
-            return super().read(size)
+    def bounded_open(path: Path, flags: int) -> int:
+        descriptor = actual_open(path, flags)
+        if path == source:
+            descriptors.add(descriptor)
+        return descriptor
 
-    def bounded_open(path: Path, mode: str = "r", **kwargs: object) -> object:
-        if path == source and mode == "rb":
-            return BoundedReader(io.FileIO(path, "r"))
-        return actual_open(path, mode, **kwargs)  # type: ignore[call-overload]
+    def bounded_read(descriptor: int, size: int) -> bytes:
+        if descriptor in descriptors:
+            assert 0 < size <= 1024 * 1024
+            sizes.append(size)
+        return actual_read(descriptor, size)
 
-    monkeypatch.setattr(Path, "open", bounded_open)
+    monkeypatch.setattr(os, "open", bounded_open)
+    monkeypatch.setattr(os, "read", bounded_read)
     if conversion:
         assert commands.admit_command(repository, candidate, contract, approval) == (
             VerificationPolicy((("pytest",),), ".", 30)
@@ -448,3 +452,90 @@ def test_large_source_hashing_uses_bounded_reads_and_preserves_identity(
             timeout_seconds=30,
         )
         assert discovered.source_sha256 == candidate.source_sha256
+    assert sizes
+
+
+@pytest.mark.parametrize("conversion", [False, True])
+def test_command_source_hardlinks_are_rejected_in_both_paths(
+    repository: Path,
+    candidate: commands.DiscoveredCommand,
+    contract: TaskContract,
+    tmp_path: Path,
+    conversion: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approval = approve(candidate, contract)
+    source = repository / candidate.source_path
+    external = tmp_path / "external"
+    external.write_bytes(source.read_bytes())
+    source.unlink()
+    source.hardlink_to(external)
+    actual_open = os.open
+    descriptors: list[int] = []
+
+    def tracked_open(path: Path, flags: int) -> int:
+        descriptor = actual_open(path, flags)
+        if path == source:
+            descriptors.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(os, "open", tracked_open)
+    with pytest.raises(ValueError, match="source"):
+        if conversion:
+            commands.admit_command(repository, candidate, contract, approval)
+        else:
+            commands.discover_command(
+                repository,
+                source_path=candidate.source_path,
+                argv=["pytest"],
+                timeout_seconds=30,
+            )
+    assert external.read_bytes() == b"\xff explicit bytes\x00"
+
+    assert descriptors
+    for descriptor in descriptors:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+
+
+@pytest.mark.parametrize("conversion", [False, True])
+@pytest.mark.parametrize("kind", ["fifo", "symlink"])
+def test_command_source_replacement_after_inspection_is_rejected_without_blocking(
+    repository: Path,
+    conversion: bool,
+    kind: str,
+) -> None:
+    script = f"""
+import os
+from pathlib import Path
+from agent_harness import command_admission as commands
+from agent_harness.contract import TaskContract
+root = Path({str(repository)!r})
+source = root / 'docs/commands.bin'
+candidate = commands.discover_command(root, source_path='docs/commands.bin', argv=['pytest'], timeout_seconds=30)
+contract = TaskContract('Task', (), (), ('tests',))
+approval = commands.record_command_approval(candidate, contract, approver='human', approved_at='2026-10-01T00:00:00Z')
+actual = commands._selected_path
+def replace(root, relative, *, directory):
+    selected = actual(root, relative, directory=directory)
+    if not directory:
+        source.unlink()
+        if {kind!r} == 'fifo': os.mkfifo(source)
+        else:
+            external = root.parent / 'external'
+            external.write_bytes(b'outside')
+            source.symlink_to(external)
+    return selected
+commands._selected_path = replace
+try:
+    if {conversion!r}: commands.admit_command(root, candidate, contract, approval)
+    else: commands.discover_command(root, source_path='docs/commands.bin', argv=['pytest'], timeout_seconds=30)
+except ValueError:
+    pass
+else:
+    raise RuntimeError('unsafe opened source accepted')
+"""
+    result = subprocess.run(
+        (sys.executable, "-c", script), capture_output=True, timeout=1
+    )
+    assert result.returncode == 0, result.stderr.decode()
