@@ -97,7 +97,11 @@ def _selected_path(root: Path, relative: str, *, directory: bool) -> Path:
 def _source_hash(root: Path, source_path: str) -> str:
     selected = _selected_path(root, source_path, directory=False)
     try:
-        return hashlib.sha256(selected.read_bytes()).hexdigest()
+        digest = hashlib.sha256()
+        with selected.open("rb") as source:
+            while chunk := source.read(65536):
+                digest.update(chunk)
+        return digest.hexdigest()
     except OSError as error:
         raise ValueError("could not read selected source") from error
 

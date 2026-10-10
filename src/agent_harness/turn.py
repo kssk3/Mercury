@@ -24,7 +24,7 @@ from agent_harness.adapter import (
 )
 from agent_harness.admission import AdmissionRecord, admit
 from agent_harness.context import ContextPacket
-from agent_harness.contract import TaskContract
+from agent_harness.contract import TaskContract, _path_key
 from agent_harness.journal import EventJournal
 from agent_harness.repository import git_read_environment, resolve_repository_root
 
@@ -378,9 +378,9 @@ def _reject_allowed_symlinks(
     for entry in snapshot.files:
         if entry.kind != "symlink":
             continue
-        path = entry.path.casefold()
+        path = _path_key(entry.path)
         for allowed in contract.allowed_paths:
-            boundary = allowed.casefold()
+            boundary = _path_key(allowed)
             if (
                 path == boundary
                 or path.startswith(boundary + "/")

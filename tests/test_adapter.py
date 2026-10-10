@@ -298,3 +298,32 @@ def test_invalid_input_never_launches(
             sandbox=sandbox,  # type: ignore[arg-type]
         )
     assert not marker.exists()
+
+
+def test_hardlinked_final_response_is_rejected_and_descriptor_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    from agent_harness import adapter
+
+    original = tmp_path / "unrelated.txt"
+    original.write_text("unrelated private contents")
+    final = tmp_path / "final.txt"
+    final.hardlink_to(original)
+    actual_open = os.open
+    descriptors: list[int] = []
+
+    def tracked_open(path: Path, flags: int) -> int:
+        descriptor = actual_open(path, flags)
+        descriptors.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(os, "open", tracked_open)
+    capture, status = adapter._read_final(final, 100)
+    assert status == "unsafe"
+    assert capture is None
+    assert original.read_text() == "unrelated private contents"
+    for descriptor in descriptors:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)

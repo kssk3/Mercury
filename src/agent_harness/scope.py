@@ -12,7 +12,7 @@ from typing import Literal
 from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
 from agent_harness.admission import AdmissionRecord
 from agent_harness.context import ContextPacket
-from agent_harness.contract import TaskContract
+from agent_harness.contract import TaskContract, _path_key
 from agent_harness.journal import EventJournal
 from agent_harness.turn import (
     FileFingerprint,
@@ -46,6 +46,8 @@ class ScopeDecision:
 
 
 def _matches(path: str, boundary: str) -> bool:
+    path = _path_key(path, fold_case=False)
+    boundary = _path_key(boundary, fold_case=False)
     return path == boundary or path.startswith(boundary + "/")
 
 
@@ -64,7 +66,7 @@ def evaluate_scope(
         path
         for path in paths
         if any(
-            _matches(path.casefold(), item.casefold())
+            _matches(_path_key(path), _path_key(item))
             for item in contract.protected_paths
         )
     )
@@ -126,7 +128,7 @@ def _validate_contract(contract: TaskContract) -> None:
     for paths in (contract.allowed_paths, contract.protected_paths):
         if not isinstance(paths, tuple) or not all(_valid_path(path) for path in paths):
             raise ValueError("invalid scope contract")
-        if len(paths) != len({path.casefold() for path in paths}):
+        if len(paths) != len({_path_key(path) for path in paths}):
             raise ValueError("invalid scope contract")
     try:
         contract._validate()
@@ -170,14 +172,16 @@ def _validate_observation(snapshot: RepositoryObservation) -> None:
     ):
         raise ValueError("invalid scope observation")
     names: set[str] = set()
+    identities: dict[str, str] = {}
     for entry in snapshot.files:
         if (
             not isinstance(entry, FileFingerprint)
             or not _valid_path(entry.path)
-            or entry.path in names
+            or _path_key(entry.path, fold_case=False) in identities
         ):
             raise ValueError("invalid scope observation")
         names.add(entry.path)
+        identities[_path_key(entry.path, fold_case=False)] = entry.path
         if entry.kind == "missing":
             valid = (
                 entry.sha256 is None
@@ -225,6 +229,10 @@ def _validate_observation(snapshot: RepositoryObservation) -> None:
             )
         ):
             raise ValueError("invalid scope observation")
+        identity = _path_key(status_entry.path, fold_case=False)
+        if identity in identities and identities[identity] != status_entry.path:
+            raise ValueError("invalid scope observation")
+        identities[identity] = status_entry.path
         statuses.add(status_entry)
         codes_by_path.setdefault(status_entry.path, set()).add(status_entry.status)
     for codes in codes_by_path.values():

@@ -336,7 +336,8 @@ def _read_final(
     except OSError:
         return None, "unreadable"
     try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
             return None, "unsafe"
         capture = _Capture(limit)
         remaining = limit + 1

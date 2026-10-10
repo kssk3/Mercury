@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from dataclasses import dataclass
 from pathlib import PurePath
+
+
+def _path_key(path: str, *, fold_case: bool = True) -> str:
+    """Comparison identity only; retain original spelling for filesystem access."""
+    normalized = unicodedata.normalize("NFC", path)
+    return (
+        unicodedata.normalize("NFC", normalized.casefold()) if fold_case else normalized
+    )
 
 
 @dataclass(frozen=True)
@@ -13,6 +22,13 @@ class TaskContract:
     completion_criteria: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        for values in (
+            self.allowed_paths,
+            self.protected_paths,
+            self.completion_criteria,
+        ):
+            if isinstance(values, (str, bytes)):
+                raise ValueError("contract fields must be collections, not scalars")
         object.__setattr__(self, "allowed_paths", tuple(self.allowed_paths))
         object.__setattr__(self, "protected_paths", tuple(self.protected_paths))
         object.__setattr__(self, "completion_criteria", tuple(self.completion_criteria))
@@ -40,8 +56,8 @@ class TaskContract:
 
         self._validate_paths(self.allowed_paths)
         self._validate_paths(self.protected_paths)
-        allowed_keys = tuple(path.casefold() for path in self.allowed_paths)
-        protected_keys = tuple(path.casefold() for path in self.protected_paths)
+        allowed_keys = tuple(_path_key(path) for path in self.allowed_paths)
+        protected_keys = tuple(_path_key(path) for path in self.protected_paths)
         if any(
             protected == allowed
             or protected.startswith(f"{allowed}/")
@@ -53,7 +69,7 @@ class TaskContract:
 
     @staticmethod
     def _validate_paths(paths: tuple[str, ...]) -> None:
-        if len(paths) != len({path.casefold() for path in paths}):
+        if len(paths) != len({_path_key(path) for path in paths}):
             raise ValueError("duplicate paths are not allowed")
         for path in paths:
             if "\x00" in path:

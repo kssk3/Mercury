@@ -44,10 +44,15 @@ class RepositoryLock:
         ):
             raise ValueError("timeout_seconds must be finite and positive")
 
+        if owner_token is not None and (
+            not isinstance(owner_token, str) or not owner_token
+        ):
+            raise ValueError("owner_token must be a nonempty string")
+
         self._state_directory = Path(state_directory)
         self._timeout_seconds = timeout_seconds
         self._now = now
-        self._owner_token = owner_token or uuid.uuid4().hex
+        self._owner_token = uuid.uuid4().hex if owner_token is None else owner_token
 
     @property
     def path(self) -> Path:

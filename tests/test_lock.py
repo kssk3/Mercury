@@ -438,3 +438,42 @@ def test_parser_limited_heartbeat_is_refused_without_changing_lease(
     assert lock.path.is_dir()
     assert set(lock.path.iterdir()) == {metadata_path}
     assert metadata_path.read_bytes() == contents
+
+
+@pytest.mark.parametrize("owner_token", ["", True, False, 0, 1, b"owner", [], {}])
+@pytest.mark.parametrize("existing_lease", [False, True])
+def test_invalid_owner_token_is_rejected_before_state_mutation(
+    tmp_path: Path, owner_token: object, existing_lease: bool
+) -> None:
+    state = tmp_path / "state"
+    owner = RepositoryLock(state, timeout_seconds=10, owner_token="valid-owner")
+    if existing_lease:
+        owner.acquire()
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(ValueError, match="owner_token"):
+        RepositoryLock(state, timeout_seconds=10, owner_token=owner_token)  # type: ignore[arg-type]
+
+    assert {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    } == before
+    if existing_lease:
+        owner.heartbeat()
+        owner.release()
+    else:
+        assert not state.exists()
+
+
+def test_default_owner_token_supports_lease_lifecycle(tmp_path: Path) -> None:
+    lock = RepositoryLock(tmp_path / "state", timeout_seconds=10, owner_token=None)
+    lease = lock.acquire()
+    assert isinstance(lease.owner_token, str) and lease.owner_token
+    assert lock.heartbeat().owner_token == lease.owner_token
+    lock.release()
+    assert not lock.path.exists()

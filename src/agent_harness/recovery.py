@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from agent_harness.contract import TaskContract
+from agent_harness.contract import TaskContract, _path_key
 from agent_harness.repository import git_read_environment, resolve_repository_root
 from agent_harness.scope import _validate_observation
 from agent_harness.turn import FileFingerprint, GitStatusEntry, RepositoryObservation
@@ -70,14 +70,14 @@ def _scope(path: str, contract: TaskContract) -> None:
     ):
         raise ValueError("unsafe recovery path")
 
-    def matches(parent: str) -> bool:
-        return path.casefold() == parent.casefold() or path.casefold().startswith(
-            parent.casefold() + "/"
-        )
+    def matches(parent: str, *, fold_case: bool) -> bool:
+        key = _path_key(path, fold_case=fold_case)
+        boundary = _path_key(parent, fold_case=fold_case)
+        return key == boundary or key.startswith(boundary + "/")
 
-    if not any(
-        path == p or path.startswith(p + "/") for p in contract.allowed_paths
-    ) or any(matches(p) for p in contract.protected_paths):
+    if not any(matches(p, fold_case=False) for p in contract.allowed_paths) or any(
+        matches(p, fold_case=True) for p in contract.protected_paths
+    ):
         raise ValueError("recovery path outside admitted scope")
 
 
@@ -133,7 +133,7 @@ def capture_patch(
         or len(attempt_id) > 256
         or not paths
         or len(paths) > 1024
-        or len(set(p.casefold() for p in paths)) != len(paths)
+        or len(set(_path_key(p) for p in paths)) != len(paths)
     ):
         raise ValueError("invalid recovery identity or paths")
     root = resolve_repository_root(repository)
@@ -146,9 +146,9 @@ def capture_patch(
     after = RepositoryObservation.capture(root)
     if before != after:
         raise ValueError("workspace changed during recovery capture")
-    observed = {entry.path: entry for entry in after.files}
+    observed = {_path_key(entry.path, fold_case=False): entry for entry in after.files}
     for image in images:
-        entry = observed.get(image.path)
+        entry = observed.get(_path_key(image.path, fold_case=False))
         if image.data is None:
             if entry is not None and entry.kind != "missing":
                 raise ValueError("recovery image observation disagreement")
@@ -302,15 +302,17 @@ def _validate_snapshot(snapshot: PatchSnapshot) -> None:
     _validate_presence(obs, root)
     if not snapshot.images or len(snapshot.images) > 1024:
         raise ValueError("invalid recovery images")
-    fingerprints = {entry.path: entry for entry in obs.files}
+    fingerprints = {
+        _path_key(entry.path, fold_case=False): entry for entry in obs.files
+    }
     seen: set[str] = set()
     total = 0
     for image in snapshot.images:
         _canonical(image.path)
-        if image.path.casefold() in seen:
+        if _path_key(image.path) in seen:
             raise ValueError("duplicate recovery image")
-        seen.add(image.path.casefold())
-        fingerprint = fingerprints.get(image.path)
+        seen.add(_path_key(image.path))
+        fingerprint = fingerprints.get(_path_key(image.path, fold_case=False))
         if image.data is None:
             valid = image.mode is None and (
                 fingerprint is None or fingerprint.kind == "missing"
@@ -383,7 +385,7 @@ def _index_status(observation: RepositoryObservation) -> set[tuple[str, str]]:
 def _complete_delta(before: PatchSnapshot, after: PatchSnapshot) -> None:
     if _index_status(before.observation) != _index_status(after.observation):
         raise ValueError("contradictory fixed-index recovery status")
-    targets = {image.path for image in before.images}
+    targets = {_path_key(image.path, fold_case=False) for image in before.images}
     old = {entry.path: entry for entry in before.observation.files}
     new = {entry.path: entry for entry in after.observation.files}
     changed = {
@@ -396,7 +398,7 @@ def _complete_delta(before: PatchSnapshot, after: PatchSnapshot) -> None:
         for path in old_status.keys() | new_status.keys()
         if old_status.get(path) != new_status.get(path)
     )
-    if not changed <= targets:
+    if not {_path_key(path, fold_case=False) for path in changed} <= targets:
         raise ValueError("incomplete recovery file delta")
 
 
@@ -479,7 +481,7 @@ def _load_snapshot(
     if (
         not images
         or len(images) > 1024
-        or len(set(i.path.casefold() for i in images)) != len(images)
+        or len(set(_path_key(i.path) for i in images)) != len(images)
     ):
         raise ValueError("invalid recovery images")
     observation = raw["observation"]

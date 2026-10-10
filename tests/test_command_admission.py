@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import subprocess
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
@@ -25,7 +26,7 @@ def test_discovery_is_immutable_explicit_attribution_without_execution(
     repository: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     actual_run = subprocess.run
-    actual_read = Path.read_bytes
+    actual_open = Path.open
     calls: list[list[str]] = []
     reads: list[Path] = []
 
@@ -40,13 +41,14 @@ def test_discovery_is_immutable_explicit_attribution_without_execution(
         calls.append(argv)
         return actual_run(argv, **kwargs)  # type: ignore[call-overload,no-any-return]
 
-    def selected_only(path: Path) -> bytes:
+    def selected_only(path: Path, mode: str = "r", **kwargs: object) -> object:
         assert path == repository / "docs/commands.bin"
+        assert mode == "rb"
         reads.append(path)
-        return actual_read(path)
+        return actual_open(path, mode, **kwargs)  # type: ignore[call-overload]
 
     monkeypatch.setattr(subprocess, "run", git_only)
-    monkeypatch.setattr(Path, "read_bytes", selected_only)
+    monkeypatch.setattr(Path, "open", selected_only)
     argv = ["sh", "-c", "touch SHOULD_NOT_EXIST", "$(literal)"]
     result = commands.discover_command(
         repository / "docs",
@@ -306,10 +308,10 @@ def test_unreadable_selected_source_fails_explicitly(
 ) -> None:
     approval = approve(candidate, contract)
 
-    def denied(path: Path) -> bytes:
+    def denied(path: Path, *args: object, **kwargs: object) -> object:
         raise PermissionError("denied")
 
-    monkeypatch.setattr(Path, "read_bytes", denied)
+    monkeypatch.setattr(Path, "open", denied)
     with pytest.raises(ValueError, match="source"):
         if conversion:
             commands.admit_command(repository, candidate, contract, approval)
@@ -395,3 +397,54 @@ def test_approval_and_conversion_do_not_execute_or_write(
         for path in repository.rglob("*")
         if path.is_file()
     }
+
+
+@pytest.mark.parametrize("conversion", [False, True])
+def test_large_source_hashing_uses_bounded_reads_and_preserves_identity(
+    repository: Path,
+    contract: TaskContract,
+    monkeypatch: pytest.MonkeyPatch,
+    conversion: bool,
+) -> None:
+    source = repository / "docs/commands.bin"
+    contents = bytes(range(256)) * 8193
+    source.write_bytes(contents)
+    candidate = commands.DiscoveredCommand(
+        str(repository.resolve()),
+        "docs/commands.bin",
+        hashlib.sha256(contents).hexdigest(),
+        ("pytest",),
+        ".",
+        30,
+    )
+    approval = approve(candidate, contract)
+    actual_open = Path.open
+
+    class BoundedReader(io.BufferedReader):
+        def read(self, size: int | None = -1) -> bytes:
+            assert size is not None and 0 < size <= 1024 * 1024, (
+                "source hashing must use bounded reads"
+            )
+            return super().read(size)
+
+    def bounded_open(path: Path, mode: str = "r", **kwargs: object) -> object:
+        if path == source and mode == "rb":
+            return BoundedReader(io.FileIO(path, "r"))
+        return actual_open(path, mode, **kwargs)  # type: ignore[call-overload]
+
+    monkeypatch.setattr(Path, "open", bounded_open)
+    if conversion:
+        assert commands.admit_command(repository, candidate, contract, approval) == (
+            VerificationPolicy((("pytest",),), ".", 30)
+        )
+        source.write_bytes(contents + b"changed")
+        with pytest.raises(ValueError, match="source"):
+            commands.admit_command(repository, candidate, contract, approval)
+    else:
+        discovered = commands.discover_command(
+            repository,
+            source_path="docs/commands.bin",
+            argv=["pytest"],
+            timeout_seconds=30,
+        )
+        assert discovered.source_sha256 == candidate.source_sha256
