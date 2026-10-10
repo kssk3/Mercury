@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "snapshot_kind": "SYNTHETIC_DEVELOPMENT_FIXTURE_NOT_LIVE_EVIDENCE",
+  "project": "Synthetic project",
+  "repository": "example.invalid/synthetic/project",
+  "phase": "PHASE_1",
+  "workflow": "Synthetic test workflow",
+  "policy_decision": "Synthetic fixture policy",
+  "observed_at": "2000-01-01",
+  "current_unit": {
+    "id": "synthetic-current",
+    "name": "Synthetic schema validation example",
+    "implementation_status": "PLANNED",
+    "plan_file": "artifacts/synthetic-plan.md",
+    "report_file": "artifacts/synthetic-report.json",
+    "immutable_base": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "next_gate": "Synthetic validation"
+  },
+  "delivery": {
+    "state": "LOCAL_ONLY",
+    "repository": "example.invalid/synthetic/project",
+    "base": "main",
+    "head_branch": "synthetic/example",
+    "snapshot_is_not_live_merge_state": true
+  },
+  "next_unit": {
+    "id": "synthetic-next",
+    "status": "NOT_STARTED",
+    "scope": "Synthetic follow-up example"
+  },
+  "role_policy": {
+    "implementation": "Synthetic test actor",
+    "observed_runtime_model": "UNKNOWN"
+  },
+  "last_delivered_runtime": {
+    "unit": "synthetic-runtime-receipt",
+    "pr": 1,
+    "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "merge_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "merged_at": "2000-01-01T00:00:00Z",
+    "main_run_id": 1,
+    "static-checks": "SUCCESS",
+    "tests-macos": "SUCCESS",
+    "full_tests": 0,
+    "scope": "Invented receipt values for schema tests only"
+  },
+  "last_delivered_ci": {
+    "unit": "synthetic-ci-receipt",
+    "pr": 2,
+    "head": "cccccccccccccccccccccccccccccccccccccccc",
+    "merge_commit": "dddddddddddddddddddddddddddddddddddddddd",
+    "merged_at": "2000-01-02T00:00:00Z",
+    "main_run_id": 2,
+    "static-checks": "SUCCESS",
+    "tests-macos": "SUCCESS",
+    "scope": "Invented legacy receipt values for schema tests only"
+  },
+  "historical_d7_candidate_checks": {
+    "focused_tests": 0
+  },
+  "historical_e1_candidate_checks": {
+    "review_tool_calls": 0
+  }
+}

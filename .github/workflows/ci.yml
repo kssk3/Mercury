@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-checks:
+    name: static-checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      record_only: ${{ steps.changes.outputs.record_only }}
+      macos_required: ${{ steps.changes.outputs.macos_required }}
+      verification: ${{ steps.changes.outputs.verification }}
+      state_required: ${{ steps.changes.outputs.state_required }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.19"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Classify exact event base and head
+        id: changes
+        env:
+          CHANGE_EVENT: ${{ github.event_name }}
+          CHANGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CHANGE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ "$CHANGE_EVENT" == "push" && "$CHANGE_BASE" == "0000000000000000000000000000000000000000" ]]; then
+            # No prior commit exists. Validate the exact head and use the
+            # classifier's conservative empty-diff route to require full gates.
+            uv run --no-project python scripts/ci_changes.py --base "$CHANGE_HEAD" --head "$CHANGE_HEAD" --github-output "$GITHUB_OUTPUT"
+          else
+            uv run --no-project python scripts/ci_changes.py --base "$CHANGE_BASE" --head "$CHANGE_HEAD" --github-output "$GITHUB_OUTPUT"
+          fi
+      - name: Document diff checks
+        env:
+          CHANGE_EVENT: ${{ github.event_name }}
+          CHANGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CHANGE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ "$CHANGE_EVENT" == "push" && "$CHANGE_BASE" == "0000000000000000000000000000000000000000" ]]; then
+            EMPTY_TREE=$(git hash-object -w -t tree --stdin </dev/null)
+            git diff --check "$EMPTY_TREE" "$CHANGE_HEAD" --
+          else
+            git diff --check "$CHANGE_BASE" "$CHANGE_HEAD" --
+          fi
+      - name: Install locked development dependencies
+        if: ${{ steps.changes.outputs.verification != 'document' }}
+        run: uv sync --locked --dev
+      - name: schema-validation
+        if: ${{ steps.changes.outputs.state_required == 'true' }}
+        env:
+          CHANGE_VERIFICATION: ${{ steps.changes.outputs.verification }}
+        run: |
+          uv run --no-sync python -m agent_harness.schema_validation --state tests/fixtures/project-state-v1.json
+          # Preserve fail-closed handling of a tracked legacy state input.
+          if [[ "$CHANGE_VERIFICATION" == "state" ]] || git ls-files --error-unmatch .project-state/current.json >/dev/null 2>&1; then
+            uv run --no-sync python -m agent_harness.schema_validation
+          fi
+      - name: Ruff lint
+        if: ${{ steps.changes.outputs.verification == 'full' }}
+        run: uv run --no-sync ruff check src tests scripts/ci_changes.py examples/quickstart.py
+      - name: Ruff format
+        if: ${{ steps.changes.outputs.verification == 'full' }}
+        run: uv run --no-sync ruff format --check src tests scripts/ci_changes.py examples/quickstart.py
+      - name: Mypy
+        if: ${{ steps.changes.outputs.verification == 'full' }}
+        run: uv run --no-sync mypy src tests scripts/ci_changes.py examples/quickstart.py
+
+  tests-linux:
+    name: tests-linux
+    needs: static-checks
+    if: ${{ needs.static-checks.result == 'success' && needs.static-checks.outputs.record_only != 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.19"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install locked development dependencies
+        run: uv sync --locked --dev
+      - name: Pytest
+        run: uv run --no-sync pytest
+      - name: Offline approved quickstart
+        if: ${{ needs.static-checks.outputs.verification == 'full' }}
+        run: uv run --no-sync python examples/quickstart.py --approve-demo
