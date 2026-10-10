@@ -1239,3 +1239,51 @@ def test_allowed_path_inspection_preserves_missing_regular_and_unrelated_links(
     assert result.adapter_result.process_status == "successful_exit"
     assert marker.exists()
     assert external.read_bytes() == b"original"
+
+
+@pytest.mark.parametrize("location", ["exact", "descendant", "nested_descendant"])
+def test_ignored_allowed_hardlink_refused_before_native_write(
+    repository: Path, tmp_path: Path, location: str
+) -> None:
+    from agent_harness.turn import RepositoryObservation, run_observed_turn
+
+    (repository / ".gitignore").write_text("ignored/\n")
+    relative = (
+        "ignored/file" if location != "nested_descendant" else "ignored/nested/file"
+    )
+    target = repository / relative
+    target.parent.mkdir(parents=True)
+    victim = tmp_path / "external"
+    victim.write_bytes(b"original")
+    os.link(victim, target)
+    allowed = relative if location == "exact" else "ignored"
+    assert not any(
+        entry.path.startswith("ignored/")
+        for entry in RepositoryObservation.capture(repository).files
+    )
+    marker = tmp_path / "ran"
+    executable = fake(
+        tmp_path,
+        "import pathlib, sys\nsys.stdin.buffer.read()\n"
+        + f"pathlib.Path({str(marker)!r}).touch()\npathlib.Path({relative!r}).write_bytes(b'changed')\n",
+    )
+    task = TaskContract("admitted ignored path", (allowed,), (), ("verified",))
+    admission = record_admission(
+        task, approver="human", approved_at="2026-10-09T00:00:00Z"
+    )
+    context = build_context_packet(
+        repository, source_paths=["base.txt"], budget_bytes=4096
+    )
+    journal = EventJournal(tmp_path / "state")
+    with pytest.raises(ValueError, match="hardlink"):
+        run_observed_turn(
+            CodexCLIAdapter(executable),
+            task,
+            admission,
+            context,
+            journal=journal,
+            budgets=TurnBudgets(3, 16000, 128, 128, 128),
+        )
+    assert not marker.exists()
+    assert victim.read_bytes() == b"original"
+    assert not journal.path.exists()

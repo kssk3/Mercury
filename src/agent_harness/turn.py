@@ -401,11 +401,14 @@ def _reject_allowed_symlinks(
                     raise ValueError("allowed paths must not traverse Git metadata")
                 current /= component
                 try:
-                    mode = current.lstat().st_mode
+                    info = current.lstat()
+                    mode = info.st_mode
                 except FileNotFoundError:
                     break
                 if stat.S_ISLNK(mode):
                     raise ValueError("allowed paths must not traverse symlinks")
+                if stat.S_ISREG(mode) and info.st_nlink != 1:
+                    raise ValueError("allowed paths must not traverse hardlinks")
                 if not stat.S_ISDIR(mode):
                     break
             else:
@@ -416,9 +419,12 @@ def _reject_allowed_symlinks(
                 for filesystem_entry in entries:
                     if filesystem_entry.name.casefold() == ".git":
                         raise ValueError("unsupported nested Git metadata entry")
-                    mode = filesystem_entry.stat(follow_symlinks=False).st_mode
+                    info = filesystem_entry.stat(follow_symlinks=False)
+                    mode = info.st_mode
                     if stat.S_ISLNK(mode):
                         raise ValueError("allowed paths must not traverse symlinks")
+                    if stat.S_ISREG(mode) and info.st_nlink != 1:
+                        raise ValueError("allowed paths must not traverse hardlinks")
                     if stat.S_ISDIR(mode):
                         pending.append(Path(filesystem_entry.path))
     except OSError as error:

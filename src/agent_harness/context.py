@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import stat
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
@@ -126,6 +127,9 @@ def _read_source(path: Path, allowance: int) -> bytes:
     payload = bytearray()
     try:
         with path.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+                raise ValueError("selected source must be a regular file with one link")
             while True:
                 chunk = stream.read(min(65536, allowance - len(payload) + 1))
                 payload.extend(chunk)

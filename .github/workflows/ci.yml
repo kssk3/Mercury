@@ -105,3 +105,6 @@ jobs:
         run: uv sync --locked --dev
       - name: Pytest
         run: uv run --no-sync pytest
+      - name: Offline approved quickstart
+        if: ${{ needs.static-checks.outputs.verification == 'full' }}
+        run: uv run --no-sync python examples/quickstart.py --approve-demo

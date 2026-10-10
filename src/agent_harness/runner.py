@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agent_harness.policy import VerificationPolicy
+from agent_harness.repository import git_read_environment
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,7 @@ class ControlledCommandRunner:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 start_new_session=True,
+                env=git_read_environment(),
             )
         except OSError as error:
             return CommandResult(
@@ -85,24 +87,25 @@ class ControlledCommandRunner:
         stderr = _OutputBuffer(self._max_output_bytes)
         try:
             _collect_output(process, stdout, stderr, timeout_seconds)
-        except (subprocess.TimeoutExpired, OverflowError) as failure:
+        except BaseException as failure:
             timed_out = isinstance(failure, subprocess.TimeoutExpired)
             # The leader may have exited while descendants still hold the pipes.
             # Its isolated group must be killed even in that case.
             try:
                 os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
+            except OSError:
                 pass
             try:
                 _collect_output(process, stdout, stderr, 1)
-            except subprocess.TimeoutExpired:
-                # An escaped descendant can retain a pipe; cleanup stays bounded.
+            except BaseException:
+                # Cleanup failures must not replace the original collection error.
+                # Escaped descendants can retain pipes; reaping stays bounded.
                 try:
                     process.wait(timeout=1)
-                except subprocess.TimeoutExpired:
+                except BaseException:
                     pass
             if not timed_out:
-                # Input-calculation failure remains an error after bounded cleanup.
+                # Every non-timeout failure propagates after bounded cleanup.
                 raise
         finally:
             if process.stdout is not None:

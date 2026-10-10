@@ -310,7 +310,7 @@ def test_filesystem_errors_are_explicit(
             denied()
         return original(path)
 
-    class Broken(io.BytesIO):
+    class Broken(io.BufferedReader):
         def read(self, size: int | None = -1) -> bytes:
             raise OSError("read failure")
 
@@ -319,7 +319,11 @@ def test_filesystem_errors_are_explicit(
     elif operation == "open":
         monkeypatch.setattr(Path, "open", denied)
     else:
-        monkeypatch.setattr(Path, "open", lambda *args, **kwargs: Broken())
+        monkeypatch.setattr(
+            Path,
+            "open",
+            lambda *args, **kwargs: Broken(io.FileIO(repository / "z.txt", "rb")),
+        )
     with pytest.raises(ValueError, match="source"):
         build_context_packet(repository, source_paths=["z.txt"], budget_bytes=2000)
 
@@ -332,11 +336,13 @@ def test_finite_cumulative_reads_and_short_reads(
 
     budget = 1000
     payloads = {"docs/a.txt": b"a" * 30, "z.txt": b"z" * (5000 if oversized else 25)}
+    for name, payload in payloads.items():
+        (repository / name).write_bytes(payload)
     returned = 0
     requests: list[int] = []
     opened: list[str] = []
 
-    class Chunked(io.BytesIO):
+    class Chunked(io.BufferedReader):
         def read(self, size: int | None = -1) -> bytes:
             nonlocal returned
             assert size is not None
@@ -351,7 +357,7 @@ def test_finite_cumulative_reads_and_short_reads(
         assert mode == "rb"
         name = str(path.relative_to(repository))
         opened.append(name)
-        return Chunked(payloads[name])
+        return Chunked(io.FileIO(path, mode))
 
     monkeypatch.setattr(Path, "open", selected)
     if oversized:
@@ -431,7 +437,7 @@ def test_oversized_file_not_fully_read_or_hashed(
 
     (repository / "docs/a.txt").write_bytes(b"a" * 100_000)
 
-    class Observed(io.BytesIO):
+    class Observed(io.BufferedReader):
         def read(self, size: int | None = -1) -> bytes:
             assert size == 1001
             result = super().read(size)
@@ -441,7 +447,11 @@ def test_oversized_file_not_fully_read_or_hashed(
     def no_hash(*args: object) -> None:
         pytest.fail("overflow payload hashed")
 
-    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: Observed(b"a" * 100_000))
+    monkeypatch.setattr(
+        Path,
+        "open",
+        lambda *args, **kwargs: Observed(io.FileIO(repository / "docs/a.txt", "rb")),
+    )
     monkeypatch.setattr(hashlib, "sha256", no_hash)
     with pytest.raises(ValueError, match="budget"):
         build_context_packet(
@@ -460,3 +470,52 @@ def test_bad_later_path_prevents_earlier_payload_read(
         build_context_packet(
             repository, source_paths=["docs/a.txt", "z/../bad"], budget_bytes=2000
         )
+
+
+@pytest.mark.parametrize("at_open", [False, True])
+def test_context_rejects_actual_opened_hardlink_and_closes_descriptor(
+    repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, at_open: bool
+) -> None:
+    import os
+    from typing import BinaryIO, cast
+
+    victim = tmp_path / "external"
+    victim.write_bytes(b"external context")
+    target = repository / "z.txt"
+    actual_open = Path.open
+    opened: list[BinaryIO] = []
+
+    def link_target() -> None:
+        target.unlink()
+        os.link(victim, target)
+
+    if not at_open:
+        link_target()
+
+    def selected(path: Path, mode: str) -> BinaryIO:
+        if at_open:
+            link_target()
+        stream = cast(BinaryIO, actual_open(path, mode))
+        opened.append(stream)
+        return stream
+
+    monkeypatch.setattr(Path, "open", selected)
+    with pytest.raises(ValueError, match="source"):
+        build_context_packet(repository, source_paths=["z.txt"], budget_bytes=1000)
+    assert opened and all(stream.closed for stream in opened)
+    assert victim.read_bytes() == b"external context"
+
+
+def test_context_rejects_actual_opened_nonregular_descriptor(
+    repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b"external context")
+    os.close(write_fd)
+    stream = os.fdopen(read_fd, "rb")
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: stream)
+    with pytest.raises(ValueError, match="source"):
+        build_context_packet(repository, source_paths=["z.txt"], budget_bytes=1000)
+    assert stream.closed

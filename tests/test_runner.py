@@ -272,8 +272,12 @@ def test_timeout_cleans_inherited_pipes_reaps_child_and_preserves_bytes(
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process groups required")
 @pytest.mark.parametrize("parent_exits_first", [False, True])
-def test_overflow_cleans_real_group_reaps_child_and_preserves_original_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, parent_exits_first: bool
+@pytest.mark.parametrize("failure_kind", ["overflow", "interrupt", "read-error"])
+def test_collection_exception_cleans_real_group_and_preserves_original_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    parent_exits_first: bool,
+    failure_kind: str,
 ) -> None:
     child_pid = tmp_path / "child.pid"
     ready = tmp_path / "ready"
@@ -298,7 +302,7 @@ def test_overflow_cleans_real_group_reaps_child_and_preserves_original_error(
     policy = VerificationPolicy(((sys.executable, "-c", parent_script),), ".", 10**1000)
     launch = subprocess.Popen
     processes: list[subprocess.Popen[bytes]] = []
-    errors: list[OverflowError] = []
+    errors: list[BaseException] = []
     unrelated = launch((sys.executable, "-c", "import time; time.sleep(30)"))
 
     def launch_ready_process(
@@ -308,6 +312,7 @@ def test_overflow_cleans_real_group_reaps_child_and_preserves_original_error(
         stdout: int,
         stderr: int,
         start_new_session: bool,
+        env: dict[str, str],
     ) -> subprocess.Popen[bytes]:
         process = launch(
             command,
@@ -315,6 +320,7 @@ def test_overflow_cleans_real_group_reaps_child_and_preserves_original_error(
             stdout=stdout,
             stderr=stderr,
             start_new_session=start_new_session,
+            env=env,
         )
         processes.append(process)
         deadline = time.monotonic() + 5
@@ -340,6 +346,14 @@ def test_overflow_cleans_real_group_reaps_child_and_preserves_original_error(
         stderr: runner_module._OutputBuffer,
         timeout: int,
     ) -> None:
+        if failure_kind != "overflow" and not errors:
+            failure = (
+                KeyboardInterrupt("interrupted")
+                if failure_kind == "interrupt"
+                else OSError("read failed")
+            )
+            errors.append(failure)
+            raise failure
         try:
             collect(process, stdout, stderr, timeout)
         except OverflowError as error:
@@ -350,7 +364,12 @@ def test_overflow_cleans_real_group_reaps_child_and_preserves_original_error(
     monkeypatch.setattr(subprocess, "Popen", launch_ready_process)
     try:
         started = time.monotonic()
-        with pytest.raises(OverflowError) as raised:
+        failure_type = {
+            "overflow": OverflowError,
+            "interrupt": KeyboardInterrupt,
+            "read-error": OSError,
+        }[failure_kind]
+        with pytest.raises(failure_type) as raised:
             ControlledCommandRunner().run(policy, tmp_path)
 
         monkeypatch.setattr(subprocess, "Popen", launch)
@@ -458,3 +477,51 @@ def test_runner_drains_continuous_output_until_timeout_and_continues(
 def test_runner_rejects_invalid_output_budgets(cap: object) -> None:
     with pytest.raises(ValueError, match="max_output_bytes"):
         ControlledCommandRunner(max_output_bytes=cap)  # type: ignore[arg-type]
+
+
+def test_verification_ignores_foreign_git_selectors_and_preserves_command_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "target"
+    foreign = tmp_path / "foreign"
+    for root in (repository, foreign):
+        subprocess.run(("git", "init", "--quiet", str(root)), check=True)
+        (root / "tracked.txt").write_text("original")
+        subprocess.run(("git", "-C", str(root), "add", "."), check=True)
+        subprocess.run(
+            (
+                "git",
+                "-C",
+                str(root),
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                "commit",
+                "--quiet",
+                "-m",
+                "fixture",
+            ),
+            check=True,
+        )
+    (repository / "tracked.txt").write_text("dirty")
+    monkeypatch.setenv("GIT_DIR", str(foreign / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(foreign))
+    monkeypatch.setenv("MERCURY_VERIFICATION_FIXTURE", "retained")
+    policy = VerificationPolicy(
+        (
+            ("git", "diff", "--quiet"),
+            (
+                sys.executable,
+                "-c",
+                "import os; print(os.environ['MERCURY_VERIFICATION_FIXTURE'])",
+            ),
+        ),
+        ".",
+        5,
+    )
+    results = ControlledCommandRunner().run(policy, repository)
+    assert results[0].exit_code == 1
+    assert not results[0].timed_out
+    assert results[1].exit_code == 0
+    assert results[1].stdout == "retained\n"
