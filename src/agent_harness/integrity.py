@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -122,7 +123,8 @@ def _validate_relative_path(path: object) -> str:
 
 def _file_digest(path: Path) -> str:
     digest = sha256()
-    with path.open("rb") as stream:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as stream:
         opened = fstat(stream.fileno())
         if not S_ISREG(opened.st_mode) or opened.st_nlink != 1:
             raise OSError("protected input must be a single-link regular file")
@@ -132,15 +134,12 @@ def _file_digest(path: Path) -> str:
 
 
 def _read_capturable_fingerprint(root: Path, path: str) -> ProtectedInputFingerprint:
-    candidate = root / path
-    if candidate.is_symlink() or not candidate.is_file():
-        raise ValueError("protected input must be an existing regular non-symlink file")
     try:
-        resolved = candidate.resolve(strict=True)
-    except OSError as error:
-        raise ValueError("protected input must be resolvable") from error
-    if not resolved.is_relative_to(root):
-        raise ValueError("protected input must resolve inside the repository root")
+        candidate = _locate_protected_file(root, path)
+    except (OSError, ValueError, RuntimeError) as error:
+        raise ValueError(
+            "protected input must be an existing regular non-symlink file"
+        ) from error
     try:
         return ProtectedInputFingerprint(
             path, _file_digest(candidate), S_IMODE(candidate.stat().st_mode)
@@ -152,16 +151,11 @@ def _read_capturable_fingerprint(root: Path, path: str) -> ProtectedInputFingerp
 def _state_for(
     root: Path, fingerprint: ProtectedInputFingerprint
 ) -> ProtectedInputState:
-    candidate = root / fingerprint.path
     try:
-        if candidate.is_symlink():
-            return ProtectedInputState.UNVERIFIABLE
-        resolved = candidate.resolve(strict=True)
-        if not resolved.is_relative_to(root) or not candidate.is_file():
-            return ProtectedInputState.UNVERIFIABLE
+        candidate = _locate_protected_file(root, fingerprint.path)
     except FileNotFoundError:
         return ProtectedInputState.MISSING
-    except (OSError, RuntimeError):
+    except (OSError, ValueError, RuntimeError):
         return ProtectedInputState.UNVERIFIABLE
     try:
         actual_digest = _file_digest(candidate)
@@ -250,6 +244,19 @@ def _directory_state_for(
         )
         else ProtectedInputState.MODIFIED
     )
+
+
+def _locate_protected_file(root: Path, path: str) -> Path:
+    relative = PurePosixPath(path)
+    parent = (
+        root
+        if relative.parent == PurePosixPath(".")
+        else _locate_protected_directory(root, relative.parent.as_posix())
+    )
+    candidate = parent / relative.name
+    if not S_ISREG(candidate.lstat().st_mode):
+        raise ValueError("protected input must be a regular non-symlink file")
+    return candidate
 
 
 def _locate_protected_directory(root: Path, path: str) -> Path:

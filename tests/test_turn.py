@@ -1327,3 +1327,78 @@ def test_adapter_cancellation_preserves_original_object_after_failure_record_att
         assert events[1]["event"] == "turn_observation_failed"
         assert events[1]["attempt_id"] == events[0]["attempt_id"]
         assert events[1]["classification"] == "adapter_raised"
+
+
+@pytest.mark.parametrize(
+    "location", ["exact", "ancestor", "descendant", "nested_descendant"]
+)
+@pytest.mark.parametrize("kind", ["fifo", "socket"])
+def test_ignored_allowed_entries_reject_special_types(
+    repository: Path, tmp_path: Path, location: str, kind: str
+) -> None:
+    import socket
+
+    from agent_harness.turn import run_observed_turn
+
+    (repository / ".gitignore").write_text("ignored/\n")
+    relative = (
+        "ignored/nested/entry" if location == "nested_descendant" else "ignored/entry"
+    )
+    target = repository / relative
+    target.parent.mkdir(parents=True)
+    endpoint = socket.socket(socket.AF_UNIX)
+    try:
+        if kind == "fifo":
+            os.mkfifo(target)
+        elif kind == "socket":
+            previous_directory = Path.cwd()
+            try:
+                os.chdir(target.parent)
+                endpoint.bind(target.name)
+            finally:
+                os.chdir(previous_directory)
+        else:
+            target.write_bytes(b"ancestor")
+        allowed = (
+            relative + "/child"
+            if location == "ancestor"
+            else relative
+            if location == "exact"
+            else "ignored"
+        )
+        marker = tmp_path / "ran"
+        executable = fake(
+            tmp_path,
+            "import pathlib, sys\nsys.stdin.buffer.read()\n"
+            + f"pathlib.Path({str(marker)!r}).touch()\n",
+        )
+        task = TaskContract("allowed types", (allowed,), (), ("verified",))
+        journal = EventJournal(tmp_path / "state")
+        with pytest.raises(ValueError):
+            run_observed_turn(
+                CodexCLIAdapter(executable),
+                task,
+                record_admission(
+                    task, approver="human", approved_at="2026-10-09T00:00:00Z"
+                ),
+                build_context_packet(
+                    repository, source_paths=["base.txt"], budget_bytes=4096
+                ),
+                journal=journal,
+                budgets=TurnBudgets(3, 16000, 128, 128, 128),
+            )
+        assert not marker.exists()
+        assert not journal.path.exists()
+    finally:
+        endpoint.close()
+
+
+def test_ignored_allowed_regular_ancestor_is_rejected(repository: Path) -> None:
+    from agent_harness.turn import RepositoryObservation, _reject_allowed_symlinks
+
+    (repository / ".gitignore").write_text("ignored/\n")
+    (repository / "ignored").mkdir()
+    (repository / "ignored/file").write_text("regular")
+    task = TaskContract("regular ancestor", ("ignored/file/child",), (), ("verified",))
+    with pytest.raises(ValueError, match="ancestors"):
+        _reject_allowed_symlinks(task, RepositoryObservation.capture(repository))

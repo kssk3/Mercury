@@ -413,7 +413,8 @@ def _reject_allowed_symlinks(
     try:
         for allowed in contract.allowed_paths:
             current = root
-            for component in PurePosixPath(allowed).parts:
+            parts = PurePosixPath(allowed).parts
+            for index, component in enumerate(parts):
                 if component.casefold() == ".git":
                     raise ValueError("allowed paths must not traverse Git metadata")
                 current /= component
@@ -427,6 +428,12 @@ def _reject_allowed_symlinks(
                 if stat.S_ISREG(mode) and info.st_nlink != 1:
                     raise ValueError("allowed paths must not traverse hardlinks")
                 if not stat.S_ISDIR(mode):
+                    if not stat.S_ISREG(mode):
+                        raise ValueError(
+                            "allowed entries must be regular files or directories"
+                        )
+                    if index < len(parts) - 1:
+                        raise ValueError("allowed path ancestors must be directories")
                     break
             else:
                 pending.append(current)
@@ -444,6 +451,10 @@ def _reject_allowed_symlinks(
                         raise ValueError("allowed paths must not traverse hardlinks")
                     if stat.S_ISDIR(mode):
                         pending.append(Path(filesystem_entry.path))
+                    elif not stat.S_ISREG(mode):
+                        raise ValueError(
+                            "allowed entries must be regular files or directories"
+                        )
     except OSError as error:
         raise ValueError("could not inspect allowed paths") from error
 

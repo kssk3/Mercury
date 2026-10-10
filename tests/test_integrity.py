@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import FrozenInstanceError
@@ -350,7 +351,8 @@ def test_directory_inspection_contains_permission_errors(
     denied_file.write_bytes(b"safe")
     (tmp_path / "later").mkdir()
     captured = integrity.capture_protected_directories(tmp_path, ("tests", "later"))
-    original = getattr(Path, operation)
+    boundary = os if operation == "open" else Path
+    original = getattr(boundary, operation)
     denied_path = denied_file if operation == "open" else directory
 
     def fail_on_denied(path: Path, *args: object, **kwargs: object) -> object:
@@ -358,7 +360,7 @@ def test_directory_inspection_contains_permission_errors(
             raise PermissionError("denied inspection")
         return original(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, operation, fail_on_denied)
+    monkeypatch.setattr(boundary, operation, fail_on_denied)
 
     with pytest.raises(ValueError):
         integrity.capture_protected_directories(tmp_path, ("tests",))
@@ -488,7 +490,7 @@ def test_protected_hashing_streams_binary_files_in_bounded_reads(
             ),
         ),
     )
-    original_open = Path.open
+    original_open = os.fdopen
     read_sizes: list[int] = []
 
     class BoundedReader:
@@ -504,12 +506,12 @@ def test_protected_hashing_streams_binary_files_in_bounded_reads(
             return self.stream.read(size)
 
     @contextmanager
-    def bounded_open(path: Path, mode: str = "r") -> Iterator[BoundedReader]:
+    def bounded_open(descriptor: int, mode: str = "r") -> Iterator[BoundedReader]:
         assert mode == "rb"
-        with original_open(path, "rb") as stream:
+        with original_open(descriptor, "rb") as stream:
             yield BoundedReader(stream)
 
-    monkeypatch.setattr(Path, "open", bounded_open)
+    monkeypatch.setattr(os, "fdopen", bounded_open)
     if operation == "capture_file":
         assert capture_protected_inputs(tmp_path, ("protected/binary.dat",)) == (
             file_fingerprint,
@@ -528,7 +530,7 @@ def test_protected_hashing_streams_binary_files_in_bounded_reads(
             )
 
         assert verify()[0].state is ProtectedInputState.UNCHANGED
-        with original_open(target, "ab") as stream:
+        with target.open("ab") as stream:
             stream.write(b"changed")
         assert verify()[0].state is ProtectedInputState.MODIFIED
     assert len(read_sizes) > 1
@@ -556,7 +558,7 @@ def test_stream_read_failure_preserves_error_classification_and_continues(
     directory_capture = integrity.capture_protected_directories(
         tmp_path, ("denied", "later")
     )
-    original_open = Path.open
+    original_open = os.fdopen
 
     class FailingReader:
         def __init__(self, stream: BinaryIO) -> None:
@@ -573,12 +575,18 @@ def test_stream_read_failure_preserves_error_classification_and_continues(
             return self.stream.read(size)
 
     @contextmanager
-    def failing_open(path: Path, mode: str = "r") -> Iterator[BinaryIO | FailingReader]:
+    def failing_open(
+        descriptor: int, mode: str = "r"
+    ) -> Iterator[BinaryIO | FailingReader]:
         assert mode == "rb"
-        with original_open(path, "rb") as stream:
-            yield FailingReader(stream) if path == denied else stream
+        with original_open(descriptor, "rb") as stream:
+            yield (
+                FailingReader(stream)
+                if os.fstat(descriptor).st_ino == denied.stat().st_ino
+                else stream
+            )
 
-    monkeypatch.setattr(Path, "open", failing_open)
+    monkeypatch.setattr(os, "fdopen", failing_open)
     with pytest.raises(ValueError):
         if directory_mode:
             integrity.capture_protected_directories(tmp_path, paths)
@@ -710,19 +718,18 @@ def test_actual_opened_protected_hardlink_is_refused_and_closed(
     fingerprints = capture_protected_inputs(tmp_path, ("safe",))
     outside = tmp_path / "outside"
     outside.write_bytes(b"same")
-    original_open = Path.open
-    opened: list[BinaryIO] = []
+    original_open = os.open
+    opened: list[int] = []
 
-    @contextmanager
-    def substituted_open(path: Path, mode: str = "r") -> Iterator[BinaryIO]:
-        assert path == target and mode == "rb"
+    def substituted_open(path: Path, flags: int) -> int:
+        assert path == target
         target.unlink()
         target.hardlink_to(outside)
-        with original_open(path, "rb") as stream:
-            opened.append(stream)
-            yield stream
+        descriptor = original_open(path, flags)
+        opened.append(descriptor)
+        return descriptor
 
-    monkeypatch.setattr(Path, "open", substituted_open)
+    monkeypatch.setattr(os, "open", substituted_open)
     if operation == "capture":
         with pytest.raises(ValueError):
             capture_protected_inputs(tmp_path, ("safe",))
@@ -731,4 +738,71 @@ def test_actual_opened_protected_hardlink_is_refused_and_closed(
             verify_protected_inputs(tmp_path, fingerprints)[0].state
             is ProtectedInputState.UNVERIFIABLE
         )
-    assert len(opened) == 1 and opened[0].closed
+    assert len(opened) == 1
+    with pytest.raises(OSError):
+        os.fstat(opened[0])
+
+
+@pytest.mark.parametrize("operation", ["capture", "verify"])
+@pytest.mark.parametrize("ancestor", ["symlink", "regular"])
+def test_protected_file_rejects_unsafe_ancestor(
+    tmp_path: Path, operation: str, ancestor: str
+) -> None:
+    directory = tmp_path / "protected"
+    directory.mkdir()
+    (directory / "input").write_bytes(b"same")
+    captured = capture_protected_inputs(tmp_path, ("protected/input",))
+    directory.rename(tmp_path / "preserved")
+    if ancestor == "symlink":
+        directory.symlink_to(tmp_path / "preserved", target_is_directory=True)
+    else:
+        directory.write_bytes(b"same")
+    if operation == "capture":
+        with pytest.raises(ValueError):
+            capture_protected_inputs(tmp_path, ("protected/input",))
+    else:
+        assert (
+            verify_protected_inputs(tmp_path, captured)[0].state
+            is ProtectedInputState.UNVERIFIABLE
+        )
+
+
+@pytest.mark.parametrize("directory_mode", [False, True])
+@pytest.mark.parametrize("replacement", ["fifo", "symlink"])
+def test_protected_open_rejects_substituted_endpoint_without_blocking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    directory_mode: bool,
+    replacement: str,
+) -> None:
+    directory = tmp_path / "protected"
+    directory.mkdir()
+    target = directory / "input"
+    target.write_bytes(b"same")
+    original_open = os.open
+    opened: list[int] = []
+
+    def substitute(path: Path, flags: int) -> int:
+        assert flags & os.O_NOFOLLOW and flags & os.O_NONBLOCK
+        target.unlink()
+        if replacement == "fifo":
+            mkfifo(target)
+        else:
+            target.symlink_to(tmp_path / "absent")
+        descriptor = original_open(path, flags)
+        opened.append(descriptor)
+        return descriptor
+
+    def unsafe_open(*args: object, **kwargs: object) -> None:
+        raise AssertionError("protected hashing must open safely before reading")
+
+    monkeypatch.setattr(os, "open", substitute)
+    monkeypatch.setattr(Path, "open", unsafe_open)
+    with pytest.raises(ValueError):
+        if directory_mode:
+            integrity.capture_protected_directories(tmp_path, ("protected",))
+        else:
+            capture_protected_inputs(tmp_path, ("protected/input",))
+    for descriptor in opened:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
