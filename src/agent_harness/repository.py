@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -164,3 +165,41 @@ def _resolve_state_root(state_root: Path | str | None) -> Path:
     if state_root is not None:
         return Path(state_root).expanduser().resolve()
     return (Path.home() / "Library" / "Application Support" / "agent-harness").resolve()
+
+
+def read_persistence_bytes(path: Path) -> bytes | None:
+    """Read one opened evidence leaf, bounded by its initial size.
+
+    Existing history has no fixed size ceiling. Read finite chunks up to the
+    initial descriptor size, then one byte to detect growth. This is a
+    point-in-time check, not an atomic snapshot or same-size ABA guarantee.
+    """
+    validate_runtime_state_directory(path.parent)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise ValueError("persistence must be a regular file with one link")
+        remaining = before.st_size
+        chunks: list[bytes] = []
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 65536))
+            if not chunk:
+                raise ValueError("persistence changed during read")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        extra = os.read(descriptor, 1)
+        after = os.fstat(descriptor)
+        if (
+            extra
+            or after.st_size != before.st_size
+            or after.st_nlink != 1
+            or not stat.S_ISREG(after.st_mode)
+        ):
+            raise ValueError("persistence changed during read")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)

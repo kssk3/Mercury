@@ -19,6 +19,8 @@ class WorkspaceSnapshot:
         result = subprocess.run(
             [
                 git_executable(),
+                "-c",
+                "core.fsmonitor=false",
                 "--no-optional-locks",
                 "-C",
                 str(Path(repository).resolve()),

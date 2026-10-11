@@ -106,6 +106,8 @@ def test_snapshot_includes_rename_source_and_not_copy_source(
     repository = tmp_path / "repository"
     expected_command = [
         git_executable(),
+        "-c",
+        "core.fsmonitor=false",
         "--no-optional-locks",
         "-C",
         str(repository.resolve()),
@@ -238,3 +240,19 @@ def test_capture_preserves_stale_stat_index_bytes_and_timestamp(
     assert (index.read_bytes(), index.stat().st_mtime_ns) == before
     assert not (repository / ".git/index.lock").exists()
     assert os.environ["GIT_OPTIONAL_LOCKS"] == "0"
+
+
+def test_snapshot_does_not_execute_fsmonitor_hook(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    git(tmp_path, "init", "--quiet", str(repository))
+    (repository / "tracked").write_text("base")
+    git(repository, "add", "tracked")
+    marker = tmp_path / "fsmonitor-executed"
+    hook = repository / "fsmonitor-hook"
+    hook.write_text(f"#!/bin/sh\n/usr/bin/touch '{marker}'\nprintf '\\0'\n")
+    hook.chmod(0o700)
+    git(repository, "config", "core.fsmonitor", str(hook))
+    snapshot = WorkspaceSnapshot.capture(repository)
+    assert snapshot.staged_paths == ("tracked",)
+    assert "fsmonitor-hook" in snapshot.untracked_paths
+    assert not marker.exists()

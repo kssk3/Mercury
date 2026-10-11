@@ -12,6 +12,7 @@ import pytest
 from agent_harness import command_admission as commands
 from agent_harness.contract import TaskContract
 from agent_harness.policy import VerificationPolicy
+from agent_harness.repository import git_executable
 
 
 @pytest.fixture
@@ -33,7 +34,7 @@ def test_discovery_is_immutable_explicit_attribution_without_execution(
 
     def git_only(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         assert argv == [
-            "git",
+            git_executable(),
             "-C",
             str(repository / "docs"),
             "rev-parse",
@@ -383,7 +384,13 @@ def test_approval_and_conversion_do_not_execute_or_write(
     calls: list[list[str]] = []
 
     def git_only(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        assert argv == ["git", "-C", str(repository), "rev-parse", "--show-toplevel"]
+        assert argv == [
+            git_executable(),
+            "-C",
+            str(repository),
+            "rev-parse",
+            "--show-toplevel",
+        ]
         calls.append(argv)
         return actual_run(argv, **kwargs)  # type: ignore[call-overload,no-any-return]
 

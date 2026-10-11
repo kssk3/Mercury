@@ -42,12 +42,26 @@ jobs:
           CHANGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           CHANGE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
+          # Validate exact commit identities before any conservative fallback.
+          BOOTSTRAP=false
           if [[ "$CHANGE_EVENT" == "push" && "$CHANGE_BASE" == "0000000000000000000000000000000000000000" ]]; then
-            # No prior commit exists. Validate the exact head and use the
-            # classifier's conservative empty-diff route to require full gates.
-            uv run --no-project python scripts/ci_changes.py --base "$CHANGE_HEAD" --head "$CHANGE_HEAD" --github-output "$GITHUB_OUTPUT"
+            BOOTSTRAP=true
+            CHANGE_BASE="$CHANGE_HEAD"
+          fi
+          for REVISION in "$CHANGE_BASE" "$CHANGE_HEAD"; do
+            [[ "$REVISION" =~ ^[0-9a-f]{40}$ ]] || exit 1
+            [[ "$(git cat-file -t "$REVISION")" == "commit" ]] || exit 1
+            [[ "$(git rev-parse --verify "$REVISION^{commit}")" == "$REVISION" ]] || exit 1
+          done
+          CLASSIFIER_ENTRY=$(git ls-tree "$CHANGE_BASE" -- scripts/ci_changes.py)
+          if [[ "$BOOTSTRAP" == "true" || "$CLASSIFIER_ENTRY" != "100644 blob "* ]]; then
+            printf '%s\n' 'record_only=false' 'macos_required=true' 'verification=full' 'state_required=true' >> "$GITHUB_OUTPUT"
           else
-            uv run --no-project python scripts/ci_changes.py --base "$CHANGE_BASE" --head "$CHANGE_HEAD" --github-output "$GITHUB_OUTPUT"
+            # Never import or execute proposed classifier code from the checkout.
+            TRUSTED_CLASSIFIER=$(mktemp)
+            trap 'rm -f "$TRUSTED_CLASSIFIER"' EXIT
+            git show "$CHANGE_BASE:scripts/ci_changes.py" > "$TRUSTED_CLASSIFIER"
+            uv run --no-project python -I "$TRUSTED_CLASSIFIER" --base "$CHANGE_BASE" --head "$CHANGE_HEAD" --github-output "$GITHUB_OUTPUT"
           fi
       - name: Document diff checks
         env:

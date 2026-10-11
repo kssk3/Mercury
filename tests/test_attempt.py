@@ -1189,3 +1189,32 @@ def test_attempt_journal_retains_same_commit_head_change(
     write_events(journal, complete_events)
     entry = api(repository, journal, CurrentStateStore(tmp_path / "state")).read()[0]
     assert entry["scope"]["proceed"] is False
+
+
+def test_refresh_rejects_replaced_raw_history(
+    repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_harness.attempt import AttemptJournal, AttemptJournalError
+
+    journal = EventJournal(tmp_path / "state")
+    store = CurrentStateStore(tmp_path / "state")
+    journal.append({"event": "legacy"})
+    store.write({"caller": "preserved"})
+    original_state = store.path.read_bytes()
+    target = tmp_path / "unrelated-history"
+    target.write_bytes(journal.path.read_bytes())
+    original = AttemptJournal.read
+
+    def replaced(self: AttemptJournal) -> tuple[dict[str, object], ...]:
+        entries = original(self)
+        journal.path.unlink()
+        os.link(target, journal.path)
+        return entries
+
+    monkeypatch.setattr(AttemptJournal, "read", replaced)
+    with pytest.raises(AttemptJournalError) as raised:
+        api(repository, journal, store).refresh()
+    assert raised.value.code == "summary_write_failed"
+    assert not raised.value.journal_recorded
+    assert store.path.read_bytes() == original_state
+    assert target.read_bytes() == b'{"event":"legacy"}\n'

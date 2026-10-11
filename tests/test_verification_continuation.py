@@ -462,7 +462,8 @@ print(json.dumps({{'status':result.status,'commands':result.usage.commands,'atte
         state_store=store,
         expected_contract_sha256=hashlib.sha256(task.to_json().encode()).hexdigest(),
     )
-    assert startup.status == "completed"
+    assert startup.status == "interrupted"
+    assert startup.diagnostics == ("protected_evidence_unavailable",)
     assert startup.usage is not None and startup.usage[0] == 4
     assert sum(e.get("event") == "attempt_verification" for e in journal.read()) == 1
 

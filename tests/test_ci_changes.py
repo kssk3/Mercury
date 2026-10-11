@@ -101,10 +101,14 @@ def run_workflow_step(
     *,
     event: str = "push",
     verification: str = "full",
+    proposed_classifier: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     script = repo / "scripts/ci_changes.py"
     script.parent.mkdir(exist_ok=True)
-    shutil.copyfile(SCRIPT, script)
+    if proposed_classifier is None:
+        shutil.copyfile(SCRIPT, script)
+    else:
+        script.write_text(proposed_classifier)
     return subprocess.run(
         ["bash", "-e", "-c", workflow_command(step)],
         cwd=repo,
@@ -206,6 +210,11 @@ def test_zero_base_pull_request_remains_invalid(repo: Path) -> None:
 def test_normal_workflow_keeps_exact_classifier_routes(
     repo: Path, path: str, expected: str
 ) -> None:
+    script = repo / "scripts/ci_changes.py"
+    script.parent.mkdir()
+    shutil.copyfile(SCRIPT, script)
+    git(repo, "add", "scripts/ci_changes.py")
+    git(repo, "commit", "-qm", "trusted classifier")
     base = git(repo, "rev-parse", "HEAD")
     head = commit_files(repo, path)
 
@@ -646,7 +655,7 @@ def test_static_steps_are_gated_by_classifier_outputs(
     install = static.index("      - name: Install locked development dependencies")
     assert classification < install
     assert (
-        'uv run --no-project python scripts/ci_changes.py --base "$CHANGE_BASE"'
+        'uv run --no-project python -I "$TRUSTED_CLASSIFIER" --base "$CHANGE_BASE"'
         in workflow_command("Classify exact event base and head")
     )
 
@@ -700,3 +709,37 @@ def test_invalid_or_missing_tree_evidence_cannot_exempt(
     monkeypatch.setitem(checker.__globals__, "git_bytes", lambda *args: raw)
     with pytest.raises(ValueError):
         checker("a" * 40, "b" * 40, ["README.md"])
+
+
+@pytest.mark.parametrize("route", ["changed", "missing_base", "initial_push"])
+def test_workflow_does_not_execute_proposed_classifier(repo: Path, route: str) -> None:
+    script = repo / "scripts/ci_changes.py"
+    script.parent.mkdir()
+    if route == "changed":
+        shutil.copyfile(SCRIPT, script)
+        git(repo, "add", "scripts/ci_changes.py")
+        git(repo, "commit", "-qm", "trusted classifier")
+    base = git(repo, "rev-parse", "HEAD")
+    proposed = (
+        "import os,pathlib\n"
+        "pathlib.Path('classifier-executed').write_text('executed')\n"
+        "pathlib.Path(os.environ['GITHUB_OUTPUT']).write_text("
+        "'record_only=true\\nmacos_required=false\\nverification=document\\nstate_required=false\\n')\n"
+    )
+    script.write_text(proposed)
+    (repo / "source.py").write_text("changed = True\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "proposed classifier and source")
+    head = git(repo, "rev-parse", "HEAD")
+    result = run_workflow_step(
+        repo,
+        "Classify exact event base and head",
+        "0" * 40 if route == "initial_push" else base,
+        head,
+        proposed_classifier=proposed,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not (repo / "classifier-executed").exists()
+    assert (repo / "github-output").read_text() == (
+        "record_only=false\nmacos_required=true\nverification=full\nstate_required=true\n"
+    )

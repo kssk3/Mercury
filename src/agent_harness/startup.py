@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import stat
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -13,7 +12,10 @@ from typing import cast
 from agent_harness.attempt import AttemptJournal, _mapping, _observation, _require
 from agent_harness.failure import FailureAssessment, classify_attempt_failure
 from agent_harness.journal import EventJournal
-from agent_harness.repository import validate_runtime_state_directory
+from agent_harness.repository import (
+    read_persistence_bytes,
+    validate_runtime_state_directory,
+)
 from agent_harness.retry import RetryUsage
 from agent_harness.scope import _digest
 from agent_harness.state import CurrentStateStore
@@ -161,13 +163,7 @@ def _safe_storage(attempts: AttemptJournal) -> None:
 
 
 def _bytes(path: Path) -> bytes | None:
-    try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except FileNotFoundError:
-        return None
-    with os.fdopen(descriptor, "rb") as stream:
-        _require(stat.S_ISREG(os.fstat(stream.fileno()).st_mode))
-        return stream.read()
+    return read_persistence_bytes(path)
 
 
 def _validated_prefix(

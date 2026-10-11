@@ -46,6 +46,7 @@ from agent_harness.native_output import (
     run_stored_scoped_turn,
 )
 from agent_harness.policy import VerificationPolicy
+from agent_harness.repository import read_persistence_bytes
 from agent_harness.retry import RetryLimits, RetryUsage
 from agent_harness.runner import CommandResult, ControlledCommandRunner
 from agent_harness.scope import ScopeTurnError
@@ -388,7 +389,9 @@ def _run_loop(
                     "attempt_count": 1,
                     "journal": {
                         "path": str(journal.path),
-                        "sha256": hashlib.sha256(journal.path.read_bytes()).hexdigest(),
+                        "sha256": hashlib.sha256(
+                            read_persistence_bytes(journal.path) or b""
+                        ).hexdigest(),
                     },
                     "active_attempt": entries[0],
                 }
@@ -412,7 +415,7 @@ def _run_loop(
         state_store.read()
         current_required = state_store.path.exists()
         journal_required = journal.path.exists()
-        known_history = journal.path.read_bytes() if journal_required else b""
+        known_history = read_persistence_bytes(journal.path) or b""
         before = RepositoryObservation.capture(root)
         _reject_allowed_symlinks(contract, before)
         if before.head is None:
@@ -500,7 +503,7 @@ def _run_loop(
                 raise ValueError("lost_current")
             if journal_required and not journal.path.exists():
                 raise ValueError("lost_history")
-            raw = journal.path.read_bytes() if journal.path.exists() else b""
+            raw = read_persistence_bytes(journal.path) or b""
             if not raw.startswith(known_history):
                 raise ValueError("changed_history")
             known_history = raw

@@ -92,7 +92,7 @@ def test_fixed_argv_complete_stdin_and_external_final_cleanup(
     assert not (repository / "injected").exists()
 
 
-def invoke(repository: Path, executable: Path, **kwargs: object) -> object:
+def invoke(repository: Path, executable: Path | str, **kwargs: object) -> object:
     from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
 
     contract = TaskContract("acknowledge", (), (), ("reply",))
@@ -405,3 +405,131 @@ def test_hardlinked_final_response_is_rejected_and_descriptor_closed(
     for descriptor in descriptors:
         with pytest.raises(OSError):
             os.fstat(descriptor)
+
+
+def test_native_selection_survives_writable_path_shadow(
+    repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.context import ContextPacket
+
+    tools = repository / "tools"
+    tools.mkdir()
+    marker = tmp_path / "trusted-launches"
+    planted = tmp_path / "planted-launches"
+    shadow = tools / "fake-codex"
+    attacker = f"#!{sys.executable}\nfrom pathlib import Path\nPath({str(planted)!r}).touch()\n"
+    executable = fake(
+        tmp_path,
+        "import pathlib,sys\nsys.stdin.read()\n"
+        f"p=pathlib.Path({str(marker)!r}); p.write_text(p.read_text()+'x' if p.exists() else 'x')\n"
+        f"s=pathlib.Path({str(shadow)!r}); s.write_text({attacker!r}); s.chmod(0o700)\n"
+        "sys.exit(1)\n",
+    )
+    monkeypatch.setenv(
+        "PATH", os.pathsep.join((str(tools), str(tmp_path), os.environ["PATH"]))
+    )
+    adapter = CodexCLIAdapter("fake-codex")
+    task = TaskContract("selection continuity", (), (), ("reply",))
+    admitted = record_admission(
+        task, approver="human", approved_at="2026-10-01T00:00:00Z"
+    )
+    results = [
+        adapter.run(
+            task,
+            admitted,
+            ContextPacket(str(repository), 1000, ()),
+            budgets=TurnBudgets(3, 10000, 100, 100, 100),
+        )
+        for _ in range(2)
+    ]
+    assert shadow.is_file()
+    assert marker.read_text() == "xx"
+    assert not planted.exists()
+    assert all(
+        r.argv[0] == str(executable.resolve()) and r.process_status == "nonzero_exit"
+        for r in results
+    )
+
+
+@pytest.mark.parametrize(
+    "kind", ["absolute", "path_name", "external_alias", "workspace_alias"]
+)
+def test_native_selection_rejects_workspace_candidates(
+    repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    marker = tmp_path / "native-marker"
+    body = (
+        f"import pathlib,sys\nsys.stdin.read()\npathlib.Path({str(marker)!r}).touch()\n"
+    )
+    local = fake(repository, body)
+    selected: Path | str = local
+    if kind == "path_name":
+        monkeypatch.setenv("PATH", str(repository) + os.pathsep + os.environ["PATH"])
+        selected = "fake-codex"
+    elif kind == "external_alias":
+        selected = tmp_path / "alias"
+        selected.symlink_to(local)
+    elif kind == "workspace_alias":
+        local.unlink()
+        outside = fake(tmp_path, body)
+        local.symlink_to(outside)
+    with pytest.raises(ValueError, match="executable.*repository"):
+        invoke(repository, selected)
+    assert not marker.exists()
+
+
+def test_relative_external_native_keeps_repository_cwd_selection(
+    repository: Path, tmp_path: Path
+) -> None:
+    from agent_harness.adapter import CodexTurnResult
+
+    executable = fake(tmp_path, "import sys\nsys.stdin.read()\nprint('trusted')\n")
+    result = invoke(repository, "../fake-codex")
+    assert isinstance(result, CodexTurnResult)
+    assert result.process_status == "successful_exit"
+    assert result.stdout.text == "trusted\n"
+    assert result.argv[0] == str(executable.resolve())
+
+
+def test_relative_selection_is_bound_at_turn_admission(
+    repository: Path, tmp_path: Path
+) -> None:
+    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.context import ContextPacket
+    from agent_harness.journal import EventJournal
+    from agent_harness.turn import _validate_turn
+
+    selected = tmp_path / "selected"
+    replacement = tmp_path / "replacement"
+    selected.mkdir()
+    replacement.mkdir()
+    trusted = fake(selected, "import sys\nsys.stdin.read()\nprint('selected')\n")
+    other = fake(replacement, "import sys\nsys.stdin.read()\nprint('replacement')\n")
+    alias = tmp_path / "alias"
+    alias.symlink_to(trusted)
+    adapter = CodexCLIAdapter("../alias")
+    task = TaskContract("selection continuity", (), (), ("reply",))
+    admission = record_admission(
+        task, approver="human", approved_at="2026-10-01T00:00:00Z"
+    )
+    context = ContextPacket(str(repository), 1000, ())
+    budgets = TurnBudgets(3, 10000, 100, 100, 100)
+    assert (
+        _validate_turn(
+            adapter,
+            task,
+            admission,
+            context,
+            EventJournal(tmp_path / "state"),
+            budgets,
+            "workspace-write",
+        )
+        == repository
+    )
+    alias.unlink()
+    alias.symlink_to(other)
+    result = adapter.run(task, admission, context, budgets=budgets)
+    assert result.process_status == "successful_exit"
+    assert result.stdout.text == "selected\n"
+    assert result.argv[0] == str(trusted.resolve())

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from agent_harness.context import ContextPacket, ContextSource, build_context_packet
+from agent_harness.repository import git_executable
 
 
 @pytest.fixture
@@ -409,7 +410,13 @@ def test_read_only_selected_files_and_git_resolution(
     calls: list[list[str]] = []
 
     def git_only(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        assert argv == ["git", "-C", str(repository), "rev-parse", "--show-toplevel"]
+        assert argv == [
+            git_executable(),
+            "-C",
+            str(repository),
+            "rev-parse",
+            "--show-toplevel",
+        ]
         calls.append(argv)
         return actual_run(argv, **kwargs)  # type: ignore[call-overload,no-any-return]
 

@@ -10,6 +10,7 @@ import json
 import math
 import os
 import selectors
+import shutil
 import signal
 import stat
 import subprocess
@@ -106,9 +107,43 @@ class CodexCLIAdapter:
     """
 
     def __init__(self, executable: Path | str) -> None:
-        self._executable = os.fspath(executable)
-        if not self._executable or "\x00" in self._executable:
+        self._requested_executable = os.fspath(executable)
+        if not self._requested_executable or "\x00" in self._requested_executable:
             raise ValueError("executable must be nonempty and NUL-free")
+        self._executable: str | None = None
+        self._selected_path: Path | None = None
+        self._selection_error: OSError | None = None
+        requested = Path(self._requested_executable)
+        # Relative direct paths retain Popen's repository-cwd meaning. Names and
+        # absolute paths can be bound before the repository is admitted.
+        if requested.is_absolute() or os.sep not in self._requested_executable:
+            self._bind_executable(None)
+
+    def _bind_executable(self, root: Path | None) -> None:
+        if self._executable is None and self._selection_error is None:
+            requested = self._requested_executable
+            if os.sep not in requested:
+                selected = shutil.which(requested)
+                if selected is None:
+                    self._selection_error = FileNotFoundError(
+                        f"native executable unavailable: {requested}"
+                    )
+                    return
+                path = Path(selected).absolute()
+            else:
+                path = Path(requested)
+                if not path.is_absolute():
+                    if root is None:
+                        return
+                    path = root / path
+                path = Path(os.path.abspath(path))
+            self._selected_path = path
+            self._executable = str(path.resolve())
+        if root is not None and self._selected_path is not None:
+            if self._selected_path.is_relative_to(root) or Path(
+                self._executable or self._selected_path
+            ).is_relative_to(root):
+                raise ValueError("native executable must be outside the repository")
 
     def run(
         self,
@@ -133,6 +168,7 @@ class CodexCLIAdapter:
         root = resolve_repository_root(context.repository_root)
         if str(root) != context.repository_root:
             raise ValueError("context root must match the actual canonical Git root")
+        self._bind_executable(root)
         envelope = {
             "instructions": (
                 "Follow the human-admitted task contract. Allowed/protected paths "
@@ -159,7 +195,7 @@ class CodexCLIAdapter:
                 raise ValueError("temporary final output must be outside repository")
             final = scratch / "final.txt"
             argv = (
-                self._executable,
+                self._executable or self._requested_executable,
                 "-a",
                 "never",
                 "exec",
@@ -179,6 +215,8 @@ class CodexCLIAdapter:
             stdout = _Capture(budgets.stdout_bytes)
             stderr = _Capture(budgets.stderr_bytes)
             try:
+                if self._selection_error is not None:
+                    raise self._selection_error
                 process = subprocess.Popen(
                     argv,
                     cwd=root,

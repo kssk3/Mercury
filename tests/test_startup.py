@@ -955,3 +955,23 @@ def test_startup_protected_history_without_live_proof_is_interrupted(
     assert "protected_evidence_unavailable" in result.diagnostics
     assert result.loop_status == "pass"
     assert before == (journal.path.read_bytes(), store.path.read_bytes())
+
+
+@pytest.mark.parametrize("kind", ["journal", "current"])
+def test_startup_rejects_hardlinked_persistence(
+    repository: Path, tmp_path: Path, kind: str
+) -> None:
+    journal = EventJournal(tmp_path / "external")
+    store = CurrentStateStore(tmp_path / "external")
+    journal.append({"event": "legacy"})
+    store.write({"caller": "preserved"})
+    leaf = journal.path if kind == "journal" else store.path
+    contents = leaf.read_bytes()
+    target = tmp_path / "outside"
+    target.write_bytes(contents)
+    leaf.unlink()
+    os.link(target, leaf)
+    decision = reconcile(repository, journal, store)
+    assert decision.status == "unknown"
+    assert decision.diagnostics == ("inputs_unreadable_or_invalid",)
+    assert target.read_bytes() == contents == leaf.read_bytes()

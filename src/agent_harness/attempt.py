@@ -13,7 +13,7 @@ from typing import Literal, cast
 from agent_harness.adapter import TurnBudgets
 from agent_harness.evidence import EvidenceReport
 from agent_harness.journal import EventJournal
-from agent_harness.repository import resolve_repository_root
+from agent_harness.repository import read_persistence_bytes, resolve_repository_root
 from agent_harness.runner import CommandResult
 from agent_harness.scope import _digest, _valid_path, _validate_observation
 from agent_harness.state import CurrentStateStore
@@ -365,7 +365,7 @@ class AttemptJournal:
     def _refresh(self, *, journal_recorded: bool) -> dict[str, object]:
         try:
             attempts = self.read()
-            raw = self.journal.path.read_bytes() if self.journal.path.exists() else b""
+            raw = read_persistence_bytes(self.journal.path) or b""
             summary: dict[str, object] = {
                 "schema_version": 1,
                 "attempt_count": len(attempts),

@@ -708,3 +708,75 @@ def test_verification_created_ignored_special_blocks(tmp_path: Path) -> None:
     assert result.status == "blocked"
     assert result.reason == "allowed_boundary_unsafe"
     assert result.usage.commands == 3
+
+
+@pytest.mark.parametrize("boundary", ["preflight", "guard"])
+def test_loop_rejects_replaced_raw_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    import os
+
+    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.admission import record_admission
+    from agent_harness.context import ContextPacket
+    from agent_harness.journal import EventJournal
+    from agent_harness.loop import run_loop
+    from agent_harness.retry import RetryLimits
+    from agent_harness.state import CurrentStateStore
+
+    root = _repository(tmp_path)
+    launches = tmp_path / "native-launches"
+    executable = _native_fixture(tmp_path, root, launches, "pass", 0)
+    journal = EventJournal(tmp_path / "state")
+    state = CurrentStateStore(tmp_path / "state")
+    journal.append({"event": "legacy"})
+    state.write({"caller": "preserved"})
+    target = tmp_path / "history-alias"
+    replaced = False
+    expected_history = b""
+    original = CurrentStateStore.read
+    reads = 0
+
+    def replace_after_read(self: CurrentStateStore) -> dict[str, object] | None:
+        nonlocal reads, replaced, expected_history
+        value = original(self)
+        reads += 1
+        # Initial current read precedes preflight raw history; the next read
+        # precedes the first guarded raw-prefix read before baseline execution.
+        if not replaced and reads == (1 if boundary == "preflight" else 2):
+            expected_history = journal.path.read_bytes()
+            target.write_bytes(expected_history)
+            journal.path.unlink()
+            os.link(target, journal.path)
+            replaced = True
+        return value
+
+    monkeypatch.setattr(CurrentStateStore, "read", replace_after_read)
+    task = TaskContract("change value", ("value",), (), ("new value",))
+    command = (sys.executable, "-c", "pass")
+    result = run_loop(
+        CodexCLIAdapter(executable),
+        task,
+        record_admission(task, approver="human", approved_at="2026-10-06T00:00:00Z"),
+        ContextPacket(str(root), 4096, ()),
+        policy=VerificationPolicy((command,), ".", 2),
+        criterion_commands={"new value": (command,)},
+        journal=journal,
+        state_store=state,
+        budgets=TurnBudgets(2, 16000, 128, 128, 128),
+        limits=RetryLimits(2, 2, 7, 50),
+        redactor=lambda text: text,
+        max_output_bytes=128,
+    )
+    assert replaced
+    assert result.status == ("blocked" if boundary == "preflight" else "unknown")
+    assert result.reason == (
+        "invalid_preflight"
+        if boundary == "preflight"
+        else "runtime_persistence_invalid"
+    )
+    assert result.usage.commands == 0
+    assert not launches.exists()
+    assert target.read_bytes() == expected_history
+    if boundary == "preflight":
+        assert expected_history == b'{"event":"legacy"}\n'

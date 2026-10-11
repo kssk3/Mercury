@@ -29,6 +29,7 @@ from agent_harness.journal import EventJournal
 from agent_harness.repository import (
     git_executable,
     git_read_environment,
+    read_persistence_bytes,
     resolve_repository_root,
     validate_runtime_state_directory,
 )
@@ -515,6 +516,7 @@ def _validate_turn(
         raise ValueError("input envelope must be strict UTF-8") from error
     if size > budgets.input_bytes:
         raise ValueError("complete input envelope exceeds input byte budget")
+    adapter._bind_executable(root)
     return root
 
 
@@ -546,11 +548,9 @@ def _validate_journal(journal: EventJournal, root: Path, *, bind: bool = False) 
             metadata = path.lstat()
             if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
                 raise ValueError("journal must be a regular file with one link")
-            with path.open("rb") as stream:
-                if stream.seek(0, os.SEEK_END):
-                    stream.seek(-1, os.SEEK_END)
-                    if stream.read(1) != b"\n":
-                        raise ValueError("journal history must end with a newline")
+            raw = read_persistence_bytes(path)
+            if raw and not raw.endswith(b"\n"):
+                raise ValueError("journal history must end with a newline")
         journal.read()
     except (OSError, UnicodeError) as error:
         raise ValueError("could not inspect external journal history") from error

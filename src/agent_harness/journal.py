@@ -7,7 +7,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
-from agent_harness.repository import validate_runtime_state_directory
+from agent_harness.repository import (
+    read_persistence_bytes,
+    validate_runtime_state_directory,
+)
 
 
 class EventJournal:
@@ -42,11 +45,12 @@ class EventJournal:
             os.close(descriptor)
 
     def read(self) -> list[dict[str, object]]:
-        if not self.path.exists():
+        raw = read_persistence_bytes(self.path)
+        if raw is None:
             return []
 
         events: list[dict[str, object]] = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
+        for line in raw.decode("utf-8").splitlines():
             try:
                 event = json.loads(line)
             except json.JSONDecodeError as error:

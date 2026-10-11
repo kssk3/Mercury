@@ -7,7 +7,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
-from agent_harness.repository import validate_runtime_state_directory
+from agent_harness.repository import (
+    read_persistence_bytes,
+    validate_runtime_state_directory,
+)
 
 
 class CurrentStateStore:
@@ -19,11 +22,12 @@ class CurrentStateStore:
         return self._state_directory / "current.json"
 
     def read(self) -> dict[str, object] | None:
-        if not self.path.exists():
+        raw = read_persistence_bytes(self.path)
+        if raw is None:
             return None
 
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            payload = json.loads(raw.decode("utf-8"))
         except json.JSONDecodeError as error:
             raise ValueError("current state must contain a JSON object") from error
 
