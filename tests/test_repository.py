@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -233,3 +235,201 @@ def test_resolver_preserves_caller_state_root_symlink_canonicalization(
         state_root.resolve() / "repositories" / location.repository_id
     )
     assert not location.state_directory.exists()
+
+
+def test_internal_git_ignores_repo_local_path_shadow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_harness.contract import TaskContract
+    from agent_harness.profile import build_repository_profile
+    from agent_harness.recovery import capture_patch
+    from agent_harness.turn import RepositoryObservation
+    from agent_harness.workspace import WorkspaceSnapshot
+
+    root = initialize_repository(tmp_path / "repo")
+    (root / "file").write_text("original")
+    tools = root / "tools"
+    tools.mkdir()
+    marker = tmp_path / "executed"
+    shadow = tools / "git"
+    shadow.write_text(
+        f"#!{sys.executable}\nfrom pathlib import Path\nPath({str(marker)!r}).touch()\n"
+    )
+    shadow.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tools) + os.pathsep + os.environ["PATH"])
+    assert repository_module.resolve_repository_root(root) == root.resolve()
+    RepositoryObservation.capture(root)
+    WorkspaceSnapshot.capture(root)
+    build_repository_profile(root)
+    capture_patch(
+        root, TaskContract("capture", ("file",), (), ("done",)), "attempt", ("file",)
+    )
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("layout", ["linked", "separate"])
+@pytest.mark.parametrize("metadata", ["gitdir", "common"])
+@pytest.mark.parametrize(
+    "consumer", ["resolver", "journal", "state", "output", "lock", "turn"]
+)
+def test_runtime_state_rejects_linked_git_metadata(
+    tmp_path: Path, layout: str, metadata: str, consumer: str
+) -> None:
+    from agent_harness.journal import EventJournal
+    from agent_harness.lock import RepositoryLock
+    from agent_harness.output import OutputStore
+    from agent_harness.state import CurrentStateStore
+    from agent_harness.turn import _validate_journal
+
+    root = tmp_path / "repo"
+    if layout == "linked":
+        primary = initialize_repository(tmp_path / "primary")
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(primary),
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=f@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "base",
+            ],
+            check=True,
+            timeout=10,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(primary),
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "linked",
+                str(root),
+            ],
+            check=True,
+            timeout=10,
+        )
+    else:
+        subprocess.run(
+            [
+                "git",
+                "init",
+                "--quiet",
+                "--separate-git-dir",
+                str(tmp_path / "metadata"),
+                str(root),
+            ],
+            check=True,
+            timeout=10,
+        )
+    selector = "--absolute-git-dir" if metadata == "gitdir" else "--git-common-dir"
+    raw = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", selector],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    ).stdout.removesuffix("\n")
+    gitdir = Path(raw) if Path(raw).is_absolute() else root / raw
+    state = gitdir.resolve() / "runtime"
+    with pytest.raises(ValueError):
+        if consumer == "resolver":
+            resolve_repository_state_location(root, state)
+        elif consumer == "journal":
+            EventJournal(state).append({"event": "refused"})
+        elif consumer == "state":
+            CurrentStateStore(state).write({"refused": True})
+        elif consumer == "output":
+            OutputStore(state, max_bytes=128, redactor=lambda text: text).write(
+                "refused"
+            )
+        elif consumer == "lock":
+            RepositoryLock(state, timeout_seconds=10).acquire()
+        else:
+            _validate_journal(EventJournal(state), root)
+    assert not state.exists()
+
+
+def test_journal_initial_metadata_query_failure_is_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_harness.journal import EventJournal
+    from agent_harness.turn import _validate_journal
+
+    root = initialize_repository(tmp_path / "repo")
+    journal = EventJournal(tmp_path / "state")
+
+    def failed(*args: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 128, "", "missing")
+
+    monkeypatch.setattr(repository_module, "_git_query", failed)
+    with pytest.raises(ValueError, match="could not inspect"):
+        _validate_journal(journal, root, bind=True)
+    assert journal._git_metadata_binding is None
+    assert not journal.path.parent.exists()
+
+
+def test_journal_bound_metadata_rejects_unsafe_fallback(tmp_path: Path) -> None:
+    from agent_harness.journal import EventJournal
+    from agent_harness.turn import _validate_journal
+
+    root = tmp_path / "repo"
+    metadata = tmp_path / "metadata"
+    subprocess.run(
+        ["git", "init", "--quiet", "--separate-git-dir", str(metadata), str(root)],
+        check=True,
+        timeout=10,
+    )
+    journal = EventJournal(tmp_path / "state")
+    _validate_journal(journal, root, bind=True)
+    metadata.rename(tmp_path / "removed")
+    journal._state_directory = metadata / "runtime"
+    with pytest.raises(ValueError, match="Git metadata"):
+        _validate_journal(journal, root)
+    assert not journal.path.parent.exists()
+
+
+def test_journal_live_unsafe_metadata_cannot_use_old_binding(tmp_path: Path) -> None:
+    from agent_harness.journal import EventJournal
+    from agent_harness.turn import _validate_journal
+
+    root = initialize_repository(tmp_path / "repo")
+    state = tmp_path / "state"
+    journal = EventJournal(state)
+    _validate_journal(journal, root, bind=True)
+    state.mkdir()
+    new_metadata = state / "metadata"
+    root.joinpath(".git").rename(tmp_path / "old-metadata")
+    subprocess.run(
+        ["git", "init", "--quiet", "--separate-git-dir", str(new_metadata), str(root)],
+        check=True,
+        timeout=10,
+    )
+    journal._state_directory = new_metadata / "runtime"
+    with pytest.raises(ValueError, match="Git metadata"):
+        _validate_journal(journal, root)
+    assert not journal.path.parent.exists()
+
+
+def test_runtime_state_unexpected_git_query_error_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_harness.state import CurrentStateStore
+
+    def failed(*args: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            [], 128, "", "fatal: detected dubious ownership in repository"
+        )
+
+    monkeypatch.setattr(repository_module, "_git_query", failed)
+    state = tmp_path / "state"
+    with pytest.raises(ValueError, match="could not inspect"):
+        CurrentStateStore(state).write({"refused": True})
+    assert not state.exists()

@@ -586,3 +586,157 @@ def test_incomplete_f2_or_f3_failure_propagates_before_output_persistence(
         invoke(repository, fake(tmp_path, body), journal, redactor=callback)
     assert not callbacks and not (tmp_path / "state" / "outputs").exists()
     assert "native_output_stored" not in journal.path.read_text()
+
+
+def test_callback_created_ignored_special_never_scope_clears(
+    repository: Path, tmp_path: Path
+) -> None:
+    import os
+
+    from agent_harness.native_output import NativeOutputError, run_stored_scoped_turn
+
+    (repository / ".gitignore").write_text("scratch\n")
+    task = TaskContract("callback boundary", ("scratch",), (), ("verified",))
+
+    def mutate(text: str) -> str:
+        if not (repository / "scratch").exists():
+            os.mkfifo(repository / "scratch")
+        return text
+
+    journal = EventJournal(tmp_path / "state")
+    with pytest.raises(NativeOutputError) as raised:
+        run_stored_scoped_turn(
+            CodexCLIAdapter(fake(tmp_path, payload())),
+            task,
+            record_admission(
+                task, approver="human", approved_at="2026-10-09T00:00:00Z"
+            ),
+            build_context_packet(
+                repository, source_paths=["base.txt"], budget_bytes=4096
+            ),
+            journal=journal,
+            budgets=TurnBudgets(3, 16000, 128, 128, 128),
+            redactor=mutate,
+            max_output_bytes=128,
+        )
+    assert raised.value.code == "callback_observation_failed"
+    assert not raised.value.proceed
+    assert journal.read()[-1]["event"] == "callback_observation_failed"
+
+
+@pytest.mark.parametrize("layout", ["separate", "linked-common"])
+def test_outputs_git_metadata_rejects_before_native_side_effects(
+    repository: Path, tmp_path: Path, layout: str
+) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    outputs = state / "outputs"
+    metadata_owner = (
+        tmp_path / "other-repository" if layout == "separate" else repository
+    )
+    subprocess.run(
+        [
+            "git",
+            "init",
+            "--quiet",
+            "--separate-git-dir",
+            str(outputs),
+            str(metadata_owner),
+        ],
+        check=True,
+        timeout=10,
+    )
+    if layout == "linked-common":
+        linked = tmp_path / "linked"
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repository),
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "linked",
+                str(linked),
+            ],
+            check=True,
+            timeout=10,
+        )
+        repository = linked
+        assert (outputs / "worktrees" / "linked" / "commondir").is_file()
+    before = {
+        p.relative_to(outputs): p.read_bytes()
+        for p in outputs.rglob("*")
+        if p.is_file()
+    }
+    marker = tmp_path / "launched"
+    journal = EventJournal(state)
+
+    with pytest.raises(ValueError, match="Git metadata"):
+        invoke(
+            repository,
+            fake(tmp_path, f"pathlib.Path({str(marker)!r}).touch()\n" + payload()),
+            journal,
+        )
+
+    assert not marker.exists()
+    assert not journal.path.exists()
+    assert {
+        p.relative_to(outputs): p.read_bytes()
+        for p in outputs.rglob("*")
+        if p.is_file()
+    } == before
+
+
+def test_callback_moves_git_metadata_to_outputs_before_storage(
+    repository: Path, tmp_path: Path
+) -> None:
+    from agent_harness.native_output import NativeOutputError
+
+    state = tmp_path / "state"
+    outputs = state / "outputs"
+    journal = EventJournal(state)
+    before: dict[Path, bytes] = {}
+
+    def relocate(text: str) -> str:
+        subprocess.run(
+            [
+                "git",
+                "init",
+                "--quiet",
+                "--separate-git-dir",
+                str(outputs),
+                str(repository),
+            ],
+            check=True,
+            timeout=10,
+        )
+        before.update(
+            {
+                p.relative_to(outputs): p.read_bytes()
+                for p in outputs.rglob("*")
+                if p.is_file()
+            }
+        )
+        return redact(text)
+
+    with pytest.raises(NativeOutputError) as error:
+        invoke(repository, fake(tmp_path, payload()), journal, redactor=relocate)
+
+    assert error.value.code == "storage_failed"
+    assert not error.value.proceed
+    result = error.value.scoped_turn.observed_turn.adapter_result
+    assert result.process_status == "successful_exit"
+    assert result.stdout.text == "SENTINEL-SECRET out\n"
+    assert before
+    assert {
+        p.relative_to(outputs): p.read_bytes()
+        for p in outputs.rglob("*")
+        if p.is_file()
+    } == before
+    assert [event["event"] for event in journal.read()] == [
+        "turn_intent",
+        "turn_observation",
+        "scope_decision",
+    ]

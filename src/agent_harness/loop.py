@@ -54,6 +54,7 @@ from agent_harness.turn import (
     RepositoryObservation,
     TurnObservationError,
     _append,
+    _reject_allowed_symlinks,
     _validate_turn,
 )
 from agent_harness.verification_checkpoint import (
@@ -245,12 +246,19 @@ def _run_loop(
             escalation,
         )
 
+    def guard_allowed() -> None:
+        try:
+            _reject_allowed_symlinks(contract, RepositoryObservation.capture(root))
+        except ValueError:
+            raise _LoopStop("blocked", "allowed_boundary_unsafe") from None
+
     def run_commands() -> tuple[CommandResult, ...]:
         nonlocal commands
         results: list[CommandResult] = []
         for command in policy.commands:
             guard_persistence()
             guard_protected()
+            guard_allowed()
             if commands + 1 > limits.max_commands:
                 raise _LoopStop("stopped", "command_budget")
             if monotonic() - started + policy.timeout_seconds + 2 > limits.max_seconds:
@@ -264,6 +272,7 @@ def _run_loop(
                 raise _LoopStop("unknown", "command_launch_unknown")
             commands += 1
             results.append(result)
+            guard_allowed()
             guard_persistence()
             guard_protected()
             if command_before != RepositoryObservation.capture(root):
@@ -405,6 +414,7 @@ def _run_loop(
         journal_required = journal.path.exists()
         known_history = journal.path.read_bytes() if journal_required else b""
         before = RepositoryObservation.capture(root)
+        _reject_allowed_symlinks(contract, before)
         if before.head is None:
             return finish("blocked", "missing_revision")
         if resumed is None:
@@ -562,6 +572,7 @@ def _run_loop(
             raise _LoopStop("blocked", "unsupported_checkpoint_history")
         guard_persistence()
         guard_protected()
+        guard_allowed()
         _append(
             journal,
             root,

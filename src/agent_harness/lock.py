@@ -14,6 +14,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from agent_harness.repository import validate_runtime_state_directory
+
 
 class LockUnavailableError(RuntimeError):
     """Raised when another owner holds a live repository lease."""
@@ -71,10 +73,12 @@ class RepositoryLock:
         return self._state_directory / ".lock-transition"
 
     def acquire(self) -> RepositoryLease:
+        validate_runtime_state_directory(self.path)
         self._state_directory.mkdir(parents=True, exist_ok=True)
 
         with self._ownership_transition():
             sampled_at = self._sample_now()
+            validate_runtime_state_directory(self.path)
             while True:
                 try:
                     self.path.mkdir()
@@ -104,6 +108,7 @@ class RepositoryLock:
     def release(self) -> None:
         with self._ownership_transition():
             self._require_owner()
+            self._validate_cleanup()
             shutil.rmtree(self.path)
 
     def _sample_now(self) -> float:
@@ -171,6 +176,7 @@ class RepositoryLock:
         return RepositoryLease(owner_token, heartbeat)
 
     def _write_lease(self, lease: RepositoryLease) -> None:
+        validate_runtime_state_directory(self.path)
         temporary_path: Path | None = None
         serialized = json.dumps(
             {"heartbeat_at": lease.heartbeat_at, "owner_token": lease.owner_token},
@@ -196,9 +202,17 @@ class RepositoryLock:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
 
+    def _validate_cleanup(self) -> None:
+        validate_runtime_state_directory(self.path)
+        # Lease artifacts are flat; never descend into unrelated child directories.
+        for child in self.path.iterdir():
+            if stat.S_ISDIR(child.lstat().st_mode):
+                raise ValueError("repository lock cleanup requires a flat directory")
+
     def _reclaim_expired_lock(self) -> None:
         reclaimed_path = self._state_directory / f".reclaimed-{uuid.uuid4().hex}"
         try:
+            self._validate_cleanup()
             os.replace(self.path, reclaimed_path)
         except FileNotFoundError:
             return
@@ -206,13 +220,25 @@ class RepositoryLock:
 
     @contextmanager
     def _ownership_transition(self) -> Iterator[None]:
+        validate_runtime_state_directory(self.path)
+        if self._transition_path.is_symlink():
+            raise ValueError("repository lock transition must not be a symbolic link")
         try:
-            transition_file = self._transition_path.open("a+b")
+            descriptor = os.open(
+                self._transition_path,
+                os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+                0o666,
+            )
         except FileNotFoundError as error:
             raise LockUnavailableError("repository lock metadata is invalid") from error
-        with transition_file:
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise ValueError(
+                    "repository lock transition must be a regular file with one link"
+                )
             try:
-                fcntl.flock(transition_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise LockUnavailableError(
                     "repository lock transition is active"
@@ -220,7 +246,9 @@ class RepositoryLock:
             try:
                 yield
             finally:
-                fcntl.flock(transition_file.fileno(), fcntl.LOCK_UN)
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
 
     def _require_owner(self) -> None:
         if self._read_lease().owner_token != self._owner_token:

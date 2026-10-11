@@ -8,7 +8,11 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from agent_harness.repository import git_read_environment, resolve_repository_root
+from agent_harness.repository import (
+    git_executable,
+    git_read_environment,
+    resolve_repository_root,
+)
 
 _LANGUAGE_SUFFIXES = {
     ".py": "Python",
@@ -57,7 +61,7 @@ def build_repository_profile(path: Path | str) -> RepositoryProfile:
     try:
         inventory = subprocess.run(
             [
-                "git",
+                git_executable(),
                 "--no-optional-locks",
                 "-c",
                 "core.fsmonitor=false",

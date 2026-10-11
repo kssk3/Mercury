@@ -649,3 +649,62 @@ def test_final_cleanup_obeys_elapsed_budget(
     else:
         assert not result.criteria
     assert journal.read()[-1]["status"] == result.status
+
+
+def test_verification_created_ignored_special_blocks(tmp_path: Path) -> None:
+    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.admission import record_admission
+    from agent_harness.context import ContextPacket
+    from agent_harness.journal import EventJournal
+    from agent_harness.loop import run_loop
+    from agent_harness.retry import RetryLimits
+    from agent_harness.state import CurrentStateStore
+
+    root = tmp_path / "repo"
+    subprocess.run(["git", "init", "--quiet", str(root)], check=True, timeout=10)
+    (root / ".gitignore").write_text("scratch\n")
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=f@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "base",
+        ],
+        check=True,
+        timeout=10,
+    )
+    executable = tmp_path / "native"
+    executable.write_text(
+        f"#!{sys.executable}\nimport sys,pathlib\nsys.stdin.buffer.read()\npathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text('done')\n"
+    )
+    executable.chmod(0o700)
+    task = TaskContract("verification boundary", ("scratch",), (), ("done",))
+    command = (
+        sys.executable,
+        "-c",
+        f"import os,pathlib; c=pathlib.Path({str(tmp_path / 'count')!r}); c.write_text(c.read_text()+'x' if c.exists() else 'x'); p=pathlib.Path('scratch'); os.mkfifo(p) if len(c.read_text())==2 else None",
+    )
+    result = run_loop(
+        CodexCLIAdapter(executable),
+        task,
+        record_admission(task, approver="human", approved_at="2026-10-09T00:00:00Z"),
+        ContextPacket(str(root), 4096, ()),
+        policy=VerificationPolicy((command,), ".", 3),
+        criterion_commands={"done": (command,)},
+        journal=EventJournal(tmp_path / "state"),
+        state_store=CurrentStateStore(tmp_path / "state"),
+        budgets=TurnBudgets(3, 16000, 128, 128, 128),
+        limits=RetryLimits(0, 2, 10, 60),
+        redactor=lambda text: text,
+        max_output_bytes=128,
+    )
+    assert result.status == "blocked"
+    assert result.reason == "allowed_boundary_unsafe"
+    assert result.usage.commands == 3

@@ -13,6 +13,7 @@ from typing import cast
 from agent_harness.attempt import AttemptJournal, _mapping, _observation, _require
 from agent_harness.failure import FailureAssessment, classify_attempt_failure
 from agent_harness.journal import EventJournal
+from agent_harness.repository import validate_runtime_state_directory
 from agent_harness.retry import RetryUsage
 from agent_harness.scope import _digest
 from agent_harness.state import CurrentStateStore
@@ -143,6 +144,7 @@ def _safe_storage(attempts: AttemptJournal) -> None:
     )
     _require(attempts.journal.path.parent == attempts.state_store.path.parent)
     for path in (attempts.journal.path, attempts.state_store.path):
+        validate_runtime_state_directory(path.parent, attempts.root)
         _require(
             path.is_absolute()
             and path == path.resolve()
@@ -369,6 +371,13 @@ def _decide(
         and verification.get("technical_kind") == "pass"
     )
     _require(bool(verification.get("commands")) and not failures[-1].findings)
+    # Verification history stores protected path hashes and prior states only.
+    # Existing optional checkpoints precede final verification and cannot prove
+    # the final protected boundary. Conservatively retain an interrupted history.
+    if verification.get("protected_inputs"):
+        return replace(
+            base, status="interrupted", diagnostics=("protected_evidence_unavailable",)
+        )
     delta = base.workspace_delta
     if delta is None:
         raise ValueError("missing_after_observation")

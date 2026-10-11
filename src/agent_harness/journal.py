@@ -7,16 +7,20 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
+from agent_harness.repository import validate_runtime_state_directory
+
 
 class EventJournal:
     def __init__(self, state_directory: Path | str) -> None:
         self._state_directory = Path(state_directory)
+        self._git_metadata_binding: tuple[Path, tuple[Path, ...]] | None = None
 
     @property
     def path(self) -> Path:
         return self._state_directory / "events.jsonl"
 
     def append(self, event: Mapping[str, object]) -> None:
+        validate_runtime_state_directory(self._state_directory)
         self._state_directory.mkdir(parents=True, exist_ok=True)
         if self.path.is_symlink():
             raise ValueError("journal path must not be a symbolic link")

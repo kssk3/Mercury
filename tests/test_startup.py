@@ -908,3 +908,50 @@ def test_checkpoint_terminal_requires_phase_intent_and_elapsed_floor(
         store.path.read_bytes(),
         RepositoryObservation.capture(repository),
     )
+
+
+@pytest.mark.parametrize("directory", [False, True])
+@pytest.mark.parametrize(
+    "change", ["unchanged", "content", "mode", "missing", "symlink"]
+)
+def test_startup_protected_history_without_live_proof_is_interrupted(
+    completed_loop: tuple[Path, EventJournal, CurrentStateStore, str],
+    directory: bool,
+    change: str,
+) -> None:
+
+    root, journal, store, _ = completed_loop
+    protected = root / "protected"
+    if directory:
+        protected.mkdir()
+        target = protected / "input"
+    else:
+        target = protected
+    target.write_text("original")
+    (root / ".git/info/exclude").write_text("protected\n")
+    # Valid legacy verification records retain only historical protected path hashes.
+    events = journal.read()
+    for event in events:
+        if event.get("event") == "attempt_verification":
+            event["protected_inputs"] = [
+                {
+                    "path_sha256": hashlib.sha256(b"protected").hexdigest(),
+                    "state": "unchanged",
+                }
+            ]
+    rewrite_runtime_events(completed_loop, events)
+    if change == "content":
+        target.write_text("changed")
+    elif change == "mode":
+        target.chmod(0o700)
+    elif change == "missing":
+        target.unlink()
+    elif change == "symlink":
+        target.unlink()
+        target.symlink_to(root / "user.txt")
+    before = journal.path.read_bytes(), store.path.read_bytes()
+    result = inspect_loop(completed_loop)
+    assert result.status == "interrupted"
+    assert "protected_evidence_unavailable" in result.diagnostics
+    assert result.loop_status == "pass"
+    assert before == (journal.path.read_bytes(), store.path.read_bytes())

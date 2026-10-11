@@ -7,6 +7,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from agent_harness.repository import validate_runtime_state_directory
+
 
 @dataclass(frozen=True)
 class StoredOutput:
@@ -36,10 +38,14 @@ class OutputStore:
         self._redactor = redactor
 
     def write(self, output: str) -> StoredOutput:
+        output_directory = self._state_directory / "outputs"
+        validate_runtime_state_directory(self._state_directory)
+        validate_runtime_state_directory(output_directory)
         redacted_output = self._redactor(output)
+        validate_runtime_state_directory(self._state_directory)
+        validate_runtime_state_directory(output_directory)
         stored_bytes, truncated = self._bound_utf8(redacted_output)
         identifier = hashlib.sha256(stored_bytes).hexdigest()
-        output_directory = self._state_directory / "outputs"
         path = output_directory / f"{identifier}.txt"
 
         if output_directory.is_symlink():

@@ -46,6 +46,13 @@ def repo(tmp_path: Path, repository_seed: Path) -> Path:
     return root
 
 
+@pytest.fixture
+def unrelated_metadata(tmp_path: Path) -> Path:
+    metadata = tmp_path.resolve() / "foreign-metadata"
+    git(tmp_path, "init", "-q", f"--separate-git-dir={metadata}", "foreign-repo")
+    return metadata
+
+
 def contract() -> TaskContract:
     return TaskContract("restore", ("modify", "delete", "create"), (), ("exact",))
 
@@ -281,6 +288,62 @@ def test_external_artifact_rejects_git_metadata_and_symlinks(
     (tmp_path / "link").symlink_to(tmp_path, target_is_directory=True)
     with pytest.raises(ValueError):
         seal_patch(before, after, tmp_path / "link/artifact")
+
+
+def test_seal_rejects_unrelated_git_metadata_before_creation(
+    repo: Path, unrelated_metadata: Path
+) -> None:
+    from agent_harness.recovery import capture_patch, seal_patch
+
+    before = capture_patch(repo, contract(), "a", ("modify",))
+    (repo / "modify").write_bytes(b"agent")
+    after = capture_patch(repo, contract(), "a", ("modify",))
+    metadata_before = {
+        path.relative_to(unrelated_metadata): path.read_bytes()
+        for path in unrelated_metadata.rglob("*")
+        if path.is_file()
+    }
+    artifact = unrelated_metadata / "artifact"
+    with pytest.raises(ValueError, match="Git metadata"):
+        seal_patch(before, after, artifact)
+    assert not artifact.exists()
+    assert {
+        path.relative_to(unrelated_metadata): path.read_bytes()
+        for path in unrelated_metadata.rglob("*")
+        if path.is_file()
+    } == metadata_before
+    assert (repo / "modify").read_bytes() == b"agent"
+
+
+def test_recover_rejects_unrelated_git_metadata_before_restoration(
+    repo: Path, tmp_path: Path, unrelated_metadata: Path
+) -> None:
+    from dataclasses import replace
+
+    from agent_harness.recovery import capture_patch, recover_patch, seal_patch
+    from agent_harness.turn import RepositoryObservation
+
+    before = capture_patch(repo, contract(), "a", ("modify",))
+    (repo / "modify").write_bytes(b"agent")
+    after = capture_patch(repo, contract(), "a", ("modify",))
+    reference = seal_patch(before, after, tmp_path.resolve() / "artifact")
+    artifact = unrelated_metadata / "artifact"
+    reference.path.rename(artifact)
+    reference = replace(reference, path=artifact)
+    metadata_before = {
+        path.relative_to(unrelated_metadata): path.read_bytes()
+        for path in unrelated_metadata.rglob("*")
+        if path.is_file()
+    }
+    with pytest.raises(ValueError, match="Git metadata"):
+        recover_patch(repo, contract(), "a", reference)
+    assert {
+        path.relative_to(unrelated_metadata): path.read_bytes()
+        for path in unrelated_metadata.rglob("*")
+        if path.is_file()
+    } == metadata_before
+    assert (repo / "modify").read_bytes() == b"agent"
+    assert RepositoryObservation.capture(repo) == after.observation
 
 
 def test_unrelated_later_change_refuses_recovery(repo: Path, tmp_path: Path) -> None:

@@ -140,3 +140,140 @@ def test_store_rejects_malformed_caps_before_state_mutation(
         assert list(sentinel.parent.iterdir()) == [sentinel]
     else:
         assert not state.exists()
+
+
+def test_output_callback_relocation_into_git_metadata_rejected(tmp_path: Path) -> None:
+    import subprocess
+
+    root = tmp_path / "repo"
+    metadata = tmp_path / "metadata"
+    subprocess.run(
+        ["git", "init", "--quiet", "--separate-git-dir", str(metadata), str(root)],
+        check=True,
+        timeout=10,
+    )
+    state = tmp_path / "state"
+    state.mkdir()
+    destination = metadata / "runtime"
+    destination.mkdir()
+
+    def relocate(text: str) -> str:
+        state.rmdir()
+        state.symlink_to(destination, target_is_directory=True)
+        return text
+
+    store = OutputStore(state, max_bytes=128, redactor=relocate)
+    with pytest.raises(ValueError):
+        store.write("refused")
+    assert list(destination.iterdir()) == []
+
+
+@pytest.mark.parametrize("layout", ["separate", "linked-common"])
+def test_outputs_directory_equal_git_metadata_is_rejected(
+    tmp_path: Path, layout: str
+) -> None:
+    import subprocess
+
+    state = tmp_path / "state"
+    state.mkdir()
+    outputs = state / "outputs"
+    root = tmp_path / "repo"
+    subprocess.run(
+        ["git", "init", "--quiet", "--separate-git-dir", str(outputs), str(root)],
+        check=True,
+        timeout=10,
+    )
+    if layout == "linked-common":
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                "fixture",
+            ],
+            check=True,
+            timeout=10,
+        )
+        linked = tmp_path / "linked"
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "linked",
+                str(linked),
+            ],
+            check=True,
+            timeout=10,
+        )
+        assert (outputs / "worktrees" / "linked" / "commondir").is_file()
+    before = {
+        p.relative_to(outputs): p.read_bytes()
+        for p in outputs.rglob("*")
+        if p.is_file()
+    }
+    store = OutputStore(state, max_bytes=128, redactor=lambda text: text)
+
+    with pytest.raises(ValueError, match="Git metadata"):
+        store.write("refused")
+
+    assert {
+        p.relative_to(outputs): p.read_bytes()
+        for p in outputs.rglob("*")
+        if p.is_file()
+    } == before
+
+
+def test_output_callback_creating_git_metadata_at_outputs_is_rejected(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+
+    state = tmp_path / "state"
+    state.mkdir()
+    outputs = state / "outputs"
+    before: dict[Path, bytes] = {}
+
+    def create_metadata(text: str) -> str:
+        subprocess.run(
+            [
+                "git",
+                "init",
+                "--quiet",
+                "--separate-git-dir",
+                str(outputs),
+                str(tmp_path / "repo"),
+            ],
+            check=True,
+            timeout=10,
+        )
+        before.update(
+            {
+                p.relative_to(outputs): p.read_bytes()
+                for p in outputs.rglob("*")
+                if p.is_file()
+            }
+        )
+        return text
+
+    with pytest.raises(ValueError, match="Git metadata"):
+        OutputStore(state, max_bytes=128, redactor=create_metadata).write("refused")
+
+    assert before
+    assert {
+        p.relative_to(outputs): p.read_bytes()
+        for p in outputs.rglob("*")
+        if p.is_file()
+    } == before

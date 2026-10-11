@@ -1402,3 +1402,82 @@ def test_ignored_allowed_regular_ancestor_is_rejected(repository: Path) -> None:
     task = TaskContract("regular ancestor", ("ignored/file/child",), (), ("verified",))
     with pytest.raises(ValueError, match="ancestors"):
         _reject_allowed_symlinks(task, RepositoryObservation.capture(repository))
+
+
+@pytest.mark.parametrize("kind", ["hardlink", "symlink", "fifo", "regular_ancestor"])
+@pytest.mark.parametrize("nested", [False, True])
+def test_ignored_allowed_created_after_native_is_failed(
+    repository: Path, tmp_path: Path, kind: str, nested: bool
+) -> None:
+    from agent_harness.turn import TurnObservationError, run_observed_turn
+
+    (repository / ".gitignore").write_text("scratch/\n")
+    target = tmp_path / "external"
+    target.write_bytes(b"original")
+    relative = "scratch/nested/entry" if nested else "scratch/entry"
+    allowed = "scratch" if nested else relative
+    if kind == "regular_ancestor":
+        allowed = relative + "/child"
+    action = {
+        "hardlink": f"os.link({str(target)!r}, p)",
+        "symlink": f"p.symlink_to({str(target)!r})",
+        "fifo": "os.mkfifo(p)",
+        "regular_ancestor": "p.write_text('ancestor')",
+    }[kind]
+    executable = fake(
+        tmp_path,
+        f"import pathlib,sys,os\nsys.stdin.buffer.read()\np=pathlib.Path({relative!r})\np.parent.mkdir(parents=True,exist_ok=True)\n{action}\n",
+    )
+    task = TaskContract("post boundary", (allowed,), (), ("verified",))
+    journal = EventJournal(tmp_path / "state")
+    with pytest.raises(TurnObservationError) as raised:
+        run_observed_turn(
+            CodexCLIAdapter(executable),
+            task,
+            record_admission(
+                task, approver="human", approved_at="2026-10-09T00:00:00Z"
+            ),
+            build_context_packet(
+                repository, source_paths=["base.txt"], budget_bytes=4096
+            ),
+            journal=journal,
+            budgets=TurnBudgets(3, 16000, 128, 128, 128),
+        )
+    assert raised.value.code == "after_observation_failed"
+    assert raised.value.adapter_result is not None
+    assert raised.value.adapter_result.process_status == "successful_exit"
+    assert [event["event"] for event in journal.read()] == [
+        "turn_intent",
+        "turn_observation_failed",
+    ]
+    assert target.read_bytes() == b"original"
+
+
+def test_internal_git_ignores_repo_local_path_shadow_after_native(
+    repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_harness.turn import run_observed_turn
+
+    tools = repository / "tools"
+    tools.mkdir()
+    marker = tmp_path / "git-executed"
+    shadow = (
+        f"#!{sys.executable}\nfrom pathlib import Path\nPath({str(marker)!r}).touch()\n"
+    )
+    executable = fake(
+        tmp_path,
+        f"import pathlib,sys\nsys.stdin.buffer.read()\np=pathlib.Path('tools/git')\np.write_text({shadow!r})\np.chmod(0o700)\n",
+    )
+    monkeypatch.setenv("PATH", str(tools) + os.pathsep + os.environ["PATH"])
+    task = TaskContract("plant shadow", ("tools",), (), ("verified",))
+    result = run_observed_turn(
+        CodexCLIAdapter(executable),
+        task,
+        record_admission(task, approver="human", approved_at="2026-10-09T00:00:00Z"),
+        build_context_packet(repository, source_paths=["base.txt"], budget_bytes=4096),
+        journal=EventJournal(tmp_path / "state"),
+        budgets=TurnBudgets(3, 16000, 128, 128, 128),
+    )
+    assert result.adapter_result.process_status == "successful_exit"
+    assert not marker.exists()
+    assert "tools/git" in result.delta.added

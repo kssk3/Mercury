@@ -5,7 +5,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from agent_harness.repository import git_read_environment
+from agent_harness.repository import git_executable, git_read_environment
 
 
 @dataclass(frozen=True)
@@ -18,7 +18,7 @@ class WorkspaceSnapshot:
     def capture(cls, repository: Path | str) -> WorkspaceSnapshot:
         result = subprocess.run(
             [
-                "git",
+                git_executable(),
                 "--no-optional-locks",
                 "-C",
                 str(Path(repository).resolve()),

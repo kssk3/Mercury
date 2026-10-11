@@ -2,9 +2,93 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+# Resolve from system paths before any native turn can alter repository-local PATH.
+_SYSTEM_GIT = shutil.which("git", path=os.defpath)
+_TRUSTED_GIT = str(Path(_SYSTEM_GIT).resolve()) if _SYSTEM_GIT else None
+
+
+def git_executable() -> str:
+    """Internal queries never select an executable from the mutable target PATH."""
+    if _TRUSTED_GIT is None:
+        raise ValueError("trusted system Git executable is unavailable")
+    return _TRUSTED_GIT
+
+
+def _git_query(directory: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+    environment = git_read_environment()
+    environment["LC_ALL"] = "C"
+    try:
+        return subprocess.run(
+            [git_executable(), "-C", str(directory), "rev-parse", *arguments],
+            capture_output=True,
+            check=False,
+            env=environment,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ValueError("could not inspect runtime state location") from error
+
+
+def validate_runtime_state_directory(
+    directory: Path | str,
+    repository_root: Path | None = None,
+    *,
+    admitted_metadata: tuple[Path, ...] = (),
+) -> tuple[Path, ...]:
+    """Reject evidence storage in working trees or their actual Git metadata."""
+    path = Path(directory).expanduser()
+    for ancestor in (*reversed(path.parents), path):
+        if ancestor.is_symlink():
+            raise ValueError("runtime state ancestors must not be symbolic links")
+        if ancestor.exists() and not ancestor.is_dir():
+            raise ValueError("runtime state ancestors must be directories")
+    canonical = path.resolve()
+    if repository_root is not None:
+        root = repository_root.resolve()
+        if canonical.is_relative_to(root):
+            raise ValueError("runtime state must be outside the repository")
+        metadata_roots = list(admitted_metadata)
+        live_roots: list[Path] = []
+        for selector in ("--absolute-git-dir", "--git-common-dir"):
+            result = _git_query(root, selector)
+            if result.returncode:
+                if not admitted_metadata:
+                    raise ValueError("could not inspect repository Git metadata")
+                break
+            metadata = Path(result.stdout.removesuffix("\n"))
+            if not metadata.is_absolute():
+                metadata = root / metadata
+            metadata = metadata.resolve()
+            # A live unsafe location always rejects, including partial queries.
+            if canonical.is_relative_to(metadata):
+                raise ValueError("runtime state must be outside Git metadata")
+            live_roots.append(metadata)
+        else:
+            metadata_roots.extend(live_roots)
+        if any(canonical.is_relative_to(metadata) for metadata in metadata_roots):
+            raise ValueError("runtime state must be outside Git metadata")
+        return tuple(dict.fromkeys(metadata_roots))
+    existing = canonical
+    while not existing.exists():
+        existing = existing.parent
+    result = _git_query(existing, "--is-inside-work-tree", "--is-inside-git-dir")
+    if result.returncode:
+        if result.returncode != 128 or not result.stderr.startswith(
+            "fatal: not a git repository"
+        ):
+            raise ValueError("could not inspect runtime state location")
+        return ()
+    if "true" in result.stdout.splitlines():
+        raise ValueError(
+            "runtime state must be outside the repository and Git metadata"
+        )
+    return ()
 
 
 @dataclass(frozen=True)
@@ -34,6 +118,9 @@ def resolve_repository_state_location(
     ) or state_directory.is_relative_to(repository_root):
         raise ValueError("state root must be outside the repository")
 
+    validate_runtime_state_directory(resolved_state_root, repository_root)
+    validate_runtime_state_directory(state_directory, repository_root)
+
     return RepositoryStateLocation(
         repository_root=repository_root,
         repository_id=repository_id,
@@ -59,11 +146,12 @@ def resolve_repository_root(repository_path: Path | str) -> Path:
         candidate = candidate.parent
     try:
         result = subprocess.run(
-            ["git", "-C", str(candidate), "rev-parse", "--show-toplevel"],
+            [git_executable(), "-C", str(candidate), "rev-parse", "--show-toplevel"],
             capture_output=True,
             check=False,
             env=git_read_environment(),
             text=True,
+            timeout=10,
         )
     except OSError as error:
         raise ValueError("could not inspect Git working tree") from error

@@ -13,12 +13,16 @@ from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract
 from agent_harness.journal import EventJournal
 from agent_harness.output import OutputStore, StoredOutput
-from agent_harness.repository import resolve_repository_root
+from agent_harness.repository import (
+    resolve_repository_root,
+    validate_runtime_state_directory,
+)
 from agent_harness.scope import ScopedTurnResult, evaluate_scope, run_scoped_turn
 from agent_harness.turn import (
     RepositoryObservation,
     _append,
     _process_metadata,
+    _reject_allowed_symlinks,
     _validate_journal,
     compare_observations,
 )
@@ -102,6 +106,7 @@ def _refresh(
     try:
         observed = scoped.observed_turn
         after = RepositoryObservation.capture(observed.after.repository_root)
+        _reject_allowed_symlinks(contract, after)
         if after == observed.after:
             return scoped
         updated = replace(
@@ -177,6 +182,13 @@ def _validate_storage(journal: EventJournal, root: Path) -> None:
         raise ValueError("outputs must be outside the repository")
     if outputs.exists() and not outputs.is_dir():
         raise ValueError("outputs must be a directory")
+    validate_runtime_state_directory(outputs)
+    binding = journal._git_metadata_binding
+    validate_runtime_state_directory(
+        outputs,
+        root,
+        admitted_metadata=binding[1] if binding is not None else (),
+    )
 
 
 def run_stored_scoped_turn(

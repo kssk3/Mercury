@@ -26,7 +26,12 @@ from agent_harness.admission import AdmissionRecord, admit
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract, _path_key
 from agent_harness.journal import EventJournal
-from agent_harness.repository import git_read_environment, resolve_repository_root
+from agent_harness.repository import (
+    git_executable,
+    git_read_environment,
+    resolve_repository_root,
+    validate_runtime_state_directory,
+)
 
 
 @dataclass(frozen=True)
@@ -142,7 +147,7 @@ def _git_result(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
     environment["GIT_OPTIONAL_LOCKS"] = "0"
     try:
         return subprocess.run(
-            ["git", "-c", "core.fsmonitor=false", "-C", str(root), *args],
+            [git_executable(), "-c", "core.fsmonitor=false", "-C", str(root), *args],
             capture_output=True,
             check=False,
             env=environment,
@@ -325,7 +330,7 @@ def run_observed_turn(
     root = _validate_turn(
         adapter, contract, admission, context, journal, budgets, sandbox
     )
-    _validate_journal(journal, root)
+    _validate_journal(journal, root, bind=True)
     before = RepositoryObservation.capture(root)
     _reject_allowed_symlinks(contract, before)
     attempt_id = uuid.uuid4().hex
@@ -363,6 +368,7 @@ def run_observed_turn(
         raise
     try:
         after = RepositoryObservation.capture(root)
+        _reject_allowed_symlinks(contract, after)
         delta = compare_observations(before, after)
     except Exception:
         raise _failure(
@@ -512,8 +518,15 @@ def _validate_turn(
     return root
 
 
-def _validate_journal(journal: EventJournal, root: Path) -> None:
+def _validate_journal(journal: EventJournal, root: Path, *, bind: bool = False) -> None:
     path = journal.path
+    if bind:
+        journal._git_metadata_binding = None
+    binding = journal._git_metadata_binding
+    admitted = binding[1] if binding is not None and binding[0] == root else ()
+    git_metadata = validate_runtime_state_directory(
+        path.parent, root, admitted_metadata=admitted
+    )
     if (
         not path.is_absolute()
         or str(path) != str(path.resolve())
@@ -541,6 +554,7 @@ def _validate_journal(journal: EventJournal, root: Path) -> None:
         journal.read()
     except (OSError, UnicodeError) as error:
         raise ValueError("could not inspect external journal history") from error
+    journal._git_metadata_binding = (root, git_metadata)
 
 
 def _append(journal: EventJournal, root: Path, event: dict[str, object]) -> None:

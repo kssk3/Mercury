@@ -628,3 +628,175 @@ def test_oversized_owner_metadata_cannot_create_an_unreadable_lease(
     with pytest.raises(ValueError, match="metadata"):
         lock.acquire()
     assert not lock.path.exists()
+
+
+@pytest.mark.parametrize("action", ["acquire", "heartbeat", "release"])
+def test_lock_directory_equal_git_metadata_is_preserved(
+    tmp_path: Path, action: str
+) -> None:
+    clock = Clock(100)
+    lock = create_lock(tmp_path / "state", clock, "owner")
+    lock.acquire()
+    subprocess.run(
+        ["git", "init", "--quiet", "--bare", str(lock.path)], check=True, timeout=10
+    )
+    before = {
+        p.relative_to(lock.path): p.read_bytes()
+        for p in lock.path.rglob("*")
+        if p.is_file()
+    }
+    clock.value = 111
+
+    with pytest.raises(ValueError, match="Git metadata"):
+        getattr(lock, action)()
+
+    assert {
+        p.relative_to(lock.path): p.read_bytes()
+        for p in lock.path.rglob("*")
+        if p.is_file()
+    } == before
+    assert not list(lock.path.parent.glob(".reclaimed-*"))
+    assert not list(lock.path.glob(".lease-*.tmp"))
+
+
+@pytest.mark.parametrize("action", ["acquire", "heartbeat"])
+def test_clock_creating_git_metadata_at_lock_is_rejected(
+    tmp_path: Path, action: str
+) -> None:
+    mutate = False
+    before: dict[Path, bytes] = {}
+    state = tmp_path / "state"
+    directory = state / "lock"
+
+    def now() -> float:
+        if mutate:
+            subprocess.run(
+                ["git", "init", "--quiet", "--bare", str(directory)],
+                check=True,
+                timeout=10,
+            )
+            before.update(
+                {
+                    p.relative_to(directory): p.read_bytes()
+                    for p in directory.rglob("*")
+                    if p.is_file()
+                }
+            )
+        return 111 if mutate else 100
+
+    lock = RepositoryLock(state, timeout_seconds=10, now=now, owner_token="owner")
+    lock.acquire()
+    mutate = True
+    with pytest.raises(ValueError, match="Git metadata"):
+        getattr(lock, action)()
+
+    assert before
+    assert {
+        p.relative_to(directory): p.read_bytes()
+        for p in directory.rglob("*")
+        if p.is_file()
+    } == before
+    assert not list(state.glob(".reclaimed-*"))
+    assert not list(directory.glob(".lease-*.tmp"))
+
+
+def test_transition_symlink_cannot_create_file_in_git_metadata(tmp_path: Path) -> None:
+    metadata = tmp_path / "metadata"
+    subprocess.run(
+        ["git", "init", "--quiet", "--bare", str(metadata)], check=True, timeout=10
+    )
+    before = {
+        p.relative_to(metadata): p.read_bytes()
+        for p in metadata.rglob("*")
+        if p.is_file()
+    }
+    state = tmp_path / "state"
+    state.mkdir()
+    target = metadata / "created-transition"
+    (state / ".lock-transition").symlink_to(target)
+    lock = create_lock(state, Clock(100), "owner")
+
+    with pytest.raises(ValueError, match="transition"):
+        lock.acquire()
+
+    assert not target.exists()
+    assert not lock.path.exists()
+    assert {
+        p.relative_to(metadata): p.read_bytes()
+        for p in metadata.rglob("*")
+        if p.is_file()
+    } == before
+
+
+@pytest.mark.parametrize("kind", ["hardlink", "fifo"])
+def test_transition_requires_regular_file_with_one_link(
+    tmp_path: Path, kind: str
+) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    transition = state / ".lock-transition"
+    sentinel = tmp_path / "sentinel"
+    sentinel.write_bytes(b"preserved")
+    if kind == "hardlink":
+        os.link(sentinel, transition)
+    else:
+        os.mkfifo(transition)
+    lock = create_lock(state, Clock(100), "owner")
+
+    with pytest.raises(ValueError):
+        lock.acquire()
+
+    assert sentinel.read_bytes() == b"preserved"
+    assert not lock.path.exists()
+    assert transition.lstat().st_nlink == (2 if kind == "hardlink" else 1)
+
+
+@pytest.mark.parametrize("action", ["release", "acquire"])
+def test_cleanup_preserves_nested_git_metadata(tmp_path: Path, action: str) -> None:
+    clock = Clock(100)
+    lock = create_lock(tmp_path / "state", clock, "owner")
+    lock.acquire()
+    nested = lock.path / "nested-metadata"
+    subprocess.run(
+        ["git", "init", "--quiet", "--bare", str(nested)], check=True, timeout=10
+    )
+    before = {
+        p.relative_to(lock.path): p.read_bytes() if p.is_file() else None
+        for p in lock.path.rglob("*")
+    }
+    clock.value = 111
+
+    with pytest.raises(ValueError):
+        getattr(lock, action)()
+
+    assert nested.is_dir()
+    assert {
+        p.relative_to(lock.path): p.read_bytes() if p.is_file() else None
+        for p in lock.path.rglob("*")
+    } == before
+    assert not list(lock.path.parent.glob(".reclaimed-*"))
+
+
+def test_cleanup_unlinks_directory_symlink_without_removing_target(
+    tmp_path: Path,
+) -> None:
+    lock = create_lock(tmp_path / "state", Clock(100), "owner")
+    lock.acquire()
+    metadata = tmp_path / "metadata"
+    subprocess.run(
+        ["git", "init", "--quiet", "--bare", str(metadata)], check=True, timeout=10
+    )
+    (lock.path / "metadata-link").symlink_to(metadata, target_is_directory=True)
+    before = {
+        p.relative_to(metadata): p.read_bytes() if p.is_file() else None
+        for p in metadata.rglob("*")
+    }
+
+    lock.release()
+
+    assert not lock.path.exists()
+    assert metadata.is_dir()
+    assert {
+        p.relative_to(metadata): p.read_bytes() if p.is_file() else None
+        for p in metadata.rglob("*")
+    } == before

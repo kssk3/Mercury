@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
+from agent_harness.repository import validate_runtime_state_directory
+
 
 class CurrentStateStore:
     def __init__(self, state_directory: Path | str) -> None:
@@ -30,6 +32,7 @@ class CurrentStateStore:
         return cast(dict[str, object], payload)
 
     def write(self, state: Mapping[str, object]) -> None:
+        validate_runtime_state_directory(self._state_directory)
         self._state_directory.mkdir(parents=True, exist_ok=True)
         serialized = json.dumps(dict(state), separators=(",", ":"), sort_keys=True)
         temporary_path: Path | None = None

@@ -18,9 +18,19 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from agent_harness.contract import TaskContract, _path_key
-from agent_harness.repository import git_read_environment, resolve_repository_root
+from agent_harness.repository import (
+    git_executable,
+    git_read_environment,
+    resolve_repository_root,
+    validate_runtime_state_directory,
+)
 from agent_harness.scope import _validate_observation
-from agent_harness.turn import FileFingerprint, GitStatusEntry, RepositoryObservation
+from agent_harness.turn import (
+    FileFingerprint,
+    GitStatusEntry,
+    RepositoryObservation,
+    _reject_allowed_symlinks,
+)
 
 MAX_BYTES = 8 * 1024 * 1024
 
@@ -140,10 +150,12 @@ def capture_patch(
     for path in paths:
         _scope(path, contract)
     before = RepositoryObservation.capture(root)
+    _reject_allowed_symlinks(contract, before)
     images = tuple(_image(root, path) for path in paths)
     if sum(len(image.data or b"") for image in images) > MAX_BYTES:
         raise ValueError("recovery images exceed budget")
     after = RepositoryObservation.capture(root)
+    _reject_allowed_symlinks(contract, after)
     if before != after:
         raise ValueError("workspace changed during recovery capture")
     observed = {_path_key(entry.path, fold_case=False): entry for entry in after.files}
@@ -170,20 +182,8 @@ def _external(path: Path, root: Path) -> None:
     for ancestor in (*reversed(path.parents), path):
         if ancestor.is_symlink():
             raise ValueError("unsafe artifact path")
-    # Linked worktree Git metadata can be external to the working tree.
-    for selector in ("--absolute-git-dir", "--git-common-dir"):
-        result = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", selector],
-            check=True,
-            capture_output=True,
-            env=git_read_environment(),
-            timeout=10,
-        )
-        directory = Path(os.fsdecode(result.stdout).strip())
-        if not directory.is_absolute():
-            directory = root / directory
-        if path.is_relative_to(directory.resolve()):
-            raise ValueError("artifact must be outside Git metadata")
+    validate_runtime_state_directory(path.parent, root)
+    validate_runtime_state_directory(path.parent)
 
 
 def _stable_stat(info: os.stat_result) -> tuple[int, ...]:
@@ -225,7 +225,7 @@ def _tracked_paths(root: Path, expected_index: str) -> set[str]:
     try:
         result = subprocess.run(
             [
-                "git",
+                git_executable(),
                 "-c",
                 "core.fsmonitor=false",
                 "-C",
@@ -532,6 +532,7 @@ def recover_patch(
     root = resolve_repository_root(repository)
     _external(reference.path, root)
     live = RepositoryObservation.capture(root)
+    _reject_allowed_symlinks(contract, live)
     if (
         reference.repository_id != live.repository_id
         or reference.contract_sha256 != _digest(contract)

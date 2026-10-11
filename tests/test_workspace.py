@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_harness.repository import git_read_environment
+from agent_harness.repository import git_executable, git_read_environment
 from agent_harness.workspace import WorkspaceSnapshot
 
 
@@ -105,7 +105,7 @@ def test_snapshot_includes_rename_source_and_not_copy_source(
 ) -> None:
     repository = tmp_path / "repository"
     expected_command = [
-        "git",
+        git_executable(),
         "--no-optional-locks",
         "-C",
         str(repository.resolve()),
