@@ -5,7 +5,11 @@ from pathlib import Path
 
 from agent_harness.baseline import VerificationBaseline, VerificationDelta
 from agent_harness.policy import VerificationPolicy
-from agent_harness.runner import CommandResult, ControlledCommandRunner
+from agent_harness.runner import (
+    CommandResult,
+    ControlledCommandRunner,
+    VerificationExecutables,
+)
 
 
 @dataclass(frozen=True)
@@ -24,8 +28,15 @@ def run_development_profile(
     policy: VerificationPolicy,
     repository: Path | str,
     baseline: VerificationBaseline,
+    *,
+    selections: VerificationExecutables | None = None,
 ) -> DevelopmentVerificationResult:
-    results = ControlledCommandRunner().run(policy, repository)
+    """Reuse an explicit pre-baseline selection when continuity is required.
+
+    Arbitrary caller-provided historical baseline results have no executable
+    provenance; the default safely selects anew for this independent invocation.
+    """
+    results = ControlledCommandRunner().run(policy, repository, selections=selections)
     return DevelopmentVerificationResult(
         baseline=baseline,
         results=results,

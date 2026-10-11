@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import time
@@ -93,6 +94,7 @@ def test_duplicate_contract_criteria_are_rejected() -> None:
         "protected_symlink",
         "unreadable_protected",
         "policy_callback",
+        "verification_path_reselection",
         "dev_current_corrupt",
         "dev_journal_partial",
         "dev_journal_lost",
@@ -108,11 +110,12 @@ def test_duplicate_contract_criteria_are_rejected() -> None:
     ],
 )
 def test_real_native_turn_requires_distinct_final_verification(
-    tmp_path: Path, scenario: str
+    tmp_path: Path, scenario: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     native_failures = {
         "redaction": -1,
         "retry": 1,
+        "verification_path_reselection": 1,
         "repeated": 2,
         "ignored_failed_native": 1,
         "retry_command_budget": 1,
@@ -247,9 +250,25 @@ def test_real_native_turn_requires_distinct_final_verification(
     if scenario == "corrupt":
         journal.path.write_text("{\n")
 
+    if scenario == "verification_path_reselection":
+        trusted = tmp_path / "trusted-bin"
+        trusted.mkdir()
+        checker = trusted / "checker"
+        checker.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+        checker.chmod(0o700)
+        command = ("checker", *command[1:])
+        policy_commands = (command,)
+        monkeypatch.setenv("PATH", str(trusted) + os.pathsep + os.defpath)
+        replacement = tmp_path / "replacement-bin"
+        replacement.mkdir()
+        counterfeit = replacement / "checker"
+        counterfeit.write_text("#!/bin/sh\nexit 0\n")
+        counterfeit.chmod(0o700)
     verifier_policy = VerificationPolicy(policy_commands, ".", 2)
 
     def redact(text: str) -> str:
+        if scenario == "verification_path_reselection":
+            monkeypatch.setenv("PATH", str(replacement) + os.pathsep + os.defpath)
         if scenario == "policy_callback":
             object.__setattr__(
                 verifier_policy, "commands", ((sys.executable, "-c", "pass"),)
@@ -348,7 +367,12 @@ def test_real_native_turn_requires_distinct_final_verification(
         assert len(result.attempt_ids) == 1 and result.usage.commands == 2
         assert launches.read_text() == "x"
         return
-    current = state.read()
+    if scenario == "state_symlink":
+        with pytest.raises(ValueError):
+            state.read()
+        current = CurrentStateStore(tmp_path / "state").read()
+    else:
+        current = state.read()
     assert current is not None and current["caller"] == "preserved"
     if scenario in (
         "no_admission",

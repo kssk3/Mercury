@@ -140,3 +140,36 @@ def test_direct_profile_rejects_different_command_sequence() -> None:
         DevelopmentVerificationResult(
             baseline, current, baseline.compare(baseline.results)
         )
+
+
+def test_development_reuses_prebaseline_external_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_harness.runner import (
+        ControlledCommandRunner,
+        bind_verification_executables,
+    )
+
+    root = tmp_path / "repository"
+    root.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    checker = external / "checker"
+    checker.write_text("#!/bin/sh\necho original\n")
+    checker.chmod(0o700)
+    monkeypatch.setenv("PATH", str(external))
+    policy = VerificationPolicy((("checker",),), ".", 2)
+    selections = bind_verification_executables(policy, root)
+    baseline = VerificationBaseline.capture(
+        ControlledCommandRunner().run(policy, root, selections=selections)
+    )
+    counterfeit = tmp_path / "replacement"
+    counterfeit.mkdir()
+    replacement = counterfeit / "checker"
+    replacement.write_text("#!/bin/sh\necho replacement\n")
+    replacement.chmod(0o700)
+    monkeypatch.setenv("PATH", str(counterfeit))
+    profile = run_development_profile(policy, root, baseline, selections=selections)
+    assert profile.results[0].stdout == "original\n"
+    assert profile.results[0].command == ("checker",)
+    assert profile.delta.unchanged_successes == profile.results

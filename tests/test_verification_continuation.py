@@ -97,6 +97,8 @@ def test_restoration_rejects_changed_order_extra_fields_and_invalid_duration() -
     "corruption",
     [
         "none",
+        "verification_selection",
+        "verification_content",
         "completed_digest",
         "duration",
         "elapsed",
@@ -144,6 +146,15 @@ def test_development_checkpoint_continues_only_final(
         "-c",
         f"from pathlib import Path; p=Path({str(launches)!r}); p.write_text(p.read_text()+'x' if p.exists() else 'x'); assert Path('value').read_text()=='new'",
     )
+    if corruption in ("verification_selection", "verification_content"):
+        external = tmp_path / "external-checker"
+        external.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+        external.chmod(0o700)
+        command = (str(external), *command[1:])
+        if corruption == "verification_selection":
+            alias = tmp_path / "checker-alias"
+            alias.symlink_to(external)
+            command = (str(alias), *command[1:])
     journal = EventJournal(tmp_path / "state")
     store = CurrentStateStore(tmp_path / "state")
     store.write({"caller": "preserved"})
@@ -214,6 +225,14 @@ def test_development_checkpoint_continues_only_final(
         )
     assert launches.read_text() == "xx"
     monkeypatch.setattr(store, "write", original)
+    if corruption == "verification_selection":
+        replacement = tmp_path / "replacement-checker"
+        replacement.write_text(external.read_text())
+        replacement.chmod(0o700)
+        alias.unlink()
+        alias.symlink_to(replacement)
+    elif corruption == "verification_content":
+        external.write_text(external.read_text() + "# changed external selection\n")
     if corruption != "none":
         from agent_harness.attempt import AttemptJournal
 

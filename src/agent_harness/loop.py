@@ -48,7 +48,11 @@ from agent_harness.native_output import (
 from agent_harness.policy import VerificationPolicy
 from agent_harness.repository import read_persistence_bytes
 from agent_harness.retry import RetryLimits, RetryUsage
-from agent_harness.runner import CommandResult, ControlledCommandRunner
+from agent_harness.runner import (
+    CommandResult,
+    ControlledCommandRunner,
+    bind_verification_executables,
+)
 from agent_harness.scope import ScopeTurnError
 from agent_harness.state import CurrentStateStore
 from agent_harness.turn import (
@@ -268,7 +272,9 @@ def _run_loop(
                 (command,), policy.working_directory, policy.timeout_seconds
             )
             command_before = RepositoryObservation.capture(root)
-            result = ControlledCommandRunner().run(single, root)[0]
+            result = ControlledCommandRunner().run(
+                single, root, selections=verification_executables
+            )[0]
             if result.exit_code is None and not result.timed_out:
                 raise _LoopStop("unknown", "command_launch_unknown")
             commands += 1
@@ -326,6 +332,7 @@ def _run_loop(
         directory = (root / policy.working_directory).resolve(strict=True)
         if not directory.is_dir() or not directory.is_relative_to(root):
             return finish("blocked", "invalid_input")
+        verification_executables = bind_verification_executables(policy, root)
         attempts = AttemptJournal(root, journal=journal, state_store=state_store)
         if not _continuation and (
             attempts.read()
@@ -342,6 +349,7 @@ def _run_loop(
                     asdict(admission),
                     asdict(context),
                     asdict(policy),
+                    asdict(verification_executables),
                     [asdict(item) for item in bindings],
                     asdict(budgets),
                     asdict(limits),

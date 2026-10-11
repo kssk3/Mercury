@@ -108,7 +108,8 @@ def _safe_path(root: Path, relative: str, *, create: bool = False) -> Path:
     return current / PurePosixPath(relative).name
 
 
-def _image(root: Path, relative: str) -> FileImage:
+def _image(root: Path, relative: str, budget: int | None = None) -> FileImage:
+    limit = MAX_BYTES if budget is None else budget
     path = _safe_path(root, relative)
     try:
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -122,13 +123,27 @@ def _image(root: Path, relative: str) -> FileImage:
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or mode & 0o7000:
             raise ValueError("unsupported recovery target")
         data = bytearray()
-        while chunk := os.read(descriptor, min(65536, MAX_BYTES + 1 - len(data))):
+        while len(data) < limit:
+            chunk = os.read(descriptor, min(65536, limit - len(data)))
+            if not chunk:
+                break
             data.extend(chunk)
-            if len(data) > MAX_BYTES:
-                raise ValueError("recovery image exceeds budget")
+        # Probe without retaining an over-budget byte, including at zero allowance.
+        if len(data) == limit and os.read(descriptor, 1):
+            raise ValueError("recovery image exceeds budget")
         return FileImage(relative, bytes(data), mode)
     finally:
         os.close(descriptor)
+
+
+def _images(root: Path, paths: tuple[str, ...]) -> tuple[FileImage, ...]:
+    images: list[FileImage] = []
+    remaining = MAX_BYTES
+    for path in paths:
+        image = _image(root, path, remaining)
+        remaining -= len(image.data or b"")
+        images.append(image)
+    return tuple(images)
 
 
 def capture_patch(
@@ -151,9 +166,7 @@ def capture_patch(
         _scope(path, contract)
     before = RepositoryObservation.capture(root)
     _reject_allowed_symlinks(contract, before)
-    images = tuple(_image(root, path) for path in paths)
-    if sum(len(image.data or b"") for image in images) > MAX_BYTES:
-        raise ValueError("recovery images exceed budget")
+    images = _images(root, paths)
     after = RepositoryObservation.capture(root)
     _reject_allowed_symlinks(contract, after)
     if before != after:
@@ -586,11 +599,12 @@ def recover_patch(
         ):
             raise ValueError("invalid recovery correlation")
         _complete_delta(before, after)
-        current = tuple(_image(root, i.path) for i in after.images)
+        current = _images(root, tuple(i.path for i in after.images))
         if live == before.observation and current == before.images:
             return RecoveryResult("already_restored", ())
         if live != after.observation or current != after.images:
             raise ValueError("recovery workspace conflict")
+        del current
     except (
         OSError,
         KeyError,
@@ -626,7 +640,7 @@ def recover_patch(
                     Path(temporary).unlink(missing_ok=True)
             restored.append(old.path)
         if (
-            tuple(_image(root, i.path) for i in before.images) != before.images
+            _images(root, tuple(i.path for i in before.images)) != before.images
             or RepositoryObservation.capture(root) != before.observation
         ):
             return RecoveryResult("partial_unknown", tuple(restored))

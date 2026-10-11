@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -306,22 +307,12 @@ def test_collection_exception_cleans_real_group_and_preserves_original_error(
     unrelated = launch((sys.executable, "-c", "import time; time.sleep(30)"))
 
     def launch_ready_process(
-        command: tuple[str, ...],
-        *,
-        cwd: Path,
-        stdout: int,
-        stderr: int,
-        start_new_session: bool,
-        env: dict[str, str],
+        command: tuple[str, ...] | list[str], **kwargs: Any
     ) -> subprocess.Popen[bytes]:
-        process = launch(
-            command,
-            cwd=cwd,
-            stdout=stdout,
-            stderr=stderr,
-            start_new_session=start_new_session,
-            env=env,
-        )
+        if tuple(command) != policy.commands[0]:
+            # New read-only metadata preflight is not the readiness subject.
+            return launch(command, **kwargs)
+        process = launch(command, **kwargs)
         processes.append(process)
         deadline = time.monotonic() + 5
         while not ready.exists():
@@ -525,3 +516,313 @@ def test_verification_ignores_foreign_git_selectors_and_preserves_command_enviro
     assert not results[0].timed_out
     assert results[1].exit_code == 0
     assert results[1].stdout == "retained\n"
+
+
+@pytest.mark.parametrize(
+    "location",
+    ["direct", "lexical_alias", "resolved_alias", "git_metadata", "separate_metadata"],
+)
+def test_verification_selection_rejects_repository_and_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, location: str
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    init_command: tuple[str, ...] = ("git", "init", "--quiet", str(repository))
+    if location == "separate_metadata":
+        init_command = (
+            "git",
+            "init",
+            "--quiet",
+            "--separate-git-dir",
+            str(tmp_path / "metadata"),
+            str(repository),
+        )
+    subprocess.run(init_command, check=True, timeout=10)
+    external = tmp_path / "checker"
+    external.write_text("#!/bin/sh\nexit 0\n")
+    external.chmod(0o700)
+    internal = repository / "checker"
+    if location == "git_metadata":
+        internal = repository / ".git" / "checker"
+    if location == "separate_metadata":
+        internal = tmp_path / "metadata" / "checker"
+    if location == "lexical_alias":
+        internal.symlink_to(external)
+        selected = internal
+    else:
+        internal.write_text("#!/bin/sh\nexit 0\n")
+        internal.chmod(0o700)
+        if location == "resolved_alias":
+            external.unlink()
+            external.symlink_to(internal)
+            selected = external
+        else:
+            selected = internal
+    with pytest.raises(ValueError, match="outside"):
+        ControlledCommandRunner().run(
+            VerificationPolicy(((str(selected),),), ".", 2), repository
+        )
+
+
+def test_bound_verification_preserves_selection_and_missing_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    external = tmp_path / "external"
+    external.mkdir()
+    root = tmp_path / "repository"
+    root.mkdir()
+    checker = external / "checker"
+    checker.write_text("#!/bin/sh\n/usr/bin/printenv MERCURY_SELECTION\n")
+    checker.chmod(0o700)
+    monkeypatch.setenv("PATH", str(external) + os.pathsep + os.defpath)
+    monkeypatch.setenv("MERCURY_SELECTION", "retained")
+    policy = VerificationPolicy((("checker",), ("missing-checker",)), ".", 2)
+    selected = runner_module.bind_verification_executables(policy, root)
+    baseline = ControlledCommandRunner().run(policy, root, selections=selected)
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    for name in ("checker", "missing-checker"):
+        program = replacement / name
+        program.write_text("#!/bin/sh\necho fabricated\n")
+        program.chmod(0o700)
+    monkeypatch.setenv("PATH", str(replacement))
+    later = ControlledCommandRunner().run(policy, root, selections=selected)
+    assert baseline[0].stdout == later[0].stdout == "retained\n"
+    assert later[0].command == ("checker",)
+    assert baseline[1].exit_code is later[1].exit_code is None
+    assert later[1].stderr and not later[1].timed_out
+
+
+@pytest.mark.parametrize("invocation", ["absolute", "path_name"])
+def test_bound_selection_preserves_external_virtualenv_invocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invocation: str
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    venv = tmp_path / "external-venv"
+    subprocess.run(
+        (sys.executable, "-m", "venv", "--without-pip", str(venv)),
+        check=True,
+        timeout=30,
+    )
+    python = venv / "bin" / "python"
+    monkeypatch.setenv("PATH", str(venv / "bin"))
+    command = (
+        str(python) if invocation == "absolute" else "python",
+        "-c",
+        "import sys; print(sys.prefix)",
+    )
+    policy = VerificationPolicy((command,), ".", 5)
+    selected = runner_module.bind_verification_executables(policy, root)
+    monkeypatch.setenv("PATH", os.defpath)
+    result = ControlledCommandRunner().run(policy, root, selections=selected)[0]
+    assert result.exit_code == 0
+    assert result.stdout.strip() == str(venv)
+    assert result.command == command
+
+
+@pytest.mark.parametrize("invocation", ["relative_path", "relative_path_entry"])
+def test_verification_relative_selection_uses_policy_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invocation: str
+) -> None:
+    root = tmp_path / "repository"
+    (root / "sub").mkdir(parents=True)
+    external = tmp_path / "external"
+    external.mkdir()
+    checker = external / "checker"
+    checker.write_text("#!/bin/sh\npwd\n")
+    checker.chmod(0o700)
+    monkeypatch.setenv("PATH", "../../external")
+    command = (
+        "../../external/checker" if invocation == "relative_path" else "checker",
+    )
+    result = ControlledCommandRunner().run(
+        VerificationPolicy((command,), "sub", 2), root
+    )[0]
+    assert result.exit_code == 0
+    assert result.stdout.strip() == str(root / "sub")
+    assert result.command == command
+
+
+def test_verification_binds_entire_batch_before_any_launch(tmp_path: Path) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    marker = tmp_path / "first-launch"
+    internal = root / "checker"
+    internal.write_text("#!/bin/sh\nexit 0\n")
+    internal.chmod(0o700)
+    first = (
+        sys.executable,
+        "-c",
+        f"from pathlib import Path; Path({str(marker)!r}).touch()",
+    )
+    policy = VerificationPolicy((first, (str(internal),)), ".", 2)
+    with pytest.raises(ValueError, match="outside"):
+        ControlledCommandRunner().run(policy, root)
+    assert not marker.exists()
+
+
+def test_verification_rejects_repository_in_intermediate_alias_chain(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    external = tmp_path / "external-checker"
+    external.write_text("#!/bin/sh\nexit 0\n")
+    external.chmod(0o700)
+    internal_alias = root / "mutable-alias"
+    internal_alias.symlink_to(external)
+    selected = tmp_path / "selected-alias"
+    selected.symlink_to(internal_alias)
+    assert selected.resolve() == external
+    with pytest.raises(ValueError, match="outside"):
+        ControlledCommandRunner().run(
+            VerificationPolicy(((str(selected),),), ".", 2), root
+        )
+
+
+def test_bound_nonregular_selection_stays_typed_launch_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    selected = tmp_path / "external-fifo"
+    os.mkfifo(selected)
+    policy = VerificationPolicy(((str(selected),),), ".", 2)
+    bindings = runner_module.bind_verification_executables(policy, root)
+    selected.unlink()
+    selected.write_text("#!/bin/sh\nexit 0\n")
+    selected.chmod(0o700)
+    result = ControlledCommandRunner().run(policy, root, selections=bindings)[0]
+    assert result.exit_code is None and not result.timed_out
+    assert "regular file" in result.stderr
+
+
+@pytest.mark.parametrize("invocation", ["direct", "path_entry"])
+def test_verification_keeps_symlink_dotdot_lookup_semantics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invocation: str
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    lexical = tmp_path / "lexical"
+    lexical.mkdir()
+    actual = tmp_path / "actual"
+    (actual / "child").mkdir(parents=True)
+    (lexical / "alias").symlink_to(actual / "child", target_is_directory=True)
+    for directory, text in ((lexical, "wrong"), (actual, "selected")):
+        program = directory / "checker"
+        program.write_text(f"#!/bin/sh\necho {text}\n")
+        program.chmod(0o700)
+    spelling = lexical / "alias" / ".." / "checker"
+    monkeypatch.setenv("PATH", str(spelling.parent))
+    command = (str(spelling) if invocation == "direct" else "checker",)
+    result = ControlledCommandRunner().run(
+        VerificationPolicy((command,), ".", 2), root
+    )[0]
+    assert result.stdout == "selected\n"
+    assert result.command == command
+
+
+@pytest.mark.parametrize(
+    "location", ["worktree", "actual_metadata", "common_metadata", "intermediate_alias"]
+)
+def test_verification_rejects_physical_case_alias(
+    tmp_path: Path, location: str
+) -> None:
+    root = tmp_path / "repository"
+    metadata = tmp_path / "metadata"
+    subprocess.run(
+        ("git", "init", "--quiet", "--separate-git-dir", str(metadata), str(root)),
+        check=True,
+        timeout=10,
+    )
+    boundary = root if location in ("worktree", "intermediate_alias") else metadata
+    if location == "common_metadata":
+        linked = tmp_path / "linked-worktree"
+        subprocess.run(
+            (
+                "git",
+                "-C",
+                str(root),
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "fixture",
+            ),
+            check=True,
+            timeout=10,
+        )
+        subprocess.run(
+            (
+                "git",
+                "-C",
+                str(root),
+                "worktree",
+                "add",
+                "--quiet",
+                "--detach",
+                str(linked),
+            ),
+            check=True,
+            timeout=10,
+        )
+        root = linked
+    alias = boundary.with_name(boundary.name.upper())
+    if not alias.exists() or not alias.samefile(boundary):
+        pytest.skip("filesystem does not expose the actual case-alias premise")
+    assert alias.samefile(boundary)
+    marker = tmp_path / "repository-launch"
+    program = boundary / "checker"
+    program.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
+    program.chmod(0o700)
+    selected = alias / "checker"
+    if location == "intermediate_alias":
+        external = tmp_path / "external-checker"
+        external.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
+        external.chmod(0o700)
+        program.unlink()
+        program.symlink_to(external)
+        selected = tmp_path / "selected-alias"
+        selected.symlink_to(alias / "checker")
+        assert selected.resolve() == external
+    first_marker = tmp_path / "first-launch"
+    first = (
+        sys.executable,
+        "-c",
+        f"from pathlib import Path; Path({str(first_marker)!r}).touch()",
+    )
+    with pytest.raises(ValueError, match="outside"):
+        ControlledCommandRunner().run(
+            VerificationPolicy((first, (str(selected),)), ".", 2), root
+        )
+    assert not first_marker.exists()
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("location", ["distinct_directory", "case_sensitive_sibling"])
+def test_verification_accepts_external_distinct_identity(
+    tmp_path: Path, location: str
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    external = tmp_path / (
+        "REPOSITORY" if location == "case_sensitive_sibling" else "external"
+    )
+    external.mkdir(exist_ok=True)
+    if external.samefile(root):
+        pytest.skip("filesystem cannot create a distinct case-sensitive sibling")
+    assert not external.samefile(root)
+    program = external / "checker"
+    program.write_text("#!/bin/sh\necho external\n")
+    program.chmod(0o700)
+    command = (str(program),)
+    policy = VerificationPolicy((command,), ".", 2)
+    bindings = runner_module.bind_verification_executables(policy, root)
+    result = ControlledCommandRunner().run(policy, root, selections=bindings)[0]
+    assert result.exit_code == 0
+    assert result.stdout == "external\n"
+    assert result.command == command

@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -246,6 +248,152 @@ def test_budget_refused_without_truncation(
     with pytest.raises(ValueError, match="budget"):
         recovery.capture_patch(repo, contract(), "a", ("modify",))
     assert (repo / "modify").read_bytes() == b"base"
+
+
+@contextmanager
+def image_read_meter(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[int]]:
+    """Meter actual target reads, excluding separate repository observations."""
+    import agent_harness.recovery as recovery
+
+    original_image, original_read = recovery._image, os.read
+    active = False
+    amounts: list[int] = []
+
+    def read(descriptor: int, size: int) -> bytes:
+        data = original_read(descriptor, size)
+        if active:
+            amounts.append(len(data))
+        return data
+
+    def image(root: Path, relative: str, *args: int) -> recovery.FileImage:
+        nonlocal active
+        active = True
+        try:
+            return original_image(root, relative, *args)
+        finally:
+            active = False
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "read", read)
+        patch.setattr(recovery, "_image", image)
+        yield amounts
+
+
+def test_capture_bounds_aggregate_reads_before_rejection(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agent_harness.recovery as recovery
+
+    monkeypatch.setattr(recovery, "MAX_BYTES", 6)
+    with image_read_meter(monkeypatch) as amounts:
+        with pytest.raises(ValueError, match="budget"):
+            recovery.capture_patch(repo, contract(), "a", ("modify", "delete"))
+    assert sum(amounts) <= recovery.MAX_BYTES + 1
+    assert (repo / "modify").read_bytes() == b"base"
+    assert (repo / "delete").read_bytes() == b"delete"
+
+
+def test_capture_accepts_exact_aggregate_limit_with_empty_and_missing_images(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agent_harness.recovery as recovery
+
+    monkeypatch.setattr(recovery, "MAX_BYTES", 10)
+    (repo / "create").write_bytes(b"")
+    (repo / "modify").chmod(0o751)
+    policy = TaskContract(
+        "restore", (*contract().allowed_paths, "missing"), (), ("exact",)
+    )
+    paths = ("modify", "delete", "create", "missing")
+    snapshot = recovery.capture_patch(repo, policy, "a", paths)
+    assert tuple(image.path for image in snapshot.images) == paths
+    assert tuple(image.data for image in snapshot.images) == (
+        b"base",
+        b"delete",
+        b"",
+        None,
+    )
+    assert snapshot.images[0].mode == 0o751
+
+
+@pytest.mark.parametrize("failure", ["budget", "read", "none"])
+def test_bounded_image_closes_descriptor_on_every_exit(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    import agent_harness.recovery as recovery
+
+    original_open = os.open
+    descriptors: list[int] = []
+
+    def open_target(path: Path, flags: int) -> int:
+        descriptor = original_open(path, flags)
+        descriptors.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(os, "open", open_target)
+    if failure == "read":
+
+        def fail_read(descriptor: int, size: int) -> bytes:
+            raise OSError("read failed")
+
+        monkeypatch.setattr(os, "read", fail_read)
+        with pytest.raises(OSError, match="read failed"):
+            recovery._image(repo, "modify", 4)
+    elif failure == "budget":
+        with pytest.raises(ValueError, match="budget"):
+            recovery._image(repo, "modify", 2)
+    else:
+        assert recovery._image(repo, "modify", 4).data == b"base"
+    assert len(descriptors) == 1
+    with pytest.raises(OSError):
+        os.fstat(descriptors[0])
+
+
+@pytest.mark.parametrize("phase", ["prewrite", "postwrite"])
+def test_recovery_bounds_aggregate_reads_and_retains_artifact(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    import agent_harness.recovery as recovery
+
+    paths = ("modify", "delete")
+    before = recovery.capture_patch(repo, contract(), "a", paths)
+    for path in paths:
+        (repo / path).write_bytes(b"agent")
+    after = recovery.capture_patch(repo, contract(), "a", paths)
+    ref = recovery.seal_patch(before, after, tmp_path.resolve() / "artifact")
+    artifact = ref.path.read_bytes()
+    monkeypatch.setattr(recovery, "MAX_BYTES", 4096)
+    assert len(artifact) < recovery.MAX_BYTES
+
+    def grow_targets() -> None:
+        (repo / "modify").write_bytes(b"m" * 3000)
+        (repo / "delete").write_bytes(b"d" * 2000)
+
+    with image_read_meter(monkeypatch) as amounts:
+        if phase == "prewrite":
+            grow_targets()
+            with pytest.raises(ValueError, match="budget"):
+                recovery.recover_patch(repo, contract(), "a", ref)
+        else:
+            original_replace = os.replace
+            replacements = 0
+
+            def replace(source: str, destination: Path) -> None:
+                nonlocal replacements
+                original_replace(source, destination)
+                replacements += 1
+                if replacements == len(paths):
+                    grow_targets()
+                    amounts.clear()
+
+            monkeypatch.setattr(os, "replace", replace)
+            result = recovery.recover_patch(repo, contract(), "a", ref)
+            assert result.status == "partial_unknown"
+            assert result.restored_paths == paths
+    assert sum(amounts) <= recovery.MAX_BYTES + 1
+    assert (repo / "modify").read_bytes() == b"m" * 3000
+    assert (repo / "delete").read_bytes() == b"d" * 2000
+    assert ref.path.read_bytes() == artifact
 
 
 def test_incomplete_delta_cannot_seal(repo: Path, tmp_path: Path) -> None:
@@ -700,8 +848,10 @@ def test_capture_rejects_image_permission_disagreement(
     (repo / "modify").chmod(0o600)
     original = recovery._image
 
-    def mismatched(root: Path, relative: str) -> recovery.FileImage:
-        return replace(original(root, relative), mode=0o666)
+    def mismatched(
+        root: Path, relative: str, budget: int | None = None
+    ) -> recovery.FileImage:
+        return replace(original(root, relative, budget), mode=0o666)
 
     monkeypatch.setattr(recovery, "_image", mismatched)
     with pytest.raises(ValueError, match="observation disagreement"):

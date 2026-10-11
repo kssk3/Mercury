@@ -40,6 +40,14 @@ merely to provoke another review. Required hosted checks triggered by publicatio
 are subsequent exact-HEAD integration gates; a successful push is not their PASS.
 Record local platform checks separately from hosted CI.
 
+Before final independent review, the integration owner accepts the actual
+implementation diff and attributable command evidence against the admitted
+contract: scope, consumer coverage, unresolved failures, environment assumptions,
+reused evidence and its invalidations. Record instruction compliance separately
+from result quality. This read-only handoff check does not replay passing tests
+or replace the independent correctness review. Resolve incomplete handoffs within
+the admitted budget before spending a final review pass.
+
 ## Bound the whole PR or delivery outcome
 
 Default aggregate: two substantive independent passes (initial plus one bounded
@@ -85,6 +93,12 @@ Changed relevant inputs require renewed affected checks/review; a changed base
 requires impact assessment. New-HEAD statuses/approval must bind the exact full
 SHA even when underlying content evidence is reusable. A newly reproduced defect
 can invalidate approval even at an unchanged SHA.
+
+Name affected contracts and consumer test nodes before execution. Reuse unchanged
+applicable evidence by revision or digest; do not turn an affected check request
+into unexplained whole-file or local full-suite replay. Fixture/setup failures
+are distinct from reproduced product defects and retain their original evidence
+and deadlines. Complete hosted source CI remains an exact-HEAD integration gate.
 
 Reuse one current report for status, counters, evidence and next gate. Preserve
 immutable attributable per-run execution logs and review diff packets. Publish
