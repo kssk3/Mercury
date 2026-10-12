@@ -434,7 +434,6 @@ def test_runner_drains_continuous_output_until_timeout_and_continues(
     def no_communicate(*args: object, **kwargs: object) -> None:
         pytest.fail("runner must never buffer output through communicate")
 
-    monkeypatch.setattr(subprocess.Popen, "communicate", no_communicate)
     read = os.read
     sizes: list[int] = []
 
@@ -443,16 +442,21 @@ def test_runner_drains_continuous_output_until_timeout_and_continues(
         sizes.append(size)
         return read(fd, size)
 
-    monkeypatch.setattr(os, "read", bounded_read)
     command = (
         sys.executable,
         "-c",
         "import os\nwhile True: os.write(1, b'a' * 8192); os.write(2, b'b' * 8192)",
     )
     later = (sys.executable, "-c", "print('after noise')")
+    policy = VerificationPolicy((command, later), ".", 1)
+    selections = runner_module.bind_verification_executables(policy, tmp_path)
+    monkeypatch.setattr(subprocess.Popen, "communicate", no_communicate)
+    monkeypatch.setattr(os, "read", bounded_read)
+    with pytest.raises(pytest.fail.Exception, match="never buffer"):
+        subprocess.Popen.communicate(object())  # type: ignore[arg-type]
     started = time.monotonic()
     results = ControlledCommandRunner(max_output_bytes=4096).run(
-        VerificationPolicy((command, later), ".", 1), tmp_path
+        policy, tmp_path, selections=selections
     )
     assert time.monotonic() - started < 4
     assert results[0].timed_out
@@ -825,4 +829,408 @@ def test_verification_accepts_external_distinct_identity(
     result = ControlledCommandRunner().run(policy, root, selections=bindings)[0]
     assert result.exit_code == 0
     assert result.stdout == "external\n"
+    assert result.command == command
+
+
+def test_indirect_verification_uses_frozen_external_resolvers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    interpreter = external / "generic-runtime"
+    interpreter.symlink_to("/bin/sh")
+    helper = external / "generic-helper"
+    helper.write_text("#!/bin/sh\necho trusted\n")
+    helper.chmod(0o700)
+    checker = external / "checker"
+    checker.write_text("#!/usr/bin/env generic-runtime\ngeneric-helper\n")
+    checker.chmod(0o700)
+    monkeypatch.setenv(
+        "PATH", str(root) + os.pathsep + str(external) + os.pathsep + os.defpath
+    )
+    policy = VerificationPolicy(((str(checker),),), ".", 2)
+    bindings = runner_module.bind_verification_executables(policy, root)
+    for name in ("generic-runtime", "generic-helper"):
+        planted = root / name
+        planted.write_text("#!/bin/sh\necho fabricated\n")
+        planted.chmod(0o700)
+    monkeypatch.setenv("PATH", str(root))
+    result = ControlledCommandRunner().run(policy, root, selections=bindings)[0]
+    assert result.exit_code == 0
+    assert result.stdout == "trusted\n"
+
+
+@pytest.mark.parametrize("entry", ["", ".", "alias", ".git", "case_alias"])
+def test_child_search_excludes_mutable_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    subprocess.run(("git", "init", "--quiet", str(root)), check=True, timeout=10)
+    (root / "alias").symlink_to(root, target_is_directory=True)
+    value = str(root).upper() if entry == "case_alias" else entry
+    if entry == "case_alias":
+        alias = Path(value)
+        if not alias.exists() or not alias.samefile(root):
+            pytest.skip("filesystem does not expose this physical case alias")
+        assert alias.samefile(root)
+    monkeypatch.setenv("PATH", value)
+    command = (sys.executable, "-c", "import os; print(os.environ['PATH'])")
+    policy = VerificationPolicy((command,), ".", 2)
+    binding = runner_module.bind_verification_executables(policy, root)
+    result = ControlledCommandRunner().run(policy, root, selections=binding)[0]
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "/dev/null/mercury-no-search"
+    assert os.environ["PATH"] == value
+
+
+@pytest.mark.parametrize("alias", [False, True])
+def test_rejects_repository_shebang_interpreter(tmp_path: Path, alias: bool) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    interpreter = root / "runtime"
+    interpreter.write_text("#!/bin/sh\nexit 0\n")
+    interpreter.chmod(0o700)
+    if alias:
+        link = tmp_path / "runtime-alias"
+        link.symlink_to(interpreter)
+        interpreter = link
+    checker = tmp_path / "checker"
+    checker.write_text(f"#!{interpreter}\nexit 0\n")
+    checker.chmod(0o700)
+    with pytest.raises(ValueError, match="outside"):
+        runner_module.bind_verification_executables(
+            VerificationPolicy(((str(checker),),), ".", 2), root
+        )
+
+
+def test_loader_resolvers_preserve_safe_caller_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    monkeypatch.setenv("PYTHONPATH", str(root) + os.pathsep + str(external))
+    monkeypatch.setenv("MERCURY_CALLER", "retained")
+    command = (
+        sys.executable,
+        "-c",
+        "import os; print(os.environ['PYTHONPATH']); print(os.environ['MERCURY_CALLER'])",
+    )
+    policy = VerificationPolicy((command,), ".", 2)
+    binding = runner_module.bind_verification_executables(policy, root)
+    monkeypatch.setenv("PYTHONPATH", str(root))
+    result = ControlledCommandRunner().run(policy, root, selections=binding)[0]
+    assert result.stdout == str(external) + "\nretained\n"
+    monkeypatch.setenv("LD_PRELOAD", str(root / "planted-loader"))
+    with pytest.raises(ValueError, match="outside"):
+        runner_module.bind_verification_executables(policy, root)
+
+
+@pytest.mark.parametrize("declaration", ["generic-runtime", "-S generic-runtime -e"])
+def test_literal_env_split_shebang(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, declaration: str
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    (tmp_path / "generic-runtime").symlink_to("/bin/sh")
+    checker = tmp_path / "checker"
+    checker.write_text(f"#!/usr/bin/env {declaration}\necho literal\n")
+    checker.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    result = ControlledCommandRunner().run(
+        VerificationPolicy(((str(checker),),), ".", 2), root
+    )[0]
+    assert result.exit_code == 0
+    assert result.stdout == "literal\n"
+
+
+@pytest.mark.parametrize("name", ["ENV", "BASH_ENV", "PYTHONSTARTUP"])
+def test_literal_startup_path_is_frozen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    startup = tmp_path / "startup file"
+    startup.write_text("export MERCURY_STARTUP=trusted\n")
+    monkeypatch.setenv(name, str(startup))
+    command = (sys.executable, "-c", f"import os; print(os.environ[{name!r}])")
+    policy = VerificationPolicy((command,), ".", 2)
+    binding = runner_module.bind_verification_executables(policy, root)
+    monkeypatch.setenv(name, str(root / "unsafe"))
+    result = ControlledCommandRunner().run(policy, root, selections=binding)[0]
+    assert result.stdout == str(startup) + "\n"
+    with pytest.raises(ValueError, match="outside"):
+        runner_module.bind_verification_executables(policy, root)
+
+
+@pytest.mark.parametrize("name", ["ENV", "BASH_ENV"])
+@pytest.mark.parametrize(
+    "value", ["$HOME/startup", "$(echo unsafe)", "`pwd`/startup", "~/startup"]
+)
+def test_dynamic_startup_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match="ambiguous"):
+        runner_module.bind_verification_executables(
+            VerificationPolicy(((sys.executable,),), ".", 2), tmp_path
+        )
+
+
+def test_interpreter_proof_uses_bounded_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    checker = tmp_path / "checker"
+    checker.write_text("#!/bin/sh\nexit 0\n")
+    checker.chmod(0o700)
+
+    def forbidden(*args: object, **kwargs: object) -> bytes:
+        pytest.fail("whole-file read is not a finite streaming proof")
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+    binding = runner_module.bind_verification_executables(
+        VerificationPolicy(((str(checker),),), ".", 2), root
+    )
+    assert binding.executables[0].launch_error is None
+    assert binding.interpreter_proofs
+
+
+@pytest.mark.parametrize(
+    "kind", ["fifo", "directory", "missing", "cycle", "depth", "header"]
+)
+def test_interpreter_refusal_is_finite(tmp_path: Path, kind: str) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    checker = tmp_path / "checker"
+    runtime = tmp_path / "runtime"
+    checker.write_text(f"#!{runtime}\nexit 0\n")
+    checker.chmod(0o700)
+    if kind == "fifo":
+        os.mkfifo(runtime)
+    elif kind == "directory":
+        runtime.mkdir()
+    elif kind == "cycle":
+        runtime.write_text(f"#!{checker}\n")
+    elif kind == "depth":
+        for index in range(12):
+            path = runtime if index == 0 else tmp_path / f"runtime{index}"
+            path.write_text(f"#!{tmp_path / f'runtime{index + 1}'}\n")
+    elif kind == "header":
+        runtime.write_text("#!/bin/sh " + "x" * 4096)
+    script = (
+        "from pathlib import Path; from agent_harness.runner import bind_verification_executables; "
+        "from agent_harness.policy import VerificationPolicy; "
+        f"p=VerificationPolicy((({str(checker)!r},),), '.', 2); "
+        f"print(bind_verification_executables(p, Path({str(root)!r})).executables[0].launch_error)"
+    )
+    completed = subprocess.run(
+        (sys.executable, "-c", script), capture_output=True, text=True, timeout=3
+    )
+    if kind in ("cycle", "depth", "header"):
+        assert completed.returncode != 0
+        assert "ValueError" in completed.stderr
+    else:
+        assert completed.returncode == 0
+        assert completed.stdout.strip() != "None"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        "-S generic-runtime $ARG",
+        "-S generic-runtime \\n",
+        "-S generic-runtime #comment",
+        "-S -i generic-runtime",
+        "-S PATH=/tmp generic-runtime",
+        "-S 'unfinished",
+    ],
+)
+def test_ambiguous_env_split_is_refused(tmp_path: Path, arguments: str) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    checker = tmp_path / "checker"
+    checker.write_text(f"#!/usr/bin/env {arguments}\n")
+    checker.chmod(0o700)
+    with pytest.raises(ValueError, match="ambiguous"):
+        runner_module.bind_verification_executables(
+            VerificationPolicy(((str(checker),),), ".", 2), root
+        )
+
+
+def test_bash_startup_uses_frozen_literal_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    startup = tmp_path / "startup file"
+    startup.write_text("export MERCURY_STARTUP=trusted\n")
+    planted = root / "startup"
+    planted.write_text("export MERCURY_STARTUP=fabricated\n")
+    monkeypatch.setenv("BASH_ENV", str(startup))
+    policy = VerificationPolicy(
+        (("/bin/bash", "-c", 'printf "%s\\n" "$MERCURY_STARTUP"'),), ".", 2
+    )
+    binding = runner_module.bind_verification_executables(policy, root)
+    monkeypatch.setenv("BASH_ENV", str(planted))
+    assert (
+        ControlledCommandRunner().run(policy, root, selections=binding)[0].stdout
+        == "trusted\n"
+    )
+
+
+def test_file_proof_bounds_reads_and_detects_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "runtime"
+    path.write_bytes(b"x" * 150000)
+    original = os.read
+    sizes = []
+
+    def changed(fd: int, count: int) -> bytes:
+        sizes.append(count)
+        assert 0 < count <= 65536
+        result = original(fd, count)
+        if len(sizes) == 1:
+            with path.open("ab") as output:
+                output.write(b"changed")
+        return result
+
+    monkeypatch.setattr(os, "read", changed)
+    with pytest.raises(OSError, match="changed"):
+        runner_module._file_proof(path)
+    assert len(sizes) >= 3
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("PYTHONHOME", "home one:home two"),
+        ("LD_PRELOAD", "loader1 loader2"),
+        ("DYLD_INSERT_LIBRARIES", "loader one:loader two"),
+    ],
+)
+def test_resolver_value_separators(tmp_path: Path, name: str, value: str) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    separator = " " if name == "LD_PRELOAD" else ":"
+    paths = [str(tmp_path / part) for part in value.split(separator)]
+    environment = {name: separator.join(paths)}
+    frozen = dict(runner_module._resolver_environment(environment, root, [root]))
+    assert frozen[name] == ":".join(paths)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        "-S 'generic-runtime' -e",
+        '-S "generic-runtime" -e',
+        "-S generic-runtime '-e'",
+        "'generic-runtime'",
+        "-S generic-runtime\u00a0-e",
+    ],
+)
+def test_nonliteral_env_shebang_refuses_batch_before_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: str
+) -> None:
+    # Contract: unsupported env syntax refuses the entire batch before launch.
+    # No argv rewriting or platform-specific interpretation is guaranteed.
+    root = tmp_path / "repository"
+    root.mkdir()
+    marker = root / "launched"
+    (tmp_path / "generic-runtime").symlink_to("/bin/sh")
+    checker = tmp_path / "checker"
+    checker.write_text(f"#!/usr/bin/env {arguments}\necho unsafe\n")
+    checker.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    first = (
+        sys.executable,
+        "-c",
+        f"from pathlib import Path; Path({str(marker)!r}).touch()",
+    )
+    policy = VerificationPolicy((first, (str(checker),)), ".", 2)
+    with pytest.raises(ValueError, match="ambiguous"):
+        ControlledCommandRunner().run(policy, root)
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    "declaration,indirect",
+    [
+        (b"/usr/bin/env \xc2\xa0generic-runtime", False),
+        (b"\xc2\xa0/usr/bin/env generic-runtime", False),
+        (b"/usr/bin/env\xc2\xa0generic-runtime", False),
+        (b"/usr/bin/env generic-runtime\xc2\xa0", False),
+        (b"\x0b/usr/bin/env generic-runtime", False),
+        (b"/usr/bin/env\x0cgeneric-runtime", False),
+        (b"/usr/bin/env generic-runtime\r", False),
+        (b"/usr/bin/env \x1cgeneric-runtime", False),
+        (b"/usr/bin/env \xc2\xa0generic-runtime", True),
+    ],
+)
+def test_raw_shebang_whitespace_refuses_batch_before_launch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    declaration: bytes,
+    indirect: bool,
+) -> None:
+    # Contract: raw unsupported whitespace/control syntax refuses the batch
+    # before launch, including a declaration in an inspected interpreter chain.
+    root = tmp_path / "repository"
+    root.mkdir()
+    marker = root / "launched"
+    (tmp_path / "generic-runtime").symlink_to("/bin/sh")
+    checker = tmp_path / "checker"
+    malformed = tmp_path / "interpreter" if indirect else checker
+    malformed.write_bytes(b"#!" + declaration + b"\necho unsupported\n")
+    malformed.chmod(0o700)
+    if indirect:
+        checker.write_text(f"#!{malformed}\n")
+        checker.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    first = (
+        sys.executable,
+        "-c",
+        f"from pathlib import Path; Path({str(marker)!r}).touch()",
+    )
+    policy = VerificationPolicy((first, (str(checker),)), ".", 2)
+    with pytest.raises(ValueError, match="ambiguous"):
+        ControlledCommandRunner().run(policy, root)
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        " /bin/sh\t ",
+        "\t/usr/bin/env\tgeneric-runtime",
+        " /usr/bin/env\t-S generic-runtime -e\t ",
+        "unicode_interpreter",
+    ],
+)
+def test_shebang_preserves_literal_separators_and_unicode_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, declaration: str
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    runtime = tmp_path / "runtime-λ"
+    runtime.symlink_to("/bin/sh")
+    (tmp_path / "generic-runtime").symlink_to("/bin/sh")
+    checker = tmp_path / "checker"
+    if declaration == "unicode_interpreter":
+        declaration = str(runtime)
+    checker.write_text(f"#!{declaration}\necho supported\n")
+    checker.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    command = (str(checker),)
+    result = ControlledCommandRunner().run(
+        VerificationPolicy((command,), ".", 2), root
+    )[0]
+    assert result.exit_code == 0
+    assert result.stdout == "supported\n"
     assert result.command == command

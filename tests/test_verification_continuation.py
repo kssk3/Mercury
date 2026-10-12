@@ -99,6 +99,9 @@ def test_restoration_rejects_changed_order_extra_fields_and_invalid_duration() -
         "none",
         "verification_selection",
         "verification_content",
+        "verification_resolver",
+        "verification_interpreter",
+        "verification_startup",
         "completed_digest",
         "duration",
         "elapsed",
@@ -146,10 +149,22 @@ def test_development_checkpoint_continues_only_final(
         "-c",
         f"from pathlib import Path; p=Path({str(launches)!r}); p.write_text(p.read_text()+'x' if p.exists() else 'x'); assert Path('value').read_text()=='new'",
     )
-    if corruption in ("verification_selection", "verification_content"):
+    if corruption == "verification_startup":
+        monkeypatch.setenv("BASH_ENV", str(tmp_path / "startup file"))
+    if corruption in (
+        "verification_selection",
+        "verification_content",
+        "verification_interpreter",
+    ):
         external = tmp_path / "external-checker"
         external.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
         external.chmod(0o700)
+        if corruption == "verification_interpreter":
+            interpreter = tmp_path / "external-interpreter"
+            # Use a real native interpreter without nesting scripts or copying
+            # system binaries; only its external alias changes after checkpoint.
+            interpreter.symlink_to("/bin/sh")
+            external.write_text(f'#!{interpreter}\nexec "{sys.executable}" "$@"\n')
         command = (str(external), *command[1:])
         if corruption == "verification_selection":
             alias = tmp_path / "checker-alias"
@@ -231,6 +246,15 @@ def test_development_checkpoint_continues_only_final(
         replacement.chmod(0o700)
         alias.unlink()
         alias.symlink_to(replacement)
+    elif corruption == "verification_resolver":
+        monkeypatch.setenv(
+            "PATH", str(tmp_path) + __import__("os").pathsep + __import__("os").defpath
+        )
+    elif corruption == "verification_interpreter":
+        interpreter.unlink()
+        interpreter.symlink_to(sys.executable)
+    elif corruption == "verification_startup":
+        monkeypatch.setenv("BASH_ENV", str(tmp_path / "different startup"))
     elif corruption == "verification_content":
         external.write_text(external.read_text() + "# changed external selection\n")
     if corruption != "none":

@@ -40,6 +40,20 @@ flowchart LR
 
 An AI explanation does not replace actual check results. Observing scope does
 not prevent every unwanted edit, and Mercury does not provide a security sandbox.
+Verification binds caller-managed external entry programs and declared shebang
+interpreters before native work, and freezes safe external executable and common
+loader/startup search paths. Caller programs must honor that supplied environment.
+Explicit workspace execution, workspace imports, plugin discovery, program-specific
+configuration and intentional search overrides remain caller trust decisions.
+Absolute interpreters, conventional `env program`, and simple unquoted literal
+`env -S program arguments` are supported. Quoting, dynamic expansion,
+backslash/comment dialects, non-ASCII env syntax and env lookup overrides are
+refused before any command in the batch launches. Native script invocation and
+the original command evidence are preserved. Literal external `ENV`, `BASH_ENV` and
+`PYTHONSTARTUP` paths preserve spaces; Python home pairs and loader lists retain
+their own separators. Caller-managed runtime dependencies must remain trusted.
+Entry and interpreter proofs use finite regular-file reads and bounded shebang
+recursion. External virtualenv invocation is preserved.
 
 ## Try it today: a simulator with no AI
 
