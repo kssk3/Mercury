@@ -31,6 +31,8 @@ class VerificationPolicy:
         path = PurePath(self.working_directory)
         if path.is_absolute():
             raise ValueError("working directory must be relative")
+        if any(part.casefold() == ".git" for part in path.parts):
+            raise ValueError("working directory must not enter Git metadata")
         if ".." in path.parts:
             raise ValueError("working directory must not contain parent traversal")
         if (

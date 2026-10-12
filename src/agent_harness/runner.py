@@ -292,18 +292,7 @@ def _bind_interpreters(
         inspect(_external_path(Path(program), boundaries))
 
 
-def bind_verification_executables(
-    policy: VerificationPolicy, repository: Path | str
-) -> VerificationExecutables:
-    """Select caller-managed external programs before writable work.
-
-    Paths preserve external virtualenv invocation semantics. This point-in-time
-    selection and content proof does not confine processes or freeze host files.
-    """
-    root = Path(repository).resolve()
-    directory = (root / policy.working_directory).resolve()
-    if not directory.is_relative_to(root):
-        raise ValueError("policy working directory must stay inside the repository")
+def _verification_boundaries(root: Path) -> list[Path]:
     boundaries = [root]
     for selector in ("--absolute-git-dir", "--git-common-dir"):
         query = _git_query(root, selector)
@@ -317,6 +306,30 @@ def bind_verification_executables(
         if not metadata.is_absolute():
             metadata = root / metadata
         boundaries.extend((Path(os.path.abspath(metadata)), metadata.resolve()))
+    return boundaries
+
+
+def _check_verification_directory(
+    directory: Path, root: Path, boundaries: list[Path]
+) -> None:
+    if _within_verification_boundary(directory, boundaries[1:]):
+        raise ValueError("policy working directory must not enter Git metadata")
+    if not directory.is_relative_to(root):
+        raise ValueError("policy working directory must stay inside the repository")
+
+
+def bind_verification_executables(
+    policy: VerificationPolicy, repository: Path | str
+) -> VerificationExecutables:
+    """Select caller-managed external programs before writable work.
+
+    Paths preserve external virtualenv invocation semantics. This point-in-time
+    selection and content proof does not confine processes or freeze host files.
+    """
+    root = Path(repository).resolve()
+    directory = (root / policy.working_directory).resolve()
+    boundaries = _verification_boundaries(root)
+    _check_verification_directory(directory, root, boundaries)
     environment = git_read_environment()
     search_path = os.pathsep.join(
         str(directory / entry)
@@ -436,9 +449,12 @@ class ControlledCommandRunner:
     ) -> tuple[CommandResult, ...]:
         repository_root = Path(repository).resolve()
         working_directory = (repository_root / policy.working_directory).resolve()
-        if not working_directory.is_relative_to(repository_root):
-            raise ValueError("policy working directory must stay inside the repository")
-
+        if selections is not None:
+            _check_verification_directory(
+                working_directory,
+                repository_root,
+                _verification_boundaries(repository_root),
+            )
         selected = selections or bind_verification_executables(policy, repository_root)
         if selected.repository != str(
             repository_root

@@ -489,9 +489,6 @@ def test_runner_default_budget_is_one_mib_per_stream(tmp_path: Path) -> None:
 def test_runner_drains_continuous_output_until_timeout_and_continues(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def no_communicate(*args: object, **kwargs: object) -> None:
-        pytest.fail("runner must never buffer output through communicate")
-
     read = os.read
     sizes: list[int] = []
 
@@ -508,10 +505,34 @@ def test_runner_drains_continuous_output_until_timeout_and_continues(
     later = (sys.executable, "-c", "print('after noise')")
     policy = VerificationPolicy((command, later), ".", 1)
     selections = runner_module.bind_verification_executables(policy, tmp_path)
-    monkeypatch.setattr(subprocess.Popen, "communicate", no_communicate)
+    communicate = subprocess.Popen.communicate
+    verification_argv = []
+    for selection in selections.executables:
+        assert selection.selected is not None
+        verification_argv.append((selection.selected, *selection.command[1:]))
+
+    def no_verifier_communicate(
+        process: subprocess.Popen[Any], *args: Any, **kwargs: Any
+    ) -> Any:
+        if any(
+            process.args == argv or process.args == list(argv)
+            for argv in verification_argv
+        ):
+            pytest.fail("runner must never buffer output through communicate")
+        return communicate(process, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess.Popen, "communicate", no_verifier_communicate)
     monkeypatch.setattr(os, "read", bounded_read)
-    with pytest.raises(pytest.fail.Exception, match="never buffer"):
-        subprocess.Popen.communicate(object())  # type: ignore[arg-type]
+    for argv in verification_argv:
+        with subprocess.Popen(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        ) as process:
+            try:
+                with pytest.raises(pytest.fail.Exception, match="never buffer"):
+                    process.communicate(timeout=1)
+            finally:
+                process.kill()
+                process.wait(timeout=5)
     started = time.monotonic()
     results = ControlledCommandRunner(max_output_bytes=4096).run(
         policy, tmp_path, selections=selections
@@ -1293,3 +1314,47 @@ def test_shebang_preserves_literal_separators_and_unicode_path(
     assert result.exit_code == 0
     assert result.stdout == "supported\n"
     assert result.command == command
+
+
+@pytest.mark.parametrize("metadata_kind", ["ordinary", "separate", "common"])
+@pytest.mark.parametrize("explicit_selection", [False, True])
+def test_metadata_cwd_alias_is_refused_before_external_side_effects(
+    tmp_path: Path, metadata_kind: str, explicit_selection: bool
+) -> None:
+    from dataclasses import replace
+
+    root = (tmp_path / "repo").resolve()
+    root.mkdir()
+    metadata = root / "administration"
+    args = ["git", "init", "--quiet"]
+    if metadata_kind != "ordinary":
+        args.extend(["--separate-git-dir", str(metadata)])
+    subprocess.run([*args, str(root)], check=True, timeout=10)
+    if metadata_kind == "ordinary":
+        metadata = root / ".git"
+    if metadata_kind == "common":
+        common = root / "common"
+        common.mkdir()
+        (metadata / "commondir").write_text(str(common) + "\n")
+        for name in ("objects", "refs"):
+            (common / name).mkdir()
+        (common / "config").write_text((metadata / "config").read_text())
+        metadata = common
+    (root / "innocuous").symlink_to(metadata, target_is_directory=True)
+    marker = tmp_path / "marker"
+    command = (
+        sys.executable,
+        "-c",
+        f"from pathlib import Path; Path({str(marker)!r}).touch()",
+    )
+    policy = VerificationPolicy((command,), "innocuous", 5)
+    selection = None
+    if explicit_selection:
+        safe = VerificationPolicy((command,), ".", 5)
+        selection = replace(
+            runner_module.bind_verification_executables(safe, root),
+            working_directory=str(metadata.resolve()),
+        )
+    with pytest.raises(ValueError, match="Git metadata"):
+        ControlledCommandRunner().run(policy, root, selections=selection)
+    assert not marker.exists()

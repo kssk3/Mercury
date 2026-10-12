@@ -132,3 +132,9 @@ def test_policy_preserves_valid_current_command_and_cwd_values(
     assert policy.commands == (("pytest", " "),)
     assert policy.working_directory == working_directory
     assert policy.timeout_seconds == timeout_seconds
+
+
+@pytest.mark.parametrize("directory", [".git", "nested/.GiT/hooks", ".GIT/objects"])
+def test_policy_refuses_git_metadata_working_directory(directory: str) -> None:
+    with pytest.raises(ValueError, match="Git metadata"):
+        VerificationPolicy((("checker",),), directory, 5)

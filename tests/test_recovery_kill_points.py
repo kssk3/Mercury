@@ -35,6 +35,9 @@ from agent_harness.retry import RetryLimits
 from agent_harness.startup import reconcile_startup
 from agent_harness.state import CurrentStateStore
 
+CHILD_LOOP_BUDGET_SECONDS = 40
+CHILD_STARTUP_ALLOWANCE_SECONDS = 10
+
 BOUNDARIES = (
     "loop_start",
     "turn_intent",
@@ -67,13 +70,14 @@ def _snapshot(directory: Path) -> dict[str, bytes]:
     }
 
 
-def _line(channel: socket.socket) -> str:
+def _line(channel: socket.socket, *, deadline: float | None = None) -> str:
     data = bytearray()
-    deadline = time.monotonic() + 10
+    if deadline is None:
+        deadline = time.monotonic() + 10
     while not data.endswith(b"\n"):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError("owned child handshake exceeded 10 seconds")
+            raise TimeoutError("owned child handshake deadline expired")
         channel.settimeout(remaining)
         part = channel.recv(1)
         if not part:
@@ -148,7 +152,7 @@ def _child(directory: str, boundary: str, descriptor: int) -> None:
         journal=Journal(base / "external"),
         state_store=Store(base / "external"),
         budgets=TurnBudgets(3, 16000, 128, 128, 128),
-        limits=RetryLimits(0, 1, 8, 40),
+        limits=RetryLimits(0, 1, 8, CHILD_LOOP_BUDGET_SECONDS),
         redactor=lambda text: text,
         max_output_bytes=128,
     )
@@ -188,6 +192,11 @@ def _kill_at(directory: Path, boundary: str) -> int:
     process: subprocess.Popen[bytes] | None = None
     with (directory / "child.log").open("wb") as log:
         try:
+            boundary_deadline = (
+                time.monotonic()
+                + CHILD_LOOP_BUDGET_SECONDS
+                + CHILD_STARTUP_ALLOWANCE_SECONDS
+            )
             process = subprocess.Popen(
                 [
                     sys.executable,
@@ -206,7 +215,9 @@ def _kill_at(directory: Path, boundary: str) -> int:
                 stderr=log,
             )
             child.close()
-            assert json.loads(_line(parent)) == {"boundary": boundary}
+            assert json.loads(_line(parent, deadline=boundary_deadline)) == {
+                "boundary": boundary
+            }
             # Inspect actual surviving persistence before acknowledging the cut.
             journal = EventJournal(directory / "external")
             events = journal.read()

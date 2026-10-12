@@ -597,12 +597,16 @@ def test_native_env_shebang_retry_ignores_planted_interpreter(
     )
 
 
+@pytest.mark.parametrize(
+    "path_alias", [False, True], ids=["physical", "controlled-alias"]
+)
 @pytest.mark.parametrize("shebang", ["absolute", "env", "env-S", "virtualenv"])
 def test_native_shebang_preserves_external_runtime_and_caller_environment(
     repository: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     shebang: str,
+    path_alias: bool,
 ) -> None:
     import venv
 
@@ -613,8 +617,16 @@ def test_native_shebang_preserves_external_runtime_and_caller_environment(
     (external / "python3").symlink_to(sys.executable)
     pythonpath = tmp_path / "external-modules"
     pythonpath.mkdir()
+    search = external
+    additional: tuple[str, ...] = ()
+    if path_alias:
+        search = tmp_path / "external-alias"
+        search.symlink_to(external, target_is_directory=True)
+        second = tmp_path / "second-external"
+        second.mkdir()
+        additional = (str(second.resolve()),)
     monkeypatch.setenv(
-        "PATH", os.pathsep.join((str(repository), str(external), os.defpath))
+        "PATH", os.pathsep.join((str(repository), str(search), *additional, os.defpath))
     )
     monkeypatch.setenv(
         "PYTHONPATH", os.pathsep.join((str(repository), str(pythonpath)))
@@ -658,7 +670,15 @@ def test_native_shebang_preserves_external_runtime_and_caller_environment(
     assert result.process_status == "successful_exit"
     returned = json.loads(result.stdout.text)
     assert returned["prefix"] == prefix
-    assert returned["path"] == os.pathsep.join((str(external), os.defpath))
+    expected_directories = (
+        str(external.resolve()),
+        *additional,
+        *(str(Path(entry).resolve()) for entry in os.defpath.split(os.pathsep)),
+    )
+    assert returned["path"].split(os.pathsep) == list(expected_directories)
+    assert str(repository) not in returned["path"].split(os.pathsep)
+    if path_alias:
+        assert str(search) not in returned["path"].split(os.pathsep)
     assert returned["pythonpath"] == str(pythonpath)
     assert returned["caller"] == "configuration/authentication remains active"
     assert returned["config"] == str(tmp_path / "caller-config")

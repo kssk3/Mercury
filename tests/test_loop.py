@@ -136,6 +136,23 @@ def test_real_native_turn_requires_distinct_final_verification(
     executable = _native_fixture(
         tmp_path, root, native_launches, scenario, native_failures
     )
+    if scenario == "unreadable_protected":
+        original_open = os.open
+        protected = root / "protected"
+
+        def unreadable_open(
+            path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            # Mode bits do not establish unreadability when tests run as root.
+            if path == protected and flags & os.O_ACCMODE == os.O_RDONLY:
+                raise PermissionError("owned protected leaf is unreadable")
+            return original_open(path, flags, mode, dir_fd=dir_fd)
+
+        monkeypatch.setattr(os, "open", unreadable_open)
     command = (
         sys.executable,
         "-c",

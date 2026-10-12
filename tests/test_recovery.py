@@ -293,7 +293,7 @@ def test_capture_bounds_aggregate_reads_before_rejection(
     assert (repo / "delete").read_bytes() == b"delete"
 
 
-def test_capture_accepts_exact_aggregate_limit_with_empty_and_missing_images(
+def test_images_accept_exact_raw_aggregate_limit_with_empty_and_missing_images(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import agent_harness.recovery as recovery
@@ -301,19 +301,16 @@ def test_capture_accepts_exact_aggregate_limit_with_empty_and_missing_images(
     monkeypatch.setattr(recovery, "MAX_BYTES", 10)
     (repo / "create").write_bytes(b"")
     (repo / "modify").chmod(0o751)
-    policy = TaskContract(
-        "restore", (*contract().allowed_paths, "missing"), (), ("exact",)
-    )
     paths = ("modify", "delete", "create", "missing")
-    snapshot = recovery.capture_patch(repo, policy, "a", paths)
-    assert tuple(image.path for image in snapshot.images) == paths
-    assert tuple(image.data for image in snapshot.images) == (
+    images = recovery._images(repo, paths)
+    assert tuple(image.path for image in images) == paths
+    assert tuple(image.data for image in images) == (
         b"base",
         b"delete",
         b"",
         None,
     )
-    assert snapshot.images[0].mode == 0o751
+    assert images[0].mode == 0o751
 
 
 @pytest.mark.parametrize("failure", ["budget", "read", "none"])
@@ -916,3 +913,130 @@ def test_recovery_seal_rejects_same_commit_head_identity_change(
     after = capture_patch(repo, contract(), "branch", ("modify",))
     with pytest.raises(ValueError, match="incompatible"):
         seal_patch(before, after, tmp_path.resolve() / "artifact")
+
+
+def test_capture_refuses_images_that_cannot_fit_two_snapshot_artifact(
+    repo: Path,
+) -> None:
+    from agent_harness.recovery import capture_patch
+
+    data = b"x" * (3 * 1024 * 1024 + 128 * 1024)
+    (repo / "modify").write_bytes(data)
+    with pytest.raises(ValueError, match="budget"):
+        capture_patch(repo, contract(), "a", ("modify",))
+    assert (repo / "modify").read_bytes() == data
+
+
+def test_capture_counts_large_observations_in_encoded_budget(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agent_harness.recovery as recovery
+
+    for index in range(20):
+        (repo / (f"unrelated-{index}-" + "x" * 150)).write_bytes(b"observed")
+    monkeypatch.setattr(recovery, "MAX_BYTES", 4096)
+    with pytest.raises(ValueError, match="budget"):
+        recovery.capture_patch(repo, contract(), "a", ("modify",))
+    assert (repo / "modify").read_bytes() == b"base"
+
+
+def encoded_snapshot(snapshot: object) -> dict[str, object]:
+    """Independent artifact-format fixture, including JSON and base64 overhead."""
+    import base64
+    from dataclasses import asdict
+
+    from agent_harness.recovery import PatchSnapshot
+
+    assert isinstance(snapshot, PatchSnapshot)
+    return {
+        "observation": asdict(snapshot.observation),
+        "contract_sha256": snapshot.contract_sha256,
+        "attempt_id": snapshot.attempt_id,
+        "images": [
+            {
+                "path": image.path,
+                "mode": image.mode,
+                "data": None
+                if image.data is None
+                else base64.b64encode(image.data).decode("ascii"),
+            }
+            for image in snapshot.images
+        ],
+    }
+
+
+def artifact_bytes(before: object, after: object) -> bytes:
+    import json
+
+    return json.dumps(
+        {
+            "version": 1,
+            "before": encoded_snapshot(before),
+            "after": encoded_snapshot(after),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+
+
+def test_compatible_captures_seal_and_recover_at_encoded_boundary(
+    repo: Path, tmp_path: Path
+) -> None:
+    import agent_harness.recovery as recovery
+
+    (repo / "modify").write_bytes(b"x" * 3)
+    sample = recovery.capture_patch(repo, contract(), "a", ("modify",))
+    overhead = len(artifact_bytes(sample, sample)) - 8
+    # Base64 uses four bytes per three image bytes, once per snapshot. File size
+    # decimal digits also contribute; reserve that exact delta from the sample.
+    approximate = (recovery.MAX_BYTES - overhead) // 8 * 3
+    digits = 2 * (len(str(approximate)) - 1)
+    length = (recovery.MAX_BYTES - overhead - digits) // 8 * 3
+    (repo / "modify").write_bytes(b"x" * length)
+    before = recovery.capture_patch(repo, contract(), "a", ("modify",))
+    (repo / "modify").write_bytes(b"y" * length)
+    after = recovery.capture_patch(repo, contract(), "a", ("modify",))
+    reference = recovery.seal_patch(before, after, tmp_path.resolve() / "artifact")
+    assert recovery.MAX_BYTES - 8 <= reference.path.stat().st_size <= recovery.MAX_BYTES
+    assert recovery.recover_patch(repo, contract(), "a", reference).status == "restored"
+    assert (repo / "modify").read_bytes() == b"x" * length
+
+
+@pytest.mark.parametrize("consumer", ["seal", "recover"])
+def test_untrusted_oversized_snapshot_refused_before_write(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, consumer: str
+) -> None:
+    import hashlib
+    from dataclasses import replace
+
+    import agent_harness.recovery as recovery
+
+    snapshot = recovery.capture_patch(repo, contract(), "a", ("modify",))
+    oversized = replace(
+        snapshot,
+        observation=replace(snapshot.observation, head_ref="refs/heads/" + "x" * 3000),
+    )
+    artifact = tmp_path.resolve() / "artifact"
+    if consumer == "seal":
+        monkeypatch.setattr(
+            recovery, "MAX_BYTES", len(artifact_bytes(oversized, snapshot))
+        )
+        with pytest.raises(ValueError, match="budget"):
+            recovery.seal_patch(oversized, oversized, artifact)
+        assert not artifact.exists()
+    else:
+        payload = artifact_bytes(oversized, snapshot)
+        monkeypatch.setattr(recovery, "MAX_BYTES", len(payload))
+        artifact.write_bytes(payload)
+        artifact.chmod(0o600)
+        reference = recovery.ArtifactReference(
+            artifact,
+            hashlib.sha256(payload).hexdigest(),
+            snapshot.observation.repository_id,
+            snapshot.contract_sha256,
+            snapshot.attempt_id,
+        )
+        with pytest.raises(ValueError, match="budget"):
+            recovery.recover_patch(repo, contract(), "a", reference)
+        assert artifact.read_bytes() == payload
+    assert (repo / "modify").read_bytes() == b"base"

@@ -36,6 +36,8 @@ def run_development_profile(
     Arbitrary caller-provided historical baseline results have no executable
     provenance; the default safely selects anew for this independent invocation.
     """
+    if tuple(result.command for result in baseline.results) != policy.commands:
+        raise ValueError("baseline must use the same command sequence")
     results = ControlledCommandRunner().run(policy, repository, selections=selections)
     return DevelopmentVerificationResult(
         baseline=baseline,

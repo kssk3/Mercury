@@ -387,6 +387,8 @@ def test_killed_process_continues_in_fresh_interpreter(
         "-c",
         f"from pathlib import Path; p=Path({str(launches)!r}); p.write_text(p.read_text()+'x' if p.exists() else 'x'); assert Path('value').read_text()=='new'",
     )
+    loop_budget_seconds = 100
+    startup_allowance_seconds = 10
     driver.write_text(f"""
 import json,sys,time
 from pathlib import Path
@@ -406,7 +408,7 @@ admission=record_admission(task,approver='other' if mode=='admission' else 'huma
 context=ContextPacket(str(root),4097 if mode=='context' else 4096,())
 command={command!r}
 policy=VerificationPolicy((command,),'.',3 if mode=='policy' else 2)
-limits=RetryLimits(0,2,5 if mode=='limits' else 4,100)
+limits=RetryLimits(0,2,5 if mode=='limits' else 4,{loop_budget_seconds})
 args=(CodexCLIAdapter(Path({str(executable)!r})),task,admission,context)
 options=dict(policy=policy,criterion_commands={{'new value':(command,)}},journal=journal,state_store=store,budgets=TurnBudgets(2,16000,128,128,128),limits=limits,redactor=lambda x:x,max_output_bytes=128)
 if mode=='pause':
@@ -423,14 +425,14 @@ else:
     result=continue_verification(*args,**options,wall_clock=(lambda:time.time()+200) if mode=='expired' else time.time)
 print(json.dumps({{'status':result.status,'commands':result.usage.commands,'attempt_ids':result.attempt_ids}}))
 """)
+    ready_deadline = time.monotonic() + loop_budget_seconds + startup_allowance_seconds
     child = subprocess.Popen(
         [sys.executable, str(driver), "pause"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
     try:
-        deadline = time.monotonic() + 10
-        while not marker.exists() and time.monotonic() < deadline:
+        while not marker.exists() and time.monotonic() < ready_deadline:
             if child.poll() is not None:
                 raise AssertionError(child.communicate(timeout=1))
             time.sleep(0.02)
@@ -479,11 +481,12 @@ print(json.dumps({{'status':result.status,'commands':result.usage.commands,'atte
             target.unlink()
         else:
             target.write_bytes(previous)
+    resume_deadline = time.monotonic() + loop_budget_seconds + startup_allowance_seconds
     result = subprocess.run(
         [sys.executable, str(driver), "resume"],
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=resume_deadline - time.monotonic(),
         check=True,
     )
     outcome = json.loads(result.stdout)

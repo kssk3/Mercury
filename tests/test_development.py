@@ -173,3 +173,32 @@ def test_development_reuses_prebaseline_external_selection(
     assert profile.results[0].stdout == "original\n"
     assert profile.results[0].command == ("checker",)
     assert profile.delta.unchanged_successes == profile.results
+
+
+@pytest.mark.parametrize("mismatch", ["different", "reversed", "missing"])
+@pytest.mark.parametrize("explicit_selection", [False, True])
+def test_baseline_mismatch_is_refused_before_commands(
+    tmp_path: Path, mismatch: str, explicit_selection: bool
+) -> None:
+    from agent_harness.runner import bind_verification_executables
+
+    marker = tmp_path / "marker"
+    command = (
+        sys.executable,
+        "-c",
+        f"from pathlib import Path; Path({str(marker)!r}).touch()",
+    )
+    other = (sys.executable, "-c", "print('second')")
+    policy = VerificationPolicy((command, other), ".", 5)
+    previous = {
+        "different": (("different",), other),
+        "reversed": (other, command),
+        "missing": (command,),
+    }[mismatch]
+    baseline = VerificationBaseline.capture(result(item, 0) for item in previous)
+    selections = (
+        bind_verification_executables(policy, tmp_path) if explicit_selection else None
+    )
+    with pytest.raises(ValueError, match="same command sequence"):
+        run_development_profile(policy, tmp_path, baseline, selections=selections)
+    assert not marker.exists()

@@ -186,7 +186,9 @@ def capture_patch(
             or entry.mode != image.mode
         ):
             raise ValueError("recovery image observation disagreement")
-    return PatchSnapshot(after, _digest(contract), attempt_id, images)
+    snapshot = PatchSnapshot(after, _digest(contract), attempt_id, images)
+    _validate_snapshot_budget(snapshot)
+    return snapshot
 
 
 def _external(path: Path, root: Path) -> None:
@@ -347,6 +349,7 @@ def _validate_snapshot(snapshot: PatchSnapshot) -> None:
             raise ValueError("recovery image observation disagreement")
     if total > MAX_BYTES:
         raise ValueError("recovery images exceed budget")
+    _validate_snapshot_budget(snapshot)
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -378,6 +381,18 @@ def _encoded(snapshot: PatchSnapshot) -> dict[str, object]:
             for i in snapshot.images
         ],
     }
+
+
+def _json_bytes(value: object) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _validate_snapshot_budget(snapshot: PatchSnapshot) -> None:
+    # Two complete canonical snapshot contributions share the fixed envelope.
+    # Counting encoded bytes includes base64, escaped paths and observations.
+    envelope_bytes = len(_json_bytes({"version": 1, "before": None, "after": None})) - 8
+    if 2 * len(_json_bytes(_encoded(snapshot))) + envelope_bytes > MAX_BYTES:
+        raise ValueError("recovery snapshot exceeds encoded artifact budget")
 
 
 def _status_codes(observation: RepositoryObservation) -> dict[str, set[str]]:
@@ -435,11 +450,9 @@ def seal_patch(
     _complete_delta(before, after)
     root = Path(before.observation.repository_root)
     _external(artifact, root)
-    payload = json.dumps(
-        {"version": 1, "before": _encoded(before), "after": _encoded(after)},
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
+    payload = _json_bytes(
+        {"version": 1, "before": _encoded(before), "after": _encoded(after)}
+    )
     if len(payload) > MAX_BYTES:
         raise ValueError("recovery artifact exceeds budget")
     descriptor = os.open(
