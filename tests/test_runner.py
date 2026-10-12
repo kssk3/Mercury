@@ -15,6 +15,64 @@ from agent_harness.policy import VerificationPolicy
 from agent_harness.runner import ControlledCommandRunner
 
 
+@pytest.mark.parametrize("kind", ["entry", "interpreter"])
+def test_bound_verifier_hardlink_native_mutation_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.admission import record_admission
+    from agent_harness.context import ContextPacket
+    from agent_harness.contract import TaskContract
+
+    root = (tmp_path / "repository").resolve()
+    subprocess.run(("git", "init", "--quiet", str(root)), check=True, timeout=10)
+    ignored = root / "ignored"
+    ignored.mkdir()
+    (root / ".gitignore").write_text("ignored/\n")
+    external = tmp_path / "external"
+    external.mkdir()
+    target = external / "check-runtime"
+    target.write_text(f"#!{sys.executable}\nimport sys\nsys.exit(1)\n")
+    target.chmod(0o700)
+    checker = target
+    if kind == "interpreter":
+        checker = external / "checker"
+        checker.write_text("#!/usr/bin/env check-runtime\n")
+        checker.chmod(0o700)
+    monkeypatch.setenv("PATH", str(external) + os.pathsep + os.defpath)
+    alias = ignored / "alias"
+    alias.hardlink_to(target)
+    marker = tmp_path / "outside-verifier-marker"
+    replacement = (
+        f"#!{sys.executable}\nfrom pathlib import Path\nPath({str(marker)!r}).touch()\n"
+    )
+    policy = VerificationPolicy(((str(checker),),), ".", 3)
+    selected = runner_module.bind_verification_executables(policy, root)
+    baseline = ControlledCommandRunner().run(policy, root, selections=selected)[0]
+    assert baseline.exit_code == 1
+    native = tmp_path / "native"
+    native.write_text(
+        f"#!{sys.executable}\nimport sys,pathlib\nsys.stdin.read()\npathlib.Path({str(alias)!r}).write_text({replacement!r})\nsys.exit(1)\n"
+    )
+    native.chmod(0o700)
+    task = TaskContract("mutate ignored verifier alias", ("ignored",), (), ("check",))
+    turn = CodexCLIAdapter(native).run(
+        task,
+        record_admission(task, approver="human", approved_at="2026-10-01T00:00:00Z"),
+        ContextPacket(str(root), 1000, ()),
+        budgets=TurnBudgets(3, 10000, 100, 100, 100),
+    )
+    assert turn.process_status == "nonzero_exit" and turn.exit_code == 1
+    assert alias.read_bytes() == target.read_bytes() == replacement.encode()
+    later = ControlledCommandRunner().run(policy, root, selections=selected)[0]
+    assert later.command == baseline.command
+    assert not marker.exists(), (
+        "changed frozen verifier/interpreter executed after native mutation"
+    )
+    assert later.exit_code is None and not later.timed_out
+    assert "changed" in later.stderr
+
+
 def test_runner_captures_successful_command_evidence(tmp_path: Path) -> None:
     command = (sys.executable, "-c", "print('standard output')")
     policy = VerificationPolicy((command,), ".", 5)

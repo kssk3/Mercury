@@ -136,7 +136,7 @@ caller integration using [the full simulator composition](examples/quickstart.py
 | Checks | Protected checks/configuration, frozen mandatory commands, and exact command mappings for each criterion. Define the [verification policy](src/agent_harness/policy.py). |
 | Context and budgets | Selected file context, input/output sizes, time/retry/command-boundary limits |
 | Concurrent work and state | A lock lease shared by callers on the same repository, heartbeat as needed, serialized work, and state/journal/output locations outside the target repository |
-| Agent and output | A trusted Codex CLI and environment, plus a redaction policy for real output. The adapter inherits existing configuration, rules, authentication, and environment. |
+| Agent and output | A trusted Codex CLI and environment, plus a redaction policy for real output. Before each launch, including retries, the adapter checks the external entry and declared shebang chain using the same bounded proofs as verification and supplies safe external resolver paths. Existing configuration, rules, authentication, and unrelated environment remain active. |
 
 These settings are Python inputs; there is no general configuration-file loader.
 Command-boundary budgets do not control individual commands inside the native agent.

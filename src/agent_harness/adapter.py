@@ -23,7 +23,13 @@ from typing import Literal
 from agent_harness.admission import AdmissionRecord, admit
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract
+from agent_harness.policy import VerificationPolicy
 from agent_harness.repository import resolve_repository_root
+from agent_harness.runner import (
+    VerificationExecutable,
+    _validate_executable_proofs,
+    bind_verification_executables,
+)
 
 
 @dataclass(frozen=True)
@@ -102,8 +108,9 @@ class _Capture:
 class CodexCLIAdapter:
     """Caller selects a trusted executable; no arbitrary flag/config surface.
 
-    Inherited user configuration, rules, authentication and environment remain
-    active. `--ephemeral` is a CLI option, not an environment-isolation promise.
+    Inherited user configuration, rules, authentication and unrelated environment
+    remain active. Resolver paths are checked against the admitted repository
+    before every launch. `--ephemeral` is not an environment-isolation promise.
     """
 
     def __init__(self, executable: Path | str) -> None:
@@ -113,6 +120,10 @@ class CodexCLIAdapter:
         self._executable: str | None = None
         self._selected_path: Path | None = None
         self._selection_error: OSError | None = None
+        self._selection_admitted = False
+        self._launch_environment: dict[str, str] | None = None
+        self._native_selection: VerificationExecutable | None = None
+        self._native_interpreter_proofs: dict[str, str] = {}
         requested = Path(self._requested_executable)
         # Relative direct paths retain Popen's repository-cwd meaning. Names and
         # absolute paths can be bound before the repository is admitted.
@@ -144,6 +155,46 @@ class CodexCLIAdapter:
                 self._executable or self._selected_path
             ).is_relative_to(root):
                 raise ValueError("native executable must be outside the repository")
+            if self._executable is not None and self._selection_error is None:
+                # Inspect the initial selected traversal as well as the fixed
+                # entry. Later turns retain alias-selection continuity while
+                # rechecking the actual native interpreter chain and environment.
+                commands: tuple[tuple[str, ...], ...] = ((self._executable,),)
+                if not self._selection_admitted:
+                    commands = ((str(self._selected_path),), *commands)
+                bound = bind_verification_executables(
+                    VerificationPolicy(commands, ".", 1), root
+                )
+                for entry in bound.executables:
+                    if entry.launch_error is not None:
+                        self._selection_error = OSError(entry.launch_error)
+                        break
+                if self._selection_error is None:
+                    if self._native_selection is None:
+                        self._native_selection = bound.executables[-1]
+                        self._native_interpreter_proofs = dict(bound.interpreter_proofs)
+                    else:
+                        try:
+                            if any(
+                                self._native_interpreter_proofs.get(path) != digest
+                                for path, digest in bound.interpreter_proofs
+                            ):
+                                raise OSError(
+                                    "native interpreter changed after admission"
+                                )
+                            _validate_executable_proofs(
+                                self._native_selection, bound.interpreter_proofs
+                            )
+                        except OSError as failure:
+                            self._selection_error = failure
+                self._selection_admitted = True
+                environment = os.environ.copy()
+                for name, value in bound.resolver_environment:
+                    if value is None:
+                        environment.pop(name, None)
+                    else:
+                        environment[name] = value
+                self._launch_environment = environment
 
     def run(
         self,
@@ -224,6 +275,7 @@ class CodexCLIAdapter:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     start_new_session=True,
+                    env=self._launch_environment,
                 )
             except OSError as error:
                 stderr.add(str(error).encode("utf-8", errors="surrogateescape"))

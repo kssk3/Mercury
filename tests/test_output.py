@@ -9,6 +9,26 @@ import pytest
 from agent_harness.output import OutputStore
 
 
+@pytest.mark.parametrize("kind", ["count", "identifier", "path", "truncated"])
+def test_validate_stored_output_rejects_wrong_metadata(
+    tmp_path: Path, kind: str
+) -> None:
+    from dataclasses import replace
+
+    store = OutputStore(tmp_path / "state", max_bytes=5, redactor=lambda text: text)
+    stored = store.write("valid output")
+    store.validate(stored)
+    altered = {
+        "count": replace(stored, byte_count=stored.byte_count + 1),
+        "identifier": replace(stored, identifier="0" * 64),
+        "path": replace(stored, path=tmp_path / "elsewhere.txt"),
+        "truncated": replace(stored, truncated=1),  # type: ignore[arg-type]
+    }[kind]
+    with pytest.raises(ValueError, match="metadata|single-link"):
+        store.validate(altered)
+    assert stored.path.read_bytes() == b"valid"
+
+
 def test_store_rejects_outputs_symlink_without_writing_outside(tmp_path: Path) -> None:
     state_directory = tmp_path / "state"
     state_directory.mkdir()

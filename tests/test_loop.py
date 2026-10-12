@@ -804,3 +804,73 @@ def test_loop_rejects_replaced_raw_history(
     assert target.read_bytes() == expected_history
     if boundary == "preflight":
         assert expected_history == b'{"event":"legacy"}\n'
+
+
+@pytest.mark.parametrize("boundary", ["redactor", "development", "final"])
+def test_loop_invalid_stored_evidence_never_passes(
+    tmp_path: Path, boundary: str
+) -> None:
+    import hashlib
+
+    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.admission import record_admission
+    from agent_harness.context import ContextPacket
+    from agent_harness.journal import EventJournal
+    from agent_harness.loop import run_loop
+    from agent_harness.retry import RetryLimits
+    from agent_harness.state import CurrentStateStore
+
+    root = _repository(tmp_path)
+    executable = _native_fixture(
+        tmp_path, root, tmp_path / "native-launches", "pass", 0
+    )
+    executable.write_text(
+        executable.read_text() + "print('stdout')\nprint('stderr',file=sys.stderr)\n"
+    )
+    state = tmp_path / "state"
+    journal = EventJournal(state)
+    target = state / "outputs" / (hashlib.sha256(b"stdout\n").hexdigest() + ".txt")
+    counter = tmp_path / "verification-launches"
+    command = (
+        sys.executable,
+        "-c",
+        f"from pathlib import Path; p=Path({str(counter)!r}); p.write_text(p.read_text()+'x' if p.exists() else 'x'); target=Path({str(target)!r});\n"
+        f"if len(p.read_text())=={2 if boundary == 'development' else 3} and {boundary != 'redactor'!r}: target.unlink()\n"
+        "assert Path('value').read_text()=='new'",
+    )
+    calls = 0
+
+    def mutate(text: str) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 2 and boundary == "redactor":
+            target.unlink()
+        return text
+
+    task = TaskContract("change value", ("value",), (), ("new value",))
+    result = run_loop(
+        CodexCLIAdapter(executable),
+        task,
+        record_admission(task, approver="human", approved_at="2026-10-06T00:00:00Z"),
+        ContextPacket(str(root), 4096, ()),
+        policy=VerificationPolicy((command,), ".", 2),
+        criterion_commands={"new value": (command,)},
+        journal=journal,
+        state_store=CurrentStateStore(state),
+        budgets=TurnBudgets(2, 16000, 128, 128, 128),
+        limits=RetryLimits(0, 2, 7, 50),
+        redactor=mutate,
+        max_output_bytes=128,
+    )
+    assert not target.exists()
+    assert result.status == "unknown"
+    assert result.reason == (
+        "output_record_failed"
+        if boundary == "redactor"
+        else "runtime_persistence_invalid"
+    )
+    assert not result.criteria
+    assert not any(
+        event.get("overall_kind") == "pass" or event.get("status") == "pass"
+        for event in journal.read()
+    )

@@ -533,3 +533,265 @@ def test_relative_selection_is_bound_at_turn_admission(
     assert result.process_status == "successful_exit"
     assert result.stdout.text == "selected\n"
     assert result.argv[0] == str(trusted.resolve())
+
+
+@pytest.mark.parametrize("consumer", ["direct", "observed"])
+def test_native_env_shebang_retry_ignores_planted_interpreter(
+    repository: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    consumer: str,
+) -> None:
+    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.context import ContextPacket
+    from agent_harness.journal import EventJournal
+    from agent_harness.turn import run_observed_turn
+
+    tools = repository / "tools"
+    tools.mkdir()
+    external = tmp_path / "external-bin"
+    external.mkdir()
+    (external / "python3").symlink_to(sys.executable)
+    trusted = tmp_path / "trusted-launches"
+    planted = tmp_path / "outside-planted-marker"
+    shadow = tools / "python3"
+    payload = f"#!{sys.executable}\nfrom pathlib import Path\nPath({str(planted)!r}).touch()\n"
+    executable = fake(
+        tmp_path,
+        "import pathlib,sys\nsys.stdin.read()\n"
+        f"p=pathlib.Path({str(trusted)!r}); p.write_text(p.read_text()+'x' if p.exists() else 'x')\n"
+        f"s=pathlib.Path({str(shadow)!r}); s.write_text({payload!r}); s.chmod(0o700)\n"
+        "sys.exit(1)\n",
+    )
+    executable.write_text(
+        executable.read_text().replace(
+            f"#!{sys.executable}", "#!/usr/bin/env python3", 1
+        )
+    )
+    monkeypatch.setenv("PATH", os.pathsep.join((str(tools), str(external), os.defpath)))
+    adapter = CodexCLIAdapter(executable)
+    task = TaskContract("retry trusted launcher", (), (), ("reply",))
+    admission = record_admission(
+        task, approver="human", approved_at="2026-10-01T00:00:00Z"
+    )
+    context = ContextPacket(str(repository), 1000, ())
+    budgets = TurnBudgets(3, 10000, 100, 100, 100)
+    journal = EventJournal(tmp_path / "state")
+    results = []
+    for _ in range(2):
+        if consumer == "observed":
+            result = run_observed_turn(
+                adapter, task, admission, context, journal=journal, budgets=budgets
+            ).adapter_result
+        else:
+            result = adapter.run(task, admission, context, budgets=budgets)
+        results.append(result)
+    assert shadow.is_file()
+    assert not planted.exists()
+    assert trusted.read_text() == "xx"
+    assert all(
+        result.argv[0] == str(executable.resolve())
+        and result.process_status == "nonzero_exit"
+        and result.exit_code == 1
+        for result in results
+    )
+
+
+@pytest.mark.parametrize("shebang", ["absolute", "env", "env-S", "virtualenv"])
+def test_native_shebang_preserves_external_runtime_and_caller_environment(
+    repository: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    shebang: str,
+) -> None:
+    import venv
+
+    from agent_harness.adapter import CodexTurnResult
+
+    external = tmp_path / "external-bin"
+    external.mkdir()
+    (external / "python3").symlink_to(sys.executable)
+    pythonpath = tmp_path / "external-modules"
+    pythonpath.mkdir()
+    monkeypatch.setenv(
+        "PATH", os.pathsep.join((str(repository), str(external), os.defpath))
+    )
+    monkeypatch.setenv(
+        "PYTHONPATH", os.pathsep.join((str(repository), str(pythonpath)))
+    )
+    monkeypatch.setenv("MERCURY_CALLER", "configuration/authentication remains active")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "caller-config"))
+    interpreter = sys.executable
+    # An external alias without pyvenv.cfg starts the base runtime. The explicit
+    # external virtualenv below must preserve its own interpreter path instead.
+    prefix = sys.base_prefix if shebang in {"env", "env-S"} else sys.prefix
+    if shebang == "virtualenv":
+        virtualenv = tmp_path / "external-venv"
+        venv.EnvBuilder(with_pip=False, symlinks=True).create(virtualenv)
+        interpreter = str(virtualenv / "bin" / "python")
+        prefix = str(virtualenv)
+    declaration = {
+        "env": "/usr/bin/env python3",
+        "env-S": "/usr/bin/env -S python3 -u",
+    }.get(shebang, interpreter)
+    executable = fake(
+        tmp_path,
+        "import json,os,sys\nsys.stdin.read()\n"
+        "print(json.dumps({'prefix':sys.prefix,'path':os.environ['PATH'],"
+        "'pythonpath':os.environ['PYTHONPATH'],'caller':os.environ['MERCURY_CALLER'],"
+        "'config':os.environ['CODEX_HOME']}))\n",
+    )
+    executable.write_text(
+        executable.read_text().replace(f"#!{sys.executable}", f"#!{declaration}", 1)
+    )
+    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.context import ContextPacket
+
+    task = TaskContract("preserve external native runtime", (), (), ("reply",))
+    result = CodexCLIAdapter(executable).run(
+        task,
+        record_admission(task, approver="human", approved_at="2026-10-01T00:00:00Z"),
+        ContextPacket(str(repository), 1000, ()),
+        budgets=TurnBudgets(3, 10000, 4000, 1000, 100),
+    )
+    assert isinstance(result, CodexTurnResult)
+    assert result.process_status == "successful_exit"
+    returned = json.loads(result.stdout.text)
+    assert returned["prefix"] == prefix
+    assert returned["path"] == os.pathsep.join((str(external), os.defpath))
+    assert returned["pythonpath"] == str(pythonpath)
+    assert returned["caller"] == "configuration/authentication remains active"
+    assert returned["config"] == str(tmp_path / "caller-config")
+    assert result.argv[0] == str(executable.resolve())
+
+
+@pytest.mark.parametrize(
+    "kind", ["repository_interpreter", "env_quoted", "env_nonascii"]
+)
+def test_native_unsafe_shebang_is_refused_before_launch(
+    repository: Path, tmp_path: Path, kind: str
+) -> None:
+    marker = tmp_path / "outside-marker"
+    interpreter = fake(
+        repository, f"from pathlib import Path\nPath({str(marker)!r}).touch()\n"
+    )
+    declaration = {
+        "repository_interpreter": str(interpreter),
+        "env_quoted": '/usr/bin/env -S "python3"',
+        "env_nonascii": "/usr/bin/env\u00a0python3",
+    }[kind]
+    executable = fake(
+        tmp_path, f"from pathlib import Path\nPath({str(marker)!r}).touch()\n"
+    )
+    executable.write_text(
+        executable.read_text().replace(f"#!{sys.executable}", f"#!{declaration}", 1)
+    )
+    with pytest.raises(ValueError, match="outside|ambiguous"):
+        invoke(repository, executable)
+    assert not marker.exists()
+
+
+def test_native_retry_rechecks_changed_interpreter_boundary(
+    repository: Path, tmp_path: Path
+) -> None:
+    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.context import ContextPacket
+
+    marker = tmp_path / "outside-marker"
+    executable = fake(tmp_path, "import sys\nsys.stdin.read()\nsys.exit(1)\n")
+    adapter = CodexCLIAdapter(executable)
+    task = TaskContract("recheck native launch", (), (), ("reply",))
+    admission = record_admission(
+        task, approver="human", approved_at="2026-10-01T00:00:00Z"
+    )
+    context = ContextPacket(str(repository), 1000, ())
+    budgets = TurnBudgets(3, 10000, 100, 100, 100)
+    assert (
+        adapter.run(task, admission, context, budgets=budgets).process_status
+        == "nonzero_exit"
+    )
+    interpreter = fake(
+        repository, f"from pathlib import Path\nPath({str(marker)!r}).touch()\n"
+    )
+    executable.write_text(f"#!{interpreter}\n")
+    with pytest.raises(ValueError, match="outside"):
+        adapter.run(task, admission, context, budgets=budgets)
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("kind", ["absolute", "env"])
+def test_missing_native_interpreter_remains_typed_launch_error(
+    repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    from agent_harness.adapter import CodexTurnResult
+
+    monkeypatch.setenv("PATH", os.defpath)
+    declaration = (
+        str(tmp_path / "missing-interpreter")
+        if kind == "absolute"
+        else "/usr/bin/env mercury-missing-interpreter"
+    )
+    executable = fake(tmp_path, "raise AssertionError('must not launch')\n")
+    executable.write_text(
+        f"#!{declaration}\n" + executable.read_text().split("\n", 1)[1]
+    )
+    result = invoke(repository, executable)
+    assert isinstance(result, CodexTurnResult)
+    assert result.process_status == "launch_error"
+    assert result.exit_code is None
+    assert result.stderr.retained_bytes <= 37
+    assert result.argv[0] == str(executable.resolve())
+
+
+@pytest.mark.parametrize("kind", ["entry", "interpreter"])
+def test_native_hardlink_mutation_is_refused_on_retry(
+    repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.context import ContextPacket
+
+    ignored = repository / "ignored"
+    ignored.mkdir()
+    (repository / ".gitignore").write_text("ignored/\n")
+    alias = ignored / "native-alias"
+    marker = tmp_path / "outside-retry-marker"
+    launches = tmp_path / "trusted-launches"
+    replacement = (
+        f"#!{sys.executable}\nfrom pathlib import Path\nPath({str(marker)!r}).touch()\n"
+    )
+    external = fake(
+        tmp_path,
+        "import pathlib,sys\nsys.stdin.read()\n"
+        f"pathlib.Path({str(launches)!r}).write_text('first')\n"
+        f"pathlib.Path({str(alias)!r}).write_text({replacement!r})\n"
+        "sys.exit(1)\n",
+    )
+    selected = external
+    if kind == "interpreter":
+        selected = tmp_path / "launcher"
+        selected.write_text(f"#!/usr/bin/env {external.name}\n")
+        selected.chmod(0o700)
+        monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.defpath)
+    alias.hardlink_to(external)
+    original = external.read_bytes()
+    task = TaskContract("retry with ignored alias", ("ignored",), (), ("reply",))
+    admission = record_admission(
+        task, approver="human", approved_at="2026-10-01T00:00:00Z"
+    )
+    adapter = CodexCLIAdapter(selected)
+    context = ContextPacket(str(repository), 1000, ())
+    budgets = TurnBudgets(3, 10000, 100, 100, 100)
+    first = adapter.run(task, admission, context, budgets=budgets)
+    assert first.argv[0] == str(selected.resolve())
+    assert first.process_status == "nonzero_exit" and first.exit_code == 1
+    assert launches.read_text() == "first"
+    assert external.read_bytes() != original
+    assert alias.stat().st_ino == external.stat().st_ino
+    retry = adapter.run(task, admission, context, budgets=budgets)
+    assert retry.argv[0] == first.argv[0]
+    assert not marker.exists(), (
+        "changed hard-linked bytes executed before retry sandbox"
+    )
+    assert retry.process_status == "launch_error" and retry.exit_code is None
+    assert "changed" in retry.stderr.text
+    assert not marker.exists()

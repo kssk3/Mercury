@@ -740,3 +740,53 @@ def test_callback_moves_git_metadata_to_outputs_before_storage(
         "turn_observation",
         "scope_decision",
     ]
+
+
+@pytest.mark.parametrize(
+    "kind", ["missing", "replaced", "hardlink", "symlink", "fifo", "oversized"]
+)
+def test_later_redactor_invalidating_earlier_leaf_fails_closed(
+    repository: Path, tmp_path: Path, kind: str
+) -> None:
+    import hashlib
+
+    from agent_harness.native_output import NativeOutputError
+
+    journal = EventJournal(tmp_path / "state")
+    target = (
+        journal.path.parent
+        / "outputs"
+        / (hashlib.sha256(b"[removed] out\n").hexdigest() + ".txt")
+    )
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"[removed] out\n")
+    callbacks = 0
+
+    def mutate(text: str) -> str:
+        nonlocal callbacks
+        callbacks += 1
+        if callbacks == 2:
+            assert target.is_file()
+            if kind == "replaced":
+                target.write_bytes(b"different output")
+            elif kind == "oversized":
+                with target.open("wb") as stream:
+                    stream.truncate(100_000_000)
+            else:
+                target.unlink()
+                if kind == "hardlink":
+                    target.hardlink_to(outside)
+                elif kind == "symlink":
+                    target.symlink_to(outside)
+                elif kind == "fifo":
+                    os.mkfifo(target)
+        return redact(text)
+
+    with pytest.raises(NativeOutputError) as raised:
+        invoke(repository, fake(tmp_path, payload()), journal, redactor=mutate)
+    assert callbacks == 3
+    assert raised.value.code == "output_record_failed"
+    assert not raised.value.proceed
+    assert not any(event["event"] == "native_output_stored" for event in journal.read())
+    assert outside.read_bytes() == b"[removed] out\n"
+    assert any(path.name != target.name for path in target.parent.iterdir())

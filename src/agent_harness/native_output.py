@@ -260,6 +260,9 @@ def run_stored_scoped_turn(
     }
     try:
         _validate_storage(journal, root)
+        for output in (stdout, stderr, final):
+            if output is not None:
+                store.validate(output)
         _append(journal, root, event)
     except Exception:
         raise NativeOutputError("output_record_failed", scoped) from None

@@ -45,6 +45,7 @@ from agent_harness.native_output import (
     _validate_storage,
     run_stored_scoped_turn,
 )
+from agent_harness.output import OutputStore, StoredOutput
 from agent_harness.policy import VerificationPolicy
 from agent_harness.repository import read_persistence_bytes
 from agent_harness.retry import RetryLimits, RetryUsage
@@ -495,7 +496,26 @@ def _run_loop(
             current_required
         try:
             _validate_storage(journal, root)
-            attempts.read()
+            entries = attempts.read()
+            if entries and entries[-1]["outputs"] is not None:
+                store = OutputStore(
+                    journal.path.parent,
+                    max_bytes=max_output_bytes,
+                    redactor=lambda text: text,
+                )
+                outputs = cast(dict[str, object], entries[-1]["outputs"])
+                for metadata in outputs.values():
+                    if metadata is not None:
+                        output = cast(dict[str, object], metadata)
+                        identifier = cast(str, output["identifier"])
+                        store.validate(
+                            StoredOutput(
+                                identifier,
+                                journal.path.parent / "outputs" / f"{identifier}.txt",
+                                cast(int, output["byte_count"]),
+                                cast(bool, output["truncated"]),
+                            )
+                        )
             if checkpoint_verification:
                 events = journal.read()
                 validate_boundaries(events)
@@ -752,6 +772,7 @@ def _run_loop(
                         report.overall_kind is not TechnicalDecisionKind.PASS
                         or phase == "final"
                     ):
+                        guard_persistence()
                         attempts.record_verification(active_id, report, refresh=True)
                         if monotonic() - started > limits.max_seconds:
                             return finish("stopped", "time_budget")

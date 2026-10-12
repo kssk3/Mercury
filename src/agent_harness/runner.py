@@ -389,6 +389,24 @@ def bind_verification_executables(
 _TRUNCATION_MARKER = b"\n[output truncated]\n"
 
 
+def _validate_executable_proofs(
+    selection: VerificationExecutable,
+    interpreter_proofs: tuple[tuple[str, str], ...],
+) -> None:
+    """Compare finite fresh reads with the admitted external program proofs."""
+    if selection.launch_error is not None:
+        raise FileNotFoundError(selection.launch_error)
+    if selection.selected is None or selection.sha256 is None:
+        raise OSError("verification executable has no admitted proof")
+    digest, identity, _ = _file_proof(Path(selection.selected))
+    if digest != selection.sha256 or identity != selection.identity:
+        raise OSError("verification executable changed after selection")
+    for path, expected in interpreter_proofs:
+        digest, _, _ = _file_proof(Path(path))
+        if digest != expected:
+            raise OSError("verification interpreter changed after selection")
+
+
 class ControlledCommandRunner:
     """Capture at most max_output_bytes per stream, including truncation notice."""
 
@@ -444,6 +462,7 @@ class ControlledCommandRunner:
                 policy.timeout_seconds,
                 by_command[command],
                 environment,
+                selected.interpreter_proofs,
             )
             for command in policy.commands
         )
@@ -455,11 +474,11 @@ class ControlledCommandRunner:
         timeout_seconds: int,
         selection: VerificationExecutable,
         environment: dict[str, str],
+        interpreter_proofs: tuple[tuple[str, str], ...],
     ) -> CommandResult:
         started_at = self._monotonic()
         try:
-            if selection.launch_error is not None:
-                raise FileNotFoundError(selection.launch_error)
+            _validate_executable_proofs(selection, interpreter_proofs)
             process = subprocess.Popen(
                 (selection.selected or command[0], *command[1:]),
                 cwd=working_directory,
