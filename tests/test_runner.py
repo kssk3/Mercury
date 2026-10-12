@@ -911,6 +911,7 @@ def test_loader_resolvers_preserve_safe_caller_values(
 ) -> None:
     root = tmp_path / "repository"
     root.mkdir()
+    subprocess.run(("git", "init", "--quiet", str(root)), check=True, timeout=10)
     external = tmp_path / "external"
     external.mkdir()
     monkeypatch.setenv("PYTHONPATH", str(root) + os.pathsep + str(external))
