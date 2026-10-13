@@ -1,0 +1,651 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tracked project-state snapshot, version 1",
+  "description": "Structural gate only. Unknown extension properties are allowed at every object level. Timestamps check lexical shape, not calendar validity or live delivery truth.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "project",
+    "repository",
+    "phase",
+    "workflow",
+    "policy_decision",
+    "current_unit",
+    "delivery",
+    "next_unit"
+  ],
+  "properties": {
+    "project": {
+      "$ref": "#/$defs/nonblank"
+    },
+    "repository": {
+      "$ref": "#/$defs/nonblank"
+    },
+    "workflow": {
+      "$ref": "#/$defs/nonblank"
+    },
+    "policy_decision": {
+      "$ref": "#/$defs/nonblank"
+    },
+    "snapshot_kind": {
+      "$ref": "#/$defs/nonblank"
+    },
+    "next_action": {
+      "$ref": "#/$defs/nonblank"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "phase": {
+      "enum": [
+        "PHASE_1",
+        "PHASE_2"
+      ]
+    },
+    "current_unit": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "implementation_status",
+        "plan_file",
+        "report_file",
+        "immutable_base",
+        "next_gate"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "name": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "plan_file": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "report_file": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "next_gate": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "implementation_status": {
+          "enum": [
+            "PLANNED",
+            "IN_PROGRESS",
+            "VERIFIED",
+            "PARTIAL",
+            "BLOCKED"
+          ]
+        },
+        "immutable_base": {
+          "$ref": "#/$defs/gitSha"
+        }
+      },
+      "additionalProperties": true
+    },
+    "delivery": {
+      "type": "object",
+      "required": [
+        "state",
+        "repository",
+        "base",
+        "head_branch"
+      ],
+      "properties": {
+        "repository": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "base": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "head_branch": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "query": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "authority": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "state": {
+          "enum": [
+            "LOCAL_ONLY",
+            "UNPUBLISHED",
+            "PR_OPEN",
+            "BLOCKED",
+            "DELIVERED",
+            "RESOLVE_FROM_GIT_AND_GITHUB"
+          ]
+        },
+        "completion_requires": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonblank"
+          }
+        },
+        "snapshot_is_not_live_merge_state": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "next_unit": {
+      "type": "object",
+      "required": [
+        "id",
+        "status",
+        "scope"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "scope": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "status": {
+          "enum": [
+            "NOT_STARTED",
+            "IN_PROGRESS",
+            "PARTIAL",
+            "BLOCKED",
+            "IN_REVIEW",
+            "COMPLETE",
+            "IMPLEMENTED_NOT_DELIVERED",
+            "VERIFIED"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "role_policy": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "authority": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "implementation": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "independent_review": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "optional_verified_summary": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "observed_runtime_model": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "observed_runtime_effort": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "main_runtime_model": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "measured_savings": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "progress_display": {
+          "$ref": "#/$defs/nonblank"
+        }
+      },
+      "additionalProperties": true
+    },
+    "observed_at": {
+      "$ref": "#/$defs/date"
+    },
+    "observed_main": {
+      "$ref": "#/$defs/gitSha"
+    },
+    "preserved_history": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "original_d_head": {
+          "$ref": "#/$defs/gitSha"
+        },
+        "original_c_parent": {
+          "$ref": "#/$defs/gitSha"
+        },
+        "preservation_merge": {
+          "$ref": "#/$defs/gitSha"
+        },
+        "recovery_stash": {
+          "$ref": "#/$defs/gitSha"
+        },
+        "immutable_main": {
+          "$ref": "#/$defs/gitSha"
+        }
+      },
+      "additionalProperties": true
+    },
+    "runnable": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "version_command": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "api_smoke": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "installed_cli_evidence": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "directory_integrity_evidence": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "process_cleanup_evidence": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonblank"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "linked_records": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "issue": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "state": {
+          "$ref": "#/$defs/nonblank"
+        }
+      },
+      "additionalProperties": true
+    },
+    "delivered_receipts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/deliveryReceipt"
+      }
+    },
+    "historical_delivered_policy": {
+      "$ref": "#/$defs/historicalPolicyReceipt"
+    },
+    "last_delivered_runtime": {
+      "$ref": "#/$defs/deliveryReceipt"
+    },
+    "last_delivered_ci": {
+      "$ref": "#/$defs/deliveryReceipt"
+    },
+    "last_delivered_policy": {
+      "$ref": "#/$defs/deliveryReceipt"
+    },
+    "historical_d7_candidate_checks": {
+      "$ref": "#/$defs/candidateChecks"
+    },
+    "historical_e1_candidate_checks": {
+      "$ref": "#/$defs/candidateChecks"
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "nonblank": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "gitSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}(?![\\s\\S])"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "positiveInteger": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "ciOutcome": {
+      "enum": [
+        "SUCCESS",
+        "FAILURE",
+        "CANCELLED",
+        "SKIPPED",
+        "TIMED_OUT",
+        "ACTION_REQUIRED",
+        "NEUTRAL",
+        "STALE",
+        "STARTUP_FAILURE"
+      ]
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])(?![\\s\\S])"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]+)?Z(?![\\s\\S])"
+    },
+    "deliveryReceipt": {
+      "type": "object",
+      "required": [
+        "unit",
+        "pr",
+        "head",
+        "merge_commit",
+        "merged_at",
+        "main_run_id",
+        "static-checks"
+      ],
+      "properties": {
+        "unit": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "pr": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "head": {
+          "$ref": "#/$defs/gitSha"
+        },
+        "merge_commit": {
+          "$ref": "#/$defs/gitSha"
+        },
+        "merged_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "main_run_id": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "static-checks": {
+          "$ref": "#/$defs/ciOutcome"
+        },
+        "tests-macos": {
+          "$ref": "#/$defs/ciOutcome"
+        },
+        "full_tests": {
+          "$ref": "#/$defs/count"
+        },
+        "review": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "main_outcome": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "scope": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "ci_policy": {
+          "const": "linux-local-macos-v1"
+        },
+        "record_only": {
+          "type": "boolean"
+        },
+        "tests-linux": {
+          "$ref": "#/$defs/ciOutcome"
+        },
+        "macos_verification": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "ci_policy"
+            ]
+          },
+          "then": {
+            "required": [
+              "record_only",
+              "tests-linux",
+              "macos_verification"
+            ],
+            "not": {
+              "required": [
+                "tests-macos"
+              ]
+            },
+            "properties": {
+              "static-checks": {
+                "const": "SUCCESS"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "record_only": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "record_only"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "tests-linux": {
+                      "const": "SKIPPED"
+                    },
+                    "macos_verification": {
+                      "$ref": "#/$defs/macosNotRequired"
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "tests-linux": {
+                      "const": "SUCCESS"
+                    },
+                    "macos_verification": {
+                      "$ref": "#/$defs/macosSuccess"
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "else": {
+            "required": [
+              "tests-macos"
+            ]
+          }
+        }
+      ]
+    },
+    "candidateChecks": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "focused_tests": {
+          "$ref": "#/$defs/count"
+        },
+        "full_tests": {
+          "$ref": "#/$defs/count"
+        },
+        "ruff_format_files": {
+          "$ref": "#/$defs/count"
+        },
+        "mypy_files": {
+          "$ref": "#/$defs/count"
+        },
+        "review_tool_calls": {
+          "$ref": "#/$defs/count"
+        },
+        "ruff_lint": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "independent_review": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "review_report": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "report": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "repair_report": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "review_model": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "review_effort": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "cli_smoke": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "source_review_diff_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": true
+    },
+    "historicalPolicyReceipt": {
+      "type": "object",
+      "required": [
+        "unit",
+        "pr",
+        "head",
+        "merge_commit",
+        "merged_at",
+        "main_run_id",
+        "checks"
+      ],
+      "properties": {
+        "unit": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "pr": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "head": {
+          "$ref": "#/$defs/gitSha"
+        },
+        "merge_commit": {
+          "$ref": "#/$defs/gitSha"
+        },
+        "merged_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "main_run_id": {
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "checks": {
+          "$ref": "#/$defs/ciOutcome"
+        },
+        "local_main_sync": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "owned_cleanup": {
+          "$ref": "#/$defs/nonblank"
+        }
+      },
+      "additionalProperties": true
+    },
+    "darwinEvidence": {
+      "type": "object",
+      "required": [
+        "platform",
+        "revision",
+        "report_file",
+        "observed_at",
+        "command",
+        "result"
+      ],
+      "properties": {
+        "platform": {
+          "const": "Darwin"
+        },
+        "revision": {
+          "$ref": "#/$defs/gitSha"
+        },
+        "base": {
+          "$ref": "#/$defs/gitSha"
+        },
+        "report_file": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "command": {
+          "$ref": "#/$defs/nonblank"
+        },
+        "result": {
+          "const": "SUCCESS"
+        }
+      },
+      "additionalProperties": true
+    },
+    "macosSuccess": {
+      "type": "object",
+      "required": [
+        "status",
+        "candidate",
+        "main"
+      ],
+      "properties": {
+        "status": {
+          "const": "SUCCESS"
+        },
+        "candidate": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/darwinEvidence"
+            },
+            {
+              "required": [
+                "base"
+              ]
+            }
+          ]
+        },
+        "main": {
+          "$ref": "#/$defs/darwinEvidence"
+        }
+      },
+      "additionalProperties": true
+    },
+    "macosNotRequired": {
+      "type": "object",
+      "required": [
+        "status",
+        "reason"
+      ],
+      "properties": {
+        "status": {
+          "const": "NOT_REQUIRED"
+        },
+        "reason": {
+          "$ref": "#/$defs/nonblank"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "candidate"
+            ]
+          },
+          {
+            "required": [
+              "main"
+            ]
+          }
+        ]
+      },
+      "additionalProperties": true
+    }
+  }
+}
