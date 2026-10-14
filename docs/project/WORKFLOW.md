@@ -43,8 +43,19 @@ Record local platform checks separately from hosted CI.
 Before final independent review, the integration owner accepts the actual
 implementation diff and attributable command evidence against the admitted
 contract: scope, consumer coverage, unresolved failures, environment assumptions,
-reused evidence and its invalidations. Record instruction compliance separately
-from result quality. This read-only handoff check does not replay passing tests
+reused evidence and its invalidations. Each handed-off check record must include
+its working directory, exact executable and argv, relevant environment overrides
+and known prerequisites, selected test nodes or paths, timeout and stopping
+condition, expected terminal result, original evidence, and reuse eligibility or
+invalidations. The worker inspects this record before execution. Missing required
+conditions mean NEEDS_CONTEXT; do not infer a dependency or source repair from an
+unprepared command. Record setup failures separately from reproduced product
+defects. If a validation tool or dependency is unavailable, use an available
+alternative that covers the admitted checks within the same scope and deadline.
+Record its coverage and limitations separately from an official result; continue
+independent checks, and leave only uncovered required gates UNKNOWN or BLOCKED.
+Record instruction compliance separately from result quality. This read-only
+handoff check does not replay passing tests
 or replace the independent correctness review. Resolve incomplete handoffs within
 the admitted budget before spending a final review pass.
 
@@ -100,8 +111,13 @@ into unexplained whole-file or local full-suite replay. Fixture/setup failures
 are distinct from reproduced product defects and retain their original evidence
 and deadlines. Complete hosted source CI remains an exact-HEAD integration gate.
 
-Reuse one current report for status, counters, evidence and next gate. Preserve
-immutable attributable per-run execution logs and review diff packets. Publish
+Reuse one current report for status, counters, evidence and next gate, with one
+unambiguous authoritative current decision view. Superseded implementation,
+check, review and gate fields belong in immutable historical evidence, referenced
+by absolute paths and their original revision or digest; never retarget old
+relative evidence to a later run. Keep actual counters, unknown timings and the
+VERIFIED versus DELIVERED distinction. Preserve immutable attributable per-run
+execution logs and review diff packets. Publish
 short actual start/end results and meaningful blockers or requested statuses;
 monitor completion internally with backoff. Unknown timing stays UNKNOWN.
 A status question or dissatisfaction is not explicit cancellation.

@@ -8,9 +8,10 @@ that it is done does not answer those questions.
 
 Mercury is a local Python tool that observes code changes and collects check
 results for a task, file scope, and commands chosen by a person. It provides
-evidence for that person's review. What you can run today is a simulator that
-does not call AI. Connecting a real coding agent requires Python integration
-by a developer.
+evidence for that person's review. You can run an offline simulator or an
+explicitly approved [real Codex example in a disposable repository](docs/codex-quickstart.md).
+Connecting an arbitrary user repository still requires developer-written Python
+caller integration.
 
 ## What problem does it help with?
 
@@ -126,9 +127,11 @@ installed `.venv` remain. See [the quickstart guide](docs/quickstart.md) for det
 The current package is `agent-harness` 0.1.0, a single-agent Python API developer
 preview. macOS is the initial runtime target; POSIX process and locking APIs are
 required. [CodexCLIAdapter](src/agent_harness/adapter.py) and
-[run_loop](src/agent_harness/loop.py) exist, but there is no complete beginner
-live-task CLI or ready-to-run live integration tutorial. You need to write the
-caller integration using [the full simulator composition](examples/quickstart.py).
+[run_loop](src/agent_harness/loop.py) support the
+[runnable disposable Codex example](docs/codex-quickstart.md). It demonstrates
+one fixed task; arbitrary user repositories require caller integration based on
+[the full simulator composition](examples/quickstart.py) and the responsibilities
+below. The installed CLI has no general task-running command.
 
 | What your integration must supply | Responsibility |
 | --- | --- |
@@ -179,3 +182,5 @@ providers and execution environments.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development checks and feedback.
 Licensed under the [MIT License](LICENSE). Copyright (c) 2026 Mercury (kssk3).
+
+See [the disposable real Codex example](docs/codex-quickstart.md) for an explicitly approved native CLI task, private evidence, and bounded checks.

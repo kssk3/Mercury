@@ -6,10 +6,12 @@ AI에 코드 수정을 맡긴 뒤에는 두 가지를 확인해야 합니다. **
 내가 정한 검사를 실제로 통과했는지**입니다. AI가 “완료했다”고 말하는 것만으로는
 이 두 가지를 알 수 없습니다.
 
-Mercury는 사람이 정한 작업과 파일 범위, 검사 명령을 바탕으로 코드 변경을 관찰하고
-검사 결과를 모으는 로컬 Python 도구입니다. 사람이 결과를 검토할 때 쓸 근거를
-제공합니다. 지금 바로 실행해 볼 수 있는 것은 AI를 부르지 않는 모의 예제입니다.
-실제 코딩 에이전트 연결은 개발자를 위한 Python 통합이 필요합니다.
+Mercury is a local Python tool that observes code changes and collects checks
+for a task, file scope, and commands chosen by a person. It provides review
+evidence, an offline simulator, and an explicitly approved
+[real Codex example in a disposable repository](docs/codex-quickstart.md).
+Connecting an arbitrary user repository still requires developer-written Python
+caller integration.
 
 ## 어떤 문제에 쓰나요?
 
@@ -105,9 +107,12 @@ python3.12 -m venv .venv
 
 현재 패키지는 `agent-harness` 0.1.0, 단일 에이전트 Python API 개발자 프리뷰입니다.
 초기 런타임 대상은 macOS이며 POSIX 프로세스·잠금 API가 필요합니다.
-[CodexCLIAdapter](src/agent_harness/adapter.py)와 [run_loop](src/agent_harness/loop.py)는
-있지만, 초보자가 실제 과제를 바로 실행할 완성된 CLI나 실전 연동 튜토리얼은 없습니다.
-[모의 예제의 전체 구성](examples/quickstart.py)을 참고해 호출 코드를 작성해야 합니다.
+[CodexCLIAdapter](src/agent_harness/adapter.py) and
+[run_loop](src/agent_harness/loop.py) support the
+[runnable disposable Codex example](docs/codex-quickstart.md). It demonstrates
+one fixed task; arbitrary user repositories require caller integration based on
+[the full simulator composition](examples/quickstart.py) and the responsibilities
+below. The installed CLI has no general task-running command.
 
 | 통합 코드에서 정할 것 | 필요한 책임 |
 | --- | --- |
@@ -155,3 +160,5 @@ fsync·전원 손실 내구성을 보장하지 않습니다. 지원되는 체크
 
 개발 점검과 피드백 안내는 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
 [MIT 라이선스](LICENSE)를 적용합니다. Copyright (c) 2026 Mercury (kssk3).
+
+See [the disposable real Codex example](docs/codex-quickstart.md) for an explicitly approved native CLI task, private evidence, and bounded checks.

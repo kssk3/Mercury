@@ -56,6 +56,32 @@ The script returns zero only for that verified result. Other statuses and
 reasons remain visible and return nonzero. Process exit, stored output, and
 scope clearance alone are insufficient for technical PASS.
 
+## Product contracts and implementation
+
+Use this map when composing a caller around the existing APIs. The
+[simulator composition](../examples/quickstart.py) shows how the inputs fit
+into one run; the implementation and tests below describe each boundary.
+The caller remains responsible for choosing meaningful tasks and checks.
+
+| Boundary | Existing responsibility | Implementation and contract tests |
+| --- | --- | --- |
+| Task and human admission | The caller obtains actual approval and chooses scope and criteria. The admission record binds the exact contract; it does not authenticate a person's approval. | [TaskContract](../src/agent_harness/contract.py), [admission](../src/agent_harness/admission.py); [contract tests](../tests/test_contract.py), [admission tests](../tests/test_admission.py) |
+| Scope and protected inputs | The caller selects allowed and protected paths. Snapshot comparison and protected fingerprints provide observations, without process confinement. | [scope](../src/agent_harness/scope.py), [integrity](../src/agent_harness/integrity.py); [scope tests](../tests/test_scope.py), [integrity tests](../tests/test_integrity.py) |
+| Mandatory verification and completion | The caller freezes required commands and maps every criterion to exact commands. The loop requires distinct final verification and passing mapped criteria. | [VerificationPolicy](../src/agent_harness/policy.py), [bind_completion_criteria and run_loop](../src/agent_harness/loop.py); [policy tests](../tests/test_policy.py), [loop tests](../tests/test_loop.py) |
+| State, journal, and startup | The caller supplies external storage. Current state and event history feed read-only startup reconciliation; these records carry evidence without a power-loss durability guarantee. | [state](../src/agent_harness/state.py), [journal](../src/agent_harness/journal.py), [startup](../src/agent_harness/startup.py); [state tests](../tests/test_state.py), [journal tests](../tests/test_journal.py), [startup tests](../tests/test_startup.py) |
+| Explicit recovery | The caller retains trusted sealed-patch references for file recovery. Supported verification checkpoints can be continued explicitly; native sessions are not automatically resumed. | [patch recovery](../src/agent_harness/recovery.py), [continue_verification](../src/agent_harness/loop.py); [recovery tests](../tests/test_recovery.py), [continuation tests](../tests/test_verification_continuation.py) |
+| Lease and outer budgets | The caller serializes repository work, holds and renews its lease, and supplies turn and retry limits. Outer command/time budgets do not cap native internal commands, tokens, or cost. | [RepositoryLock](../src/agent_harness/lock.py), [TurnBudgets](../src/agent_harness/adapter.py), [RetryLimits](../src/agent_harness/retry.py); [lock tests](../tests/test_lock.py), [retry tests](../tests/test_retry.py) |
+
+The linked tests are navigation references to expected behavior. A link does
+not establish that a test was executed or passed; execution evidence must
+identify the actual check and result. For development commands, see
+[CONTRIBUTING.md](../CONTRIBUTING.md).
+
+For an existing native integration example, read the
+[disposable real Codex guide](codex-quickstart.md). It documents a separate,
+explicitly approved temporary-repository task, its prerequisites, budgets,
+and retained evidence. Arbitrary repositories still require caller integration.
+
 ## Using a real repository
 
 The example's subclass replaces `CodexCLIAdapter.run` entirely. A real
