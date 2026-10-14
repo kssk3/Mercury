@@ -98,6 +98,35 @@ State writes and journal ordering provide recovery evidence without an
 fsync/power-loss durability guarantee. Explicit verification continuation is
 available for supported checkpoints; automatic native-session resume is absent.
 
-The CLI offers only `--help`, `--version`, and `profile [path]`, with no task-run
-command. Runtime multi-agent orchestration and messenger control are outside
+The CLI offers `--help`, `--version`, `profile [path]`, and the read-only
+`contract` preview below, with no task-run command. Runtime multi-agent orchestration and messenger control are outside
 this preview. See [development checks](../CONTRIBUTING.md).
+
+
+### Preview a task contract
+
+After installation, preview a contract without running a task:
+
+```sh
+.venv/bin/local-harness contract --goal "Fix the total" \
+  --allow missing/cart.py --protect missing/test_cart.py \
+  --criterion "The total is correct"
+```
+
+```json
+{"allowed_paths":["missing/cart.py"],"completion_criteria":["The total is correct"],"goal":"Fix the total","protected_paths":["missing/test_cart.py"]}
+```
+
+`--goal` and at least one `--criterion` are required. Repeat `--allow`,
+`--protect`, and `--criterion` for additional values; their order and spelling
+are preserved. Omitted path flags produce empty arrays. The paths need not exist.
+The existing TaskContract validation rejects blank goals/criteria, absolute or
+parent-traversing paths, Git metadata, noncanonical paths, duplicate paths,
+and overlapping allowed/protected scope. Invalid input returns exit 2 with an
+error on stderr and no JSON; valid input returns exit 0 with one JSON line.
+
+Preview only validates strings and prints the four-field contract. It does not
+inspect or modify a repository, create admission/state/lock/baseline records,
+or invoke Git, agents, models, network calls, or verification commands. A valid
+preview is neither human approval nor evidence that a criterion passed.
+Arbitrary-repository execution still requires Python caller integration.
