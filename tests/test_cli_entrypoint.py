@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import agent_harness
+import agent_harness.cli as cli
 
 
 @pytest.fixture(scope="module")
@@ -114,6 +115,7 @@ def test_installed_version_and_help(
         assert "usage: local-harness" in result.stdout
         assert "--version" in result.stdout
         assert "profile" in result.stdout
+        assert "contract" in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -160,3 +162,154 @@ def test_installed_profile_rejects_non_git_path(
     assert "Git working tree" in result.stderr
     assert "Traceback" not in result.stderr
     assert snapshot(outside) == before
+
+
+def test_contract_preview_prints_valid_contract_json(
+    entrypoint: Path, repository: Path
+) -> None:
+    before = snapshot(repository)
+
+    result = run_cli(
+        entrypoint,
+        repository,
+        "contract",
+        "--goal",
+        "Fix the total",
+        "--allow",
+        "missing/cart.py",
+        "--protect",
+        "missing/test_cart.py",
+        "--criterion",
+        "The total is correct",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout == (
+        '{"allowed_paths":["missing/cart.py"],'
+        '"completion_criteria":["The total is correct"],'
+        '"goal":"Fix the total",'
+        '"protected_paths":["missing/test_cart.py"]}\n'
+    )
+    assert snapshot(repository) == before
+
+
+def test_contract_preview_preserves_repeated_unicode_values_without_execution(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def refuse_execution(*args: object, **kwargs: object) -> None:
+        pytest.fail("Contract preview attempted repository profiling or a subprocess")
+
+    monkeypatch.setattr(cli, "build_repository_profile", refuse_execution)
+    monkeypatch.setattr(subprocess, "Popen", refuse_execution)
+    code = cli.main(
+        [
+            "contract",
+            "--goal",
+            "  계산 고치기  ",
+            "--allow",
+            "새 파일.py",
+            "--allow",
+            "src/cafe\u0301.py",
+            "--protect",
+            "검사.py",
+            "--protect",
+            "docs/spec.md",
+            "--criterion",
+            "  값 확인  ",
+            "--criterion",
+            "문자 확인",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.err == ""
+    assert captured.out.count("\n") == 1
+    assert json.loads(captured.out) == {
+        "goal": "  계산 고치기  ",
+        "allowed_paths": ["새 파일.py", "src/cafe\u0301.py"],
+        "protected_paths": ["검사.py", "docs/spec.md"],
+        "completion_criteria": ["  값 확인  ", "문자 확인"],
+    }
+
+
+def test_contract_preview_defaults_to_empty_scope(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert cli.main(["contract", "--goal", "Review", "--criterion", "Read it"]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert json.loads(captured.out) == {
+        "goal": "Review",
+        "allowed_paths": [],
+        "protected_paths": [],
+        "completion_criteria": ["Read it"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("arguments", "reason"),
+    [
+        (["--goal", " "], "goal"),
+        (["--criterion", ""], "criterion"),
+        (["--allow", "/absolute.py"], "relative"),
+        (["--protect", "../outside.py"], "parent traversal"),
+        (["--allow", "nested/.GiT/config"], "Git metadata"),
+        (["--protect", "src//file.py"], "canonical"),
+        (["--allow", "src/A.py", "--allow", "src/a.py"], "duplicate"),
+        (["--protect", "checks.py", "--protect", "checks.py"], "duplicate"),
+        (["--allow", "src", "--protect", "src/check.py"], "both allowed and protected"),
+    ],
+)
+def test_contract_preview_reuses_field_and_path_refusals(
+    arguments: list[str], reason: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = cli.main(["contract", "--goal", "Fix", "--criterion", "Checked", *arguments])
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.out == ""
+    assert reason in captured.err
+    assert "Traceback" not in captured.err
+    assert captured.err.count("\n") == 1
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--criterion", "Checked"],
+        ["--goal", "Fix"],
+    ],
+)
+def test_contract_preview_requires_goal_and_criterion(
+    arguments: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as failure:
+        cli.main(["contract", *arguments])
+    assert failure.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "required" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_installed_contract_refusal_preserves_repository(
+    entrypoint: Path, repository: Path
+) -> None:
+    before = snapshot(repository)
+    result = run_cli(
+        entrypoint,
+        repository,
+        "contract",
+        "--goal",
+        "Fix",
+        "--criterion",
+        "Checked",
+        "--allow",
+        ".git/config",
+    )
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "Git metadata" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert result.stderr.count("\n") == 1
+    assert snapshot(repository) == before
