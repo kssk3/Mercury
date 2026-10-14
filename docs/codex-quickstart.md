@@ -23,6 +23,10 @@ admin requirements, and account metadata (`config/read`,
 It requires an explicit effective `openai` provider and a saved ChatGPT account.
 It refuses custom provider definitions, selected or legacy profiles, nonstandard
 endpoints/authentication, custom project-root markers, and managed requirements.
+Effective configuration may materialize the native ChatGPT endpoint
+`https://chatgpt.com/backend-api/` and root-marker list [`.git`]; these exact
+defaults are accepted. Explicit saved endpoint/root-marker overrides are still
+refused, even when they equal those defaults.
 Missing, oversized, malformed, unreadable, warned-about, or unavailable
 configuration is a refusal, rather than permission to assume defaults. This
 deliberately narrow example does not resolve or support every Codex configuration.
@@ -66,6 +70,10 @@ deadline for the handshake and reads, a 262,144-byte response cap, and a
 2-second reap limit after its process group is killed. No thread or turn is
 started by that probe, and its raw responses are discarded. Any stderr output,
 unexpected message, incomplete response or nonzero probe exit causes refusal.
+Initialization requests exact notification opt-outs for `account/updated` and
+`remoteControl/status/changed`, so ordinary startup notifications do not interrupt
+the reads. Configuration, requirements and account decisions still require their
+matched RPC responses; other notifications, warnings and errors remain refusals.
 The saved user configuration is also limited to 262,144 bytes. Each check has a
 5-second timeout. The loop has
 four outer command boundaries and a 180-second reservation limit via
@@ -106,8 +114,10 @@ leave phases without attributable reports `UNKNOWN`. The external journal's
 checkpoints and completed verification events supply these phase facts. Native
 text is replaced with a fixed omission notice in stored state.
 `private-native.json` retains bounded raw native stdout/stderr/final text for
-private diagnosis. It may contain sensitive data. It is not a public safe
-summary or a general secret detector. Auth output and keys are not stored.
+private diagnosis. It may contain sensitive data, including authentication material
+such as keys or auth output. It is not a public safe summary or a general secret
+detector. Preflight configuration/account metadata is discarded and is not stored
+in these receipts; that guarantee does not cover raw output from the native task.
 Keep private receipts outside source control and inspect them before sharing.
 
 The owned fixture repository is removed on normal completion and handled

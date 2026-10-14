@@ -77,7 +77,18 @@ def git(root: Path, *args: str) -> None:
 def metadata(executable: str) -> list[dict[str, object]]:
     """Read metadata only, with one deadline and bounded, discarded responses."""
     requests = [
-        ("initialize", {"clientInfo": {"name": "mercury_example", "version": "1"}}),
+        (
+            "initialize",
+            {
+                "clientInfo": {"name": "mercury_example", "version": "1"},
+                "capabilities": {
+                    "optOutNotificationMethods": [
+                        "account/updated",
+                        "remoteControl/status/changed",
+                    ]
+                },
+            },
+        ),
         ("config/read", {"includeLayers": False}),
         ("configRequirements/read", {}),
         ("account/read", {"refreshToken": False}),
@@ -185,11 +196,16 @@ def require_standard_configuration(data: dict[str, object], *, effective: bool) 
     for key in (
         "profile",
         "openai_base_url",
-        "chatgpt_base_url",
         "experimental_realtime_ws_base_url",
-        "project_root_markers",
     ):
         if data.get(key) is not None:
+            raise ValueError("unsupported routing override")
+    # config/read materializes these defaults even without saved overrides.
+    for key, default in (
+        ("chatgpt_base_url", "https://chatgpt.com/backend-api/"),
+        ("project_root_markers", [".git"]),
+    ):
+        if data.get(key) is not None and (not effective or data[key] != default):
             raise ValueError("unsupported routing override")
     if data.get("forced_login_method") not in (None, "chatgpt"):
         raise ValueError("unsupported authentication")

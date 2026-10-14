@@ -46,15 +46,27 @@ def invoke(
         '    config = {"model_provider": "openai"}\n'
         '    config.update(tomllib.loads((pathlib.Path(os.environ["CODEX_HOME"]) / "config.toml").read_text()))\n'
         "    if layer: config.update(layer)\n"
+        '    if metadata in ("workspace", "native-defaults"):\n'
+        '        config.update(chatgpt_base_url="https://chatgpt.com/backend-api/", project_root_markers=[".git"])\n'
         "    initialized = False\n"
+        "    opted_out = []\n"
         "    for line in sys.stdin:\n"
         "        request = json.loads(line)\n"
         '        method = request["method"]\n'
         '        with calls.open("a") as stream: stream.write(method + "\\n")\n'
         '        if method == "initialize":\n'
-        '            require(request["params"] == {"clientInfo": {"name": "mercury_example", "version": "1"}})\n'
+        '            expected = {"clientInfo": {"name": "mercury_example", "version": "1"}}\n'
+        '            if "capabilities" in request["params"]:\n'
+        '                expected["capabilities"] = {"optOutNotificationMethods": ["account/updated", "remoteControl/status/changed"]}\n'
+        '                opted_out = expected["capabilities"]["optOutNotificationMethods"]\n'
+        '            require(request["params"] == expected)\n'
         '            result = {"userAgent": "fake-codex", "platformFamily": "unix", "platformOs": "macos"}\n'
-        '        elif method == "initialized": initialized = True; continue\n'
+        '        elif method == "initialized":\n'
+        "            initialized = True\n"
+        '            if metadata == "workspace":\n'
+        '                for notification, params in (("account/updated", {"authMode": "chatgpt", "planType": "plus"}), ("remoteControl/status/changed", {"status": "disabled"})):\n'
+        '                    if notification not in opted_out: print(json.dumps({"method": notification, "params": params}), flush=True)\n'
+        "            continue\n"
         "        else:\n"
         "            require(initialized)\n"
         '            if method == "config/read":\n'
@@ -63,7 +75,10 @@ def invoke(
         '                if metadata == "malformed": print("invalid-json", flush=True); continue\n'
         '                if metadata == "oversized": print("x" * 300000, flush=True); continue\n'
         '                if metadata == "warning": print(json.dumps({"method": "configWarning", "params": {"summary": "synthetic-secret"}}), flush=True)\n'
+        '                if metadata == "unknown-notification": print(json.dumps({"method": "unknown/updated", "params": {"value": "synthetic-secret"}}), flush=True)\n'
         '                if metadata == "error": print(json.dumps({"id": request["id"], "error": {"message": "synthetic-secret"}}), flush=True); continue\n'
+        '                if metadata == "wrong-id": print(json.dumps({"id": request["id"] + 1, "result": {}}), flush=True); continue\n'
+        '                if metadata == "malformed-response": print(json.dumps({"id": request["id"], "result": []}), flush=True); continue\n'
         '                if metadata == "missing-provider": config.pop("model_provider")\n'
         '                result = {"config": config, "origins": {}, "layers": None}\n'
         '            elif method == "configRequirements/read":\n'
@@ -167,6 +182,31 @@ def phase_evidence(
     return facts, events
 
 
+@pytest.mark.parametrize("metadata", ["workspace", "native-defaults"])
+def test_supported_native_metadata_allows_one_task(
+    tmp_path: Path, metadata: str
+) -> None:
+    """N2: known startup traffic and effective defaults admit a saved account."""
+    result = invoke(tmp_path, "--approve-codex-demo", metadata=metadata)
+    assert result.returncode == 0, result.stdout + result.stderr
+    facts = summary(result)
+    configuration = facts["configuration"]
+    assert isinstance(configuration, dict)
+    assert configuration["model"] == "fixture-model"
+    assert configuration["effort"] == "high"
+    calls = (tmp_path / "calls").read_text().splitlines()
+    assert calls.count("--strict-config app-server") == 1
+    assert calls.count("account/read") == calls.count("configRequirements/read") == 1
+    assert sum("exec" in line.split() for line in calls) == 1
+    evidence = Path(str(facts["evidence_directory"]))
+    assert "synthetic-secret" not in result.stdout + result.stderr
+    assert all(
+        b"synthetic-secret" not in path.read_bytes()
+        for path in evidence.rglob("*")
+        if path.is_file()
+    )
+
+
 @pytest.mark.parametrize(
     "config_extra",
     [
@@ -177,9 +217,11 @@ def phase_evidence(
         '[model_providers.openai]\nbase_url = "https://synthetic-secret.invalid"\n',
         'openai_base_url = "https://synthetic-secret.invalid"\n',
         'chatgpt_base_url = "https://synthetic-secret.invalid"\n',
+        'chatgpt_base_url = "https://chatgpt.com/backend-api/"\n',
         'forced_login_method = "api"\n',
         'profile = "custom"\n[profiles.custom]\nmodel_provider = "azure"\n',
         "project_root_markers = []\n",
+        'project_root_markers = [".git"]\n',
         'model_providers = "invalid"\n',
     ],
 )
@@ -207,6 +249,10 @@ def test_nonstandard_provider_configuration_is_refused_before_work(
         {"model_provider": "azure"},
         {"model_providers": {"openai": {"env_key": "INHERITED_CUSTOM_KEY"}}},
         {"openai_base_url": "https://synthetic-secret.invalid"},
+        {"chatgpt_base_url": "https://synthetic-secret.invalid"},
+        {"chatgpt_base_url": "https://chatgpt.com/backend-api/other"},
+        {"project_root_markers": []},
+        {"project_root_markers": [".git", "other"]},
         {"profile": "custom"},
     ],
 )
@@ -272,7 +318,10 @@ def test_inherited_provider_auth_or_endpoint_overrides_are_refused(
         "malformed",
         "oversized",
         "warning",
+        "unknown-notification",
         "error",
+        "wrong-id",
+        "malformed-response",
         "missing-provider",
         "missing-requirements",
         "api-account",
