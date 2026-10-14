@@ -18,25 +18,74 @@ EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "codex_quickstart.p
 
 
 def invoke(
-    tmp_path: Path, *args: str, mode: str = "fix"
+    tmp_path: Path,
+    *args: str,
+    mode: str = "fix",
+    config_extra: str = "",
+    layer: dict[str, object] | None = None,
+    requirements: object = None,
+    metadata: str = "valid",
+    env_updates: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     fake = tmp_path / "fake-codex"
     fake.write_text(
         f"#!{sys.executable}\n"
-        "import json, pathlib, sys\n"
+        "import json, os, pathlib, sys, time, tomllib\n"
         f"mode = {mode!r}\n"
+        f"metadata = {metadata!r}\n"
+        f"layer = {layer!r}\n"
+        f"requirements = {requirements!r}\n"
         f"calls = pathlib.Path({str(tmp_path / 'calls')!r})\n"
+        "def require(condition):\n"
+        "    if not condition: sys.exit(91)\n"
         'with calls.open("a") as stream: stream.write(" ".join(sys.argv[1:]) + "\\n")\n'
-        'if sys.argv[1:] == ["login", "status"]:\n'
-        '    print("Logged in using ChatGPT", file=sys.stderr); sys.exit(0)\n'
-        'assert "exec" in sys.argv and "--ephemeral" in sys.argv\n'
-        'assert sys.argv[sys.argv.index("-a") + 1] == "never"\n'
+        'if "app-server" in sys.argv:\n'
+        '    (calls.parent / "metadata.pid").write_text(str(os.getpid()))\n'
+        '    require(sys.argv[1:] == ["--strict-config", "app-server"])\n'
+        '    require(os.getcwd() == "/")\n'
+        '    config = {"model_provider": "openai"}\n'
+        '    config.update(tomllib.loads((pathlib.Path(os.environ["CODEX_HOME"]) / "config.toml").read_text()))\n'
+        "    if layer: config.update(layer)\n"
+        "    initialized = False\n"
+        "    for line in sys.stdin:\n"
+        "        request = json.loads(line)\n"
+        '        method = request["method"]\n'
+        '        with calls.open("a") as stream: stream.write(method + "\\n")\n'
+        '        if method == "initialize":\n'
+        '            require(request["params"] == {"clientInfo": {"name": "mercury_example", "version": "1"}})\n'
+        '            result = {"userAgent": "fake-codex", "platformFamily": "unix", "platformOs": "macos"}\n'
+        '        elif method == "initialized": initialized = True; continue\n'
+        "        else:\n"
+        "            require(initialized)\n"
+        '            if method == "config/read":\n'
+        '                require(request["params"] == {"includeLayers": False})\n'
+        '                if metadata == "timeout": time.sleep(60)\n'
+        '                if metadata == "malformed": print("invalid-json", flush=True); continue\n'
+        '                if metadata == "oversized": print("x" * 300000, flush=True); continue\n'
+        '                if metadata == "warning": print(json.dumps({"method": "configWarning", "params": {"summary": "synthetic-secret"}}), flush=True)\n'
+        '                if metadata == "error": print(json.dumps({"id": request["id"], "error": {"message": "synthetic-secret"}}), flush=True); continue\n'
+        '                if metadata == "missing-provider": config.pop("model_provider")\n'
+        '                result = {"config": config, "origins": {}, "layers": None}\n'
+        '            elif method == "configRequirements/read":\n'
+        '                require(request["params"] == {})\n'
+        '                result = {"requirements": requirements}\n'
+        '                if metadata == "missing-requirements": result = {}\n'
+        '            elif method == "account/read":\n'
+        '                require(request["params"] == {"refreshToken": False})\n'
+        '                result = {"account": {"type": "chatgpt", "email": "synthetic-secret@example.invalid", "planType": "plus"}, "requiresOpenaiAuth": True}\n'
+        '                if metadata == "api-account": result["account"] = {"type": "apiKey"}\n'
+        "            else: sys.exit(92)\n"
+        '        print(json.dumps({"id": request["id"], "result": result}), flush=True)\n'
+        "    sys.exit(0)\n"
+        'require("exec" in sys.argv and "--ephemeral" in sys.argv)\n'
+        'require(sys.argv[sys.argv.index("-a") + 1] == "never")\n'
         "prompt = json.load(sys.stdin)\n"
-        'assert prompt["task_contract"]["allowed_paths"] == ["calculator.py"]\n'
+        'require(prompt["task_contract"]["allowed_paths"] == ["calculator.py"])\n'
         'if mode == "fail": sys.exit(7)\n'
-        'if mode == "fix":\n'
+        'if mode in ("fix", "interrupt-final"):\n'
         '    pathlib.Path("calculator.py").write_text('
         '"def discount(price, percent):\\n    return price * (1 - percent / 100)\\n")\n'
+        'if mode == "check-timeout": pathlib.Path("calculator.py").write_text("import time\\ndef discount(price, percent):\\n    time.sleep(20)\\n")\n'
         'if mode == "protect": pathlib.Path("check.py").write_text("pass\\n")\n'
         'pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("done")\n'
         'print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 12, "output_tokens": 5}}))\n',
@@ -46,16 +95,39 @@ def invoke(
     home = tmp_path / "codex-home"
     home.mkdir(exist_ok=True)
     (home / "config.toml").write_text(
-        'model = "fixture-model"\nmodel_reasoning_effort = "high"\n'
+        'model = "fixture-model"\nmodel_reasoning_effort = "high"\n' + config_extra
     )
+    if metadata == "unreadable":
+        (home / "config.toml").unlink()
+        (home / "config.toml").mkdir()
     env = os.environ.copy()
-    env.pop("OPENAI_API_KEY", None)
-    env.pop("CODEX_API_KEY", None)
+    for key in tuple(env):
+        if key.startswith(("OPENAI_", "CODEX_", "CHATGPT_")):
+            env.pop(key)
     env["CODEX_HOME"] = str(home)
+    env.update(env_updates or {})
+    launch = [sys.executable, str(EXAMPLE)]
+    if mode == "interrupt-final":
+        launch = [
+            sys.executable,
+            "-c",
+            "import runpy, sys\n"
+            "from agent_harness.runner import ControlledCommandRunner\n"
+            "original = ControlledCommandRunner.run\n"
+            "calls = 0\n"
+            "def interrupted(self, *args, **kwargs):\n"
+            "    global calls\n"
+            "    calls += 1\n"
+            "    if calls == 3: raise RuntimeError('final check interrupted')\n"
+            "    return original(self, *args, **kwargs)\n"
+            "ControlledCommandRunner.run = interrupted\n"
+            "sys.argv = sys.argv[1:]\n"
+            "runpy.run_path(sys.argv[0], run_name='__main__')\n",
+            str(EXAMPLE),
+        ]
     return subprocess.run(
         (
-            sys.executable,
-            str(EXAMPLE),
+            *launch,
             "--codex-executable",
             str(fake),
             "--evidence-parent",
@@ -80,6 +152,224 @@ def test_unapproved_run_creates_no_fixture_or_native_call(tmp_path: Path) -> Non
 
 def summary(result: subprocess.CompletedProcess[str]) -> dict[str, object]:
     return json.loads(result.stdout)  # type: ignore[no-any-return]
+
+
+def phase_evidence(
+    result: subprocess.CompletedProcess[str],
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    facts = summary(result)
+    evidence = Path(str(facts["evidence_directory"]))
+    assert json.loads((evidence / "summary.json").read_text()) == facts
+    events = [
+        json.loads(line)
+        for line in (evidence / "state" / "events.jsonl").read_text().splitlines()
+    ]
+    return facts, events
+
+
+@pytest.mark.parametrize(
+    "config_extra",
+    [
+        'model_provider = "custom"\n',
+        'model_provider = "azure"\n',
+        'model_provider = "amazon-bedrock"\n',
+        'model_provider = "custom"\n[model_providers.custom]\nenv_key = "INHERITED_CUSTOM_KEY"\n',
+        '[model_providers.openai]\nbase_url = "https://synthetic-secret.invalid"\n',
+        'openai_base_url = "https://synthetic-secret.invalid"\n',
+        'chatgpt_base_url = "https://synthetic-secret.invalid"\n',
+        'forced_login_method = "api"\n',
+        'profile = "custom"\n[profiles.custom]\nmodel_provider = "azure"\n',
+        "project_root_markers = []\n",
+        'model_providers = "invalid"\n',
+    ],
+)
+def test_nonstandard_provider_configuration_is_refused_before_work(
+    tmp_path: Path, config_extra: str
+) -> None:
+    """A1: ChatGPT status cannot authorize a custom provider or endpoint."""
+    result = invoke(
+        tmp_path,
+        "--approve-codex-demo",
+        config_extra=config_extra,
+        env_updates={"INHERITED_CUSTOM_KEY": "synthetic-secret"},
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not list(tmp_path.glob("mercury-codex-*"))
+    assert not any(
+        "exec" in line.split() for line in (tmp_path / "calls").read_text().splitlines()
+    )
+    assert "synthetic-secret" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "layer",
+    [
+        {"model_provider": "azure"},
+        {"model_providers": {"openai": {"env_key": "INHERITED_CUSTOM_KEY"}}},
+        {"openai_base_url": "https://synthetic-secret.invalid"},
+        {"profile": "custom"},
+    ],
+)
+def test_effective_layer_overrides_cannot_hide_behind_safe_user_config(
+    tmp_path: Path, layer: dict[str, object]
+) -> None:
+    """A1: decisions use the CLI's merged layers, not only config.toml."""
+    result = invoke(tmp_path, "--approve-codex-demo", layer=layer)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not list(tmp_path.glob("mercury-codex-*"))
+    assert "synthetic-secret" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "requirements",
+    [
+        {"modelProvider": "amazon-bedrock"},
+        {
+            "modelProviders": {
+                "openai": {"base_url": "https://synthetic-secret.invalid"}
+            }
+        },
+        {"chatgptBaseUrl": "https://synthetic-secret.invalid"},
+    ],
+)
+def test_managed_requirements_refuse_ambiguous_execution_path(
+    tmp_path: Path, requirements: dict[str, object]
+) -> None:
+    """A1: this narrow example declines managed paths it cannot establish."""
+    result = invoke(tmp_path, "--approve-codex-demo", requirements=requirements)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not list(tmp_path.glob("mercury-codex-*"))
+    assert "synthetic-secret" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "CODEX_API_KEY",
+        "OPENAI_BASE_URL",
+        "CODEX_ACCESS_TOKEN",
+        "CODEX_AUTH_JSON",
+        "CODEX_PROFILE",
+        "CHATGPT_BASE_URL",
+    ],
+)
+def test_inherited_provider_auth_or_endpoint_overrides_are_refused(
+    tmp_path: Path, key: str
+) -> None:
+    """A1: inherited CLI routing/auth overrides do not reach a model turn."""
+    result = invoke(
+        tmp_path, "--approve-codex-demo", env_updates={key: "synthetic-secret"}
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not (tmp_path / "calls").exists()
+    assert not list(tmp_path.glob("mercury-codex-*"))
+    assert "synthetic-secret" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        "malformed",
+        "oversized",
+        "warning",
+        "error",
+        "missing-provider",
+        "missing-requirements",
+        "api-account",
+        "unreadable",
+    ],
+)
+def test_unavailable_or_ambiguous_metadata_fails_closed(
+    tmp_path: Path, metadata: str
+) -> None:
+    """A1: a partial/error response cannot silently become default OpenAI."""
+    result = invoke(tmp_path, "--approve-codex-demo", metadata=metadata)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not list(tmp_path.glob("mercury-codex-*"))
+    assert "synthetic-secret" not in result.stdout + result.stderr
+
+
+def test_malformed_user_config_is_refused_without_raw_disclosure(
+    tmp_path: Path,
+) -> None:
+    result = invoke(
+        tmp_path, "--approve-codex-demo", config_extra='bad = "synthetic-secret\n'
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not list(tmp_path.glob("mercury-codex-*"))
+    assert "synthetic-secret" not in result.stdout + result.stderr
+
+
+def test_metadata_timeout_reaps_probe_before_refusal(tmp_path: Path) -> None:
+    """A1: a stalled model-free probe is bounded and cannot leave a child alive."""
+    result = invoke(tmp_path, "--approve-codex-demo", metadata="timeout")
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not list(tmp_path.glob("mercury-codex-*"))
+    calls = (tmp_path / "calls").read_text().splitlines()
+    assert not any("exec" in line.split() for line in calls)
+    with pytest.raises(ProcessLookupError):
+        os.kill(int((tmp_path / "metadata.pid").read_text()), 0)
+
+
+def test_development_failure_is_not_reported_as_final(tmp_path: Path) -> None:
+    """A2: no final report exists when the unchanged formula fails development."""
+    result = invoke(tmp_path, "--approve-codex-demo", mode="noop")
+    facts, events = phase_evidence(result)
+    assert result.returncode == 1
+    assert facts["baseline"] == facts["development"] == "FAIL"
+    assert facts["final"] == "UNKNOWN"
+    assert [
+        event["phase"]
+        for event in events
+        if event["event"] == "verification_phase_intent"
+    ] == ["development"]
+
+
+def test_interrupted_final_cannot_reuse_development_pass(tmp_path: Path) -> None:
+    """A2: final intent without a returned report leaves final UNKNOWN."""
+    result = invoke(tmp_path, "--approve-codex-demo", mode="interrupt-final")
+    facts, events = phase_evidence(result)
+    assert result.returncode == 1
+    assert facts["baseline"] == "FAIL"
+    assert facts["development"] == "PASS"
+    assert facts["final"] == "UNKNOWN"
+    assert [
+        event["phase"]
+        for event in events
+        if event["event"] == "verification_phase_intent"
+    ] == ["development", "final"]
+    assert not any(event["event"] == "attempt_verification" for event in events)
+
+
+@pytest.mark.parametrize("mode", ["fix", "noop"])
+def test_optimized_python_still_requires_correct_discount(
+    tmp_path: Path, mode: str
+) -> None:
+    """A4: removable assertions must never authorize a wrong calculator."""
+    result = invoke(
+        tmp_path, "--approve-codex-demo", mode=mode, env_updates={"PYTHONOPTIMIZE": "2"}
+    )
+    facts, events = phase_evidence(result)
+    assert facts["baseline"] == "FAIL"
+    assert result.returncode == (0 if mode == "fix" else 1)
+    assert facts["development"] == ("PASS" if mode == "fix" else "FAIL")
+    assert facts["final"] == ("PASS" if mode == "fix" else "UNKNOWN")
+    assert facts["criteria_passed"] is (mode == "fix")
+    assert any(event["event"] == "attempt_verification" for event in events)
+
+
+def test_check_timeout_preserves_unknown_unexecuted_final(tmp_path: Path) -> None:
+    """A2: a timeout cannot establish a passing phase or start final verification."""
+    result = invoke(tmp_path, "--approve-codex-demo", mode="check-timeout")
+    facts, events = phase_evidence(result)
+    assert result.returncode == 1
+    assert facts["baseline"] == "FAIL"
+    assert facts["development"] == facts["final"] == "UNKNOWN"
+    assert [
+        event["phase"]
+        for event in events
+        if event["event"] == "verification_phase_intent"
+    ] == ["development"]
 
 
 def test_success_requires_checks_and_preserves_external_receipts(
@@ -114,6 +404,20 @@ def test_success_requires_checks_and_preserves_external_receipts(
     )
     assert not Path(root).exists()
     assert facts["fixture_removed"] is True
+    configuration = facts["configuration"]
+    assert isinstance(configuration, dict)
+    assert configuration["model"] == "fixture-model"
+    assert configuration["effort"] == "high"
+    calls = (tmp_path / "calls").read_text().splitlines()
+    assert calls[:6] == [
+        "--strict-config app-server",
+        "initialize",
+        "initialized",
+        "config/read",
+        "configRequirements/read",
+        "account/read",
+    ]
+    assert len(calls) == 7 and "exec" in calls[-1].split()
     assert (tmp_path / "codex-home" / "config.toml").read_text() == (
         'model = "fixture-model"\nmodel_reasoning_effort = "high"\n'
     )
@@ -203,17 +507,11 @@ def test_cleanup_failure_preserves_receipt_without_removal_claim(
         yield str(scratch)
         raise OSError("owned fixture cleanup failed")
 
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("CODEX_API_KEY", raising=False)
+    for key in tuple(os.environ):
+        if key.startswith(("OPENAI_", "CODEX_", "CHATGPT_")):
+            monkeypatch.delenv(key)
     monkeypatch.setattr(example_module.shutil, "which", lambda value: sys.executable)
-    monkeypatch.setattr(example_module, "configuration", lambda: {})
-    monkeypatch.setattr(
-        example_module.subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="Logged in using ChatGPT", stderr=""
-        ),
-    )
+    monkeypatch.setattr(example_module, "configuration", lambda executable: {})
     monkeypatch.setattr(example_module, "git", lambda *args: None)
     monkeypatch.setattr(example_module, "build_context_packet", lambda *a, **k: None)
     monkeypatch.setattr(

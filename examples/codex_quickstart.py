@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import selectors
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -14,26 +17,31 @@ import tomllib
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from agent_harness.adapter import CodexCLIAdapter, CodexTurnResult, TurnBudgets
 from agent_harness.admission import AdmissionRecord, record_admission
 from agent_harness.context import ContextPacket, build_context_packet
 from agent_harness.contract import TaskContract
+from agent_harness.evidence import EvidenceReport
 from agent_harness.journal import EventJournal
 from agent_harness.lock import RepositoryLock
 from agent_harness.loop import run_loop
 from agent_harness.policy import VerificationPolicy
 from agent_harness.retry import RetryLimits
+from agent_harness.runner import CommandResult
 from agent_harness.state import CurrentStateStore
 
 BUG = "def discount(price, percent):\n    return price * (1 - percent / 50)\n"
 CHECK = (
     "from calculator import discount\n"
-    "assert discount(100, 10) == 90\n"
-    "assert discount(200, 25) == 150\n"
-    "assert discount(0, 10) == 0\n"
+    "for price, percent, expected in ((100, 10, 90), (200, 25, 150), (0, 10, 0)):\n"
+    "    if discount(price, percent) != expected:\n"
+    "        raise SystemExit('discount check failed')\n"
 )
+METADATA_TIMEOUT = 10
+METADATA_BYTES = 262144
+METADATA_REAP_TIMEOUT = 2
 
 
 def git(root: Path, *args: str) -> None:
@@ -66,18 +74,173 @@ def git(root: Path, *args: str) -> None:
     )
 
 
-def configuration() -> dict[str, object]:
-    """Report selected non-secret settings without modifying config/auth/rules."""
-    config = (
-        Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "config.toml"
+def metadata(executable: str) -> list[dict[str, object]]:
+    """Read metadata only, with one deadline and bounded, discarded responses."""
+    requests = [
+        ("initialize", {"clientInfo": {"name": "mercury_example", "version": "1"}}),
+        ("config/read", {"includeLayers": False}),
+        ("configRequirements/read", {}),
+        ("account/read", {"refreshToken": False}),
+    ]
+    deadline = time.monotonic() + METADATA_TIMEOUT
+    process = subprocess.Popen(
+        (executable, "--strict-config", "app-server"),
+        cwd=os.path.sep,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+        start_new_session=True,
     )
-    if not config.exists():
-        return {"model": "UNKNOWN", "effort": "UNKNOWN", "provenance": "CLI defaults"}
-    data = tomllib.loads(config.read_text(encoding="utf-8"))
+    try:
+        if process.stdin is None or process.stdout is None or process.stderr is None:
+            raise ValueError("metadata pipes unavailable")
+        responses: list[dict[str, object]] = []
+        buffered = b""
+        received = 0
+
+        def request(index: int) -> bytes:
+            method, params = requests[index]
+            return (
+                json.dumps({"id": index + 1, "method": method, "params": params}) + "\n"
+            ).encode()
+
+        outgoing = request(0)
+        with selectors.DefaultSelector() as selector:
+            for stream in (process.stdin, process.stdout, process.stderr):
+                os.set_blocking(stream.fileno(), False)
+            selector.register(process.stdin, selectors.EVENT_WRITE, "input")
+            selector.register(process.stdout, selectors.EVENT_READ, "output")
+            selector.register(process.stderr, selectors.EVENT_READ, "error")
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("metadata deadline")
+                for key, _ in selector.select(remaining):
+                    if key.data == "input":
+                        outgoing = outgoing[os.write(key.fd, outgoing) :]
+                        if not outgoing:
+                            selector.unregister(key.fileobj)
+                        continue
+                    chunk = os.read(key.fd, 8192)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    received += len(chunk)
+                    if received > METADATA_BYTES or key.data == "error":
+                        raise ValueError("metadata unavailable")
+                    buffered += chunk
+                    while b"\n" in buffered:
+                        line, buffered = buffered.split(b"\n", 1)
+                        response = json.loads(line)
+                        if (
+                            outgoing
+                            or not isinstance(response, dict)
+                            or set(response) != {"id", "result"}
+                            or type(response["id"]) is not int
+                            or response["id"] != len(responses) + 1
+                            or not isinstance(response["result"], dict)
+                            or len(responses) == len(requests)
+                        ):
+                            raise ValueError("unexpected metadata response")
+                        responses.append(response["result"])
+                        if len(responses) == len(requests):
+                            process.stdin.close()
+                        else:
+                            outgoing = request(len(responses))
+                            if len(responses) == 1:
+                                outgoing = b'{"method":"initialized"}\n' + outgoing
+                            selector.register(
+                                process.stdin, selectors.EVENT_WRITE, "input"
+                            )
+            if buffered or len(responses) != len(requests):
+                raise ValueError("incomplete metadata")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or process.wait(timeout=remaining) != 0:
+                raise ValueError("metadata process failed")
+        return responses
+    finally:
+        # Native credential refresh/persistence remains the CLI's responsibility.
+        # Reap the owned probe group on error; never retain raw metadata or stderr.
+        try:
+            if process.returncode is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=METADATA_REAP_TIMEOUT)
+        finally:
+            for cleanup_stream in (process.stdin, process.stdout, process.stderr):
+                if cleanup_stream is not None:
+                    cleanup_stream.close()
+
+
+def require_standard_configuration(data: dict[str, object], *, effective: bool) -> None:
+    """Refuse routing that this deliberately narrow example cannot establish."""
+    if data.get("model_provider", None if effective else "openai") != "openai":
+        raise ValueError("unsupported provider")
+    for key in ("model_providers", "profiles"):
+        if key in data and data[key] is not None and data[key] != {}:
+            raise ValueError("unsupported provider or profile definitions")
+    for key in (
+        "profile",
+        "openai_base_url",
+        "chatgpt_base_url",
+        "experimental_realtime_ws_base_url",
+        "project_root_markers",
+    ):
+        if data.get(key) is not None:
+            raise ValueError("unsupported routing override")
+    if data.get("forced_login_method") not in (None, "chatgpt"):
+        raise ValueError("unsupported authentication")
+    if data.get("cli_auth_credentials_store") not in (None, "file", "keyring", "auto"):
+        raise ValueError("unsupported credential storage")
+
+
+def configuration(executable: str) -> dict[str, object]:
+    """Inspect accepted config without initiating login or writing config/rules."""
+    try:
+        (Path(os.path.sep) / ".codex" / "config.toml").lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise ValueError("filesystem-root project configuration unsupported")
+    config = (
+        Path(os.environ.get("CODEX_HOME") or str(Path.home() / ".codex"))
+        / "config.toml"
+    )
+    with config.open("rb") as stream:
+        raw = stream.read(METADATA_BYTES + 1)
+    if len(raw) > METADATA_BYTES:
+        raise ValueError("configuration too large")
+    saved = tomllib.loads(raw.decode("utf-8"))
+    initialized, configured, requirements, account = metadata(executable)
+    if not all(
+        isinstance(initialized.get(key), str) and initialized[key]
+        for key in ("userAgent", "platformFamily", "platformOs")
+    ):
+        raise ValueError("initialization metadata unavailable")
+    data = configured.get("config")
+    if not isinstance(data, dict):
+        raise ValueError("effective configuration unavailable")
+    require_standard_configuration(saved, effective=False)
+    require_standard_configuration(data, effective=True)
+    if "requirements" not in requirements or requirements["requirements"] is not None:
+        raise ValueError("managed configuration unsupported")
+    identity = account.get("account")
+    if (
+        not isinstance(identity, dict)
+        or identity.get("type") != "chatgpt"
+        or account.get("requiresOpenaiAuth") is not True
+    ):
+        raise ValueError("saved ChatGPT account required")
+    for key in ("model", "model_reasoning_effort"):
+        if data.get(key) is not None and not isinstance(data[key], str):
+            raise ValueError("ambiguous model setting")
     return {
-        "model": data.get("model", "UNKNOWN"),
-        "effort": data.get("model_reasoning_effort", "UNKNOWN"),
-        "provenance": "saved top-level config; native events authoritative when available",
+        "model": data.get("model") or "UNKNOWN",
+        "effort": data.get("model_reasoning_effort") or "UNKNOWN",
+        "provenance": "effective config/read; native events authoritative when available",
     }
 
 
@@ -154,6 +317,84 @@ class RecordingAdapter(CodexCLIAdapter):
         }
 
 
+def command_facts(results: tuple[CommandResult, ...]) -> list[dict[str, object]]:
+    """Match the journal's safe command identity and returned process facts."""
+    return [
+        {
+            "command_sha256": hashlib.sha256(
+                json.dumps(
+                    item.command, separators=(",", ":"), ensure_ascii=True
+                ).encode()
+            ).hexdigest(),
+            "exit_code": item.exit_code,
+            "timed_out": item.timed_out,
+        }
+        for item in results
+    ]
+
+
+def command_status(value: object) -> str:
+    """Incomplete or timed-out checks do not establish a phase result."""
+    if not isinstance(value, list) or not value:
+        return "UNKNOWN"
+    rows = cast(list[object], value)
+    if any(
+        not isinstance(row, dict)
+        or type(row.get("exit_code")) is not int
+        or row.get("timed_out") is not False
+        for row in rows
+    ):
+        return "UNKNOWN"
+    return (
+        "FAIL"
+        if any(row["exit_code"] != 0 for row in cast(list[dict[str, object]], rows))
+        else "PASS"
+    )
+
+
+def phase_facts(
+    events: list[dict[str, object]], report: EvidenceReport | None
+) -> dict[str, str]:
+    """Use completed checkpoint/report evidence, never final intent alone."""
+    facts = {"baseline": "UNKNOWN", "development": "UNKNOWN", "final": "UNKNOWN"}
+    phases: dict[str, str] = {}
+    if report is not None:
+        facts["baseline"] = command_status(
+            command_facts(report.profile.baseline.results)
+        )
+    for event in events:
+        attempt = event.get("attempt_id")
+        if not isinstance(attempt, str):
+            continue
+        if event.get("event") == "verification_checkpoint":
+            facts["baseline"] = command_status(event.get("baseline"))
+            if (
+                event.get("pending_phase") == "final"
+                and phases.get(attempt) == "development"
+            ):
+                facts["development"] = command_status(event.get("completed_results"))
+        elif event.get("event") == "verification_phase_intent":
+            phase = event.get("phase")
+            if phase in ("development", "final"):
+                phases[attempt] = phase
+        elif (
+            event.get("event") == "attempt_verification"
+            and report is not None
+            and attempt in phases
+            and event.get("repository_root") == str(report.repository_root)
+            and event.get("target_revision") == report.target_revision
+            and event.get("overall_kind") == report.overall_kind.value
+            and event.get("commands") == command_facts(report.profile.results)
+            and event.get("baseline_commands")
+            == command_facts(report.profile.baseline.results)
+        ):
+            status = command_status(event["commands"])
+            facts[phases[attempt]] = (
+                "FAIL" if report.protected_input_violations else status
+            )
+    return facts
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--approve-codex-demo", action="store_true")
@@ -169,25 +410,30 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.approve_codex_demo:
         parser.error("read docs/codex-quickstart.md and pass --approve-codex-demo")
-    if any(os.environ.get(key) for key in ("OPENAI_API_KEY", "CODEX_API_KEY")):
+    if any(
+        value
+        and key.startswith(("OPENAI_", "CODEX_", "CHATGPT_"))
+        and key != "CODEX_HOME"
+        for key, value in os.environ.items()
+    ) or (
+        os.environ.get("CODEX_HOME")
+        and not Path(os.environ["CODEX_HOME"]).is_absolute()
+    ):
         parser.error(
-            "remove API-key overrides; this example requires saved ChatGPT login"
+            "remove API-key overrides and other provider/auth environment overrides; "
+            "only absolute CODEX_HOME is supported"
         )
     executable = shutil.which(args.codex_executable)
     if executable is None:
         parser.error("trusted Codex executable unavailable")
-    # Auth metadata only; do not store or display raw auth output.
+    # Metadata only; do not store or display raw config/account/error output.
     try:
-        auth = subprocess.run(
-            (executable, "login", "status"), capture_output=True, text=True, timeout=10
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        selected_config = configuration(executable)
+    except (OSError, ValueError, RecursionError, subprocess.TimeoutExpired):
         parser.error(
-            "ChatGPT authentication preflight UNKNOWN; native task not started"
+            "standard OpenAI/ChatGPT configuration preflight UNKNOWN or unsupported; "
+            "native task not started"
         )
-    if auth.returncode != 0 or "chatgpt" not in (auth.stdout + auth.stderr).lower():
-        parser.error("saved ChatGPT authentication required; no billing fallback")
-    selected_config = configuration()
     evidence = Path(
         tempfile.mkdtemp(prefix="mercury-codex-", dir=args.evidence_parent)
     ).resolve()
@@ -271,35 +517,12 @@ def main(argv: list[str] | None = None) -> int:
                 and all(item.passed for item in result.criteria),
             )
             if result.report is not None:
-                summary["baseline"] = (
-                    "FAIL"
-                    if any(
-                        item.exit_code != 0 or item.timed_out
-                        for item in result.report.profile.baseline.results
-                    )
-                    else "PASS"
-                )
                 summary[
                     "protection_clear"
                 ] = not result.report.protected_input_violations
-                summary["final"] = result.report.overall_kind.value.upper()
-            for event in journal.read():
-                if (
-                    event.get("event") == "verification_checkpoint"
-                    and event.get("pending_phase") == "development"
-                ):
-                    baseline = event.get("baseline")
-                    if isinstance(baseline, list):
-                        summary["baseline"] = (
-                            "FAIL"
-                            if any(item.get("exit_code") != 0 for item in baseline)
-                            else "PASS"
-                        )
-                if (
-                    event.get("event") == "verification_phase_intent"
-                    and event.get("phase") == "final"
-                ):
-                    summary["development"] = "PASS"
+            events = journal.read()
+            summary.update(phase_facts(events, result.report))
+            for event in events:
                 if event.get("event") in {"scope_decision", "callback_scope_decision"}:
                     summary["scope_clear"] = event.get("proceed", False)
                     delta = event.get("delta")
