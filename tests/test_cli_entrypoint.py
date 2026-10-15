@@ -584,3 +584,69 @@ def test_installed_verification_plan_refusal_preserves_repository(
     assert result.stderr
     assert "Traceback" not in result.stderr
     assert snapshot(repository) == before
+
+
+def test_status_missing_state_is_unknown_without_writes(
+    entrypoint: Path, tmp_path: Path
+) -> None:
+    missing = tmp_path / "missing-state"
+    result = run_cli(entrypoint, tmp_path, "status", "--state-dir", str(missing))
+    assert result.returncode == 1
+    assert result.stderr == ""
+    assert result.stdout.count("\n") == 1
+    summary = json.loads(result.stdout)
+    assert summary["recorded_status"] == "unknown"
+    assert summary["historical_only"] is True
+    assert summary["current_workspace_verified"] is False
+    assert not missing.exists()
+
+
+def test_status_installed_valid_history_preserves_files(
+    entrypoint: Path, tmp_path: Path
+) -> None:
+    outcome = {
+        "event": "loop_outcome",
+        "status": "stopped",
+        "reason": "command_budget",
+        "commands": 0,
+        "elapsed_seconds": 0.2,
+        "elapsed_boundary": "before_outcome_persistence",
+        "attempt_ids": [],
+    }
+    prefix = b'{"event":"loop_start","repository_id":"recorded-repo"}\n'
+    import hashlib
+
+    state = {
+        "attempt_summary": {
+            "schema_version": 1,
+            "attempt_count": 0,
+            "journal": {
+                "path": str(tmp_path / "events.jsonl"),
+                "sha256": hashlib.sha256(prefix).hexdigest(),
+            },
+            "active_attempt": None,
+        },
+        "loop_summary": outcome,
+    }
+    (tmp_path / "current.json").write_text(json.dumps(state))
+    (tmp_path / "events.jsonl").write_bytes(
+        prefix + json.dumps(outcome).encode() + b"\n"
+    )
+    before = snapshot(tmp_path)
+    result = run_cli(entrypoint, tmp_path, "status", "--state-dir", str(tmp_path))
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout.count("\n") == 1
+    summary = json.loads(result.stdout)
+    assert summary["recorded_status"] == "stopped"
+    assert summary["attempt_ids"] == []
+    assert summary["target_revision"] is None
+    assert snapshot(tmp_path) == before
+
+
+def test_status_requires_explicit_directory(entrypoint: Path, tmp_path: Path) -> None:
+    result = run_cli(entrypoint, tmp_path, "status")
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "--state-dir" in result.stderr
+    assert list(tmp_path.iterdir()) == []

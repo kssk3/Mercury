@@ -172,3 +172,45 @@ and invokes no Git commands, verification commands, agents, models, or network
 calls. Paths and executables need not exist. The JSON provides no human
 approval, delivery evidence, technical PASS, authenticity, or executable-trust
 claim. Executing a task still requires the caller integration described above.
+
+### Summarize recorded execution
+
+The local candidate adds a historical reader (not yet delivered on main
+`31e2c212` or in PR #5):
+
+```sh
+.venv/bin/local-harness status --state-dir /absolute/path/to/external-state
+```
+
+The required directory selects only `current.json` and `events.jsonl`. The reader
+opens regular single-link files without following symlink leaves or ancestors,
+and reads at most 1 MiB of current state and 8 MiB / 10,000 journal records. These
+limits apply to this reader, without changing runtime persistence behavior.
+It creates no directory, file or lock, reads no repository or referenced output
+file, and invokes no Git, agent, network, verification or recovery action.
+
+One JSON line has `schema_version: 1`, `historical_only: true`,
+`current_workspace_verified: false`, `recorded_status`, `recorded_reason`,
+`attempt_ids`, `target_revision`, `verification`, `evidence`, and `diagnostics`.
+`verification` contains only recorded technical/overall kinds and command count,
+or null. `evidence` contains current/journal paths and byte SHA-256 digests plus
+output channel identifiers (digests), without stdout/stderr/native transcript
+bodies. It does not copy arbitrary state/event fields. UNKNOWN input returns
+null metadata and a fixed diagnostic, never malformed input text.
+
+Supported histories use v1 `attempt_summary` with a journal path/hash and the
+existing unversioned `loop_outcome` fields. The current loop summary must match
+the terminal journal event. The attempt summary hash can cover the full journal
+or its preterminal prefix: the producer refreshes attempts immediately before
+appending the terminal outcome. Represented identities, revision, verification
+and output identifiers must agree; incomplete or contradictory views remain
+UNKNOWN. This is a limited historical binding check, not comprehensive semantic
+validation of every event or authentication of recorded claims. File metadata
+is checked across the pair observation; adversarial ABA isolation is not promised.
+
+Valid supported readable records return exit 0, including recorded fail, blocked,
+stopped, human, and unknown outcomes. Missing/malformed/unsupported/unsafe or
+changed inputs return exit 1 and one JSON line with `recorded_status: "unknown"`.
+Argument syntax errors, including missing `--state-dir`, retain argparse exit 2.
+A recorded pass does not verify the current workspace, prove output authenticity,
+obtain approval, permit a rerun, or authorize merge.
