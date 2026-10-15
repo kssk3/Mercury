@@ -1,132 +1,173 @@
 # Mercury
 
-한국어 | [English](README.en.md)
+[Detailed English guide](README.en.md)
 
-AI에 코드 수정을 맡긴 뒤에는 두 가지를 확인해야 합니다. **어떤 파일이 바뀌었는지,
-내가 정한 검사를 실제로 통과했는지**입니다. AI가 “완료했다”고 말하는 것만으로는
-이 두 가지를 알 수 없습니다.
+After asking AI to fix code, you still need to check two things: **which files
+changed, and whether your chosen checks actually passed**. The AI's statement
+that it is done does not answer those questions.
 
-Mercury is a local Python tool that observes code changes and collects checks
-for a task, file scope, and commands chosen by a person. It provides review
-evidence, an offline simulator, and an explicitly approved
-[real Codex example in a disposable repository](docs/codex-quickstart.md).
+Mercury is a local Python tool that observes code changes and collects check
+results for a task, file scope, and commands chosen by a person. It provides
+evidence for that person's review. You can run an offline simulator or an
+explicitly approved [real Codex example in a disposable repository](docs/codex-quickstart.md).
 Connecting an arbitrary user repository still requires developer-written Python
 caller integration.
 
-## 어떤 문제에 쓰나요?
+## Current project status
 
-**다음은 가상의 장바구니 연동 사례입니다. 실행 가능한 튜토리얼은 아닙니다.**
-가격 100에 10% 할인을 적용하면 90이 되어야 하는데, 현재 코드는 80을 반환한다고
-가정해 보겠습니다.
+Mercury is a single-agent Python API developer preview, version 0.1.0.
+This progress snapshot was reconciled on **2026-10-14** against
+[main at 719c45f0](https://github.com/kssk3/Mercury/commit/719c45f0d7480510aaa99dd1ec55cec14452b504).
+It describes delivered capabilities on that revision, not a general task-running
+product or a release commitment.
 
-- 사람이 “10% 할인 계산을 고쳐 달라”는 작업을 정합니다.
-- 수정할 파일은 `cart.py`, 그대로 유지할 검사는 `tests/test_cart.py`로 정합니다.
-- 선택한 검사 명령은 예를 들어 `python -m pytest tests/test_cart.py`입니다.
-- Codex가 코드를 수정하면 Mercury는 파일 변화를 관찰하고 정한 검사를 실행합니다.
-- 사람은 변경된 파일과 실제 검사 결과를 검토해 작업을 받아들일지 판단합니다.
+| Capability | Current state | Entry point |
+| --- | --- | --- |
+| Task contracts, scope/protected-input observations, required checks, state and explicit verification continuation | Available through the Python API; callers compose and approve each task | [API responsibility map](docs/quickstart.md#product-contracts-and-implementation) |
+| Offline simulator | Available without a native agent, model call or account | [Offline quickstart](docs/quickstart.md) |
+| Real Codex integration example | Delivered in [PR #3](https://github.com/kssk3/Mercury/pull/3); one explicitly approved fixed task in an owned disposable repository | [Codex quickstart](docs/codex-quickstart.md) |
+| Read-only task-contract CLI | Delivered in [PR #4](https://github.com/kssk3/Mercury/pull/4); validates strings and prints JSON | [Contract preview](#preview-a-task-contract) |
+| General execution on arbitrary user repositories | Requires developer-written Python caller integration; no general configuration loader or task-running CLI | [Integration responsibilities](#connect-a-real-repository-and-agent) |
 
-이 저장소에는 위 장바구니 파일이나 테스트가 제공되지 않습니다. 위 명령도 여기서
-실행하는 안내가 아닙니다. 실제 Python 연동이 갖춰졌을 때의 개념적 흐름입니다.
+PR #3 and PR #4 are merged, and their owned branches were removed.
+The existing automatic [main CI run for this revision](https://github.com/kssk3/Mercury/actions/runs/38579592243)
+completed successfully, including static checks, Linux tests and the offline
+quickstart. Existing passed checks and reviews were reused to reconcile this
+snapshot; documenting progress did not run another model task or CI cycle.
+
+## What problem does it help with?
+
+**This is a hypothetical shopping-cart integration story, not a runnable tutorial.**
+Imagine a price of 100 with a 10% discount: the result should be 90, but the
+current code returns 80.
+
+- A person chooses the task: fix the 10% discount calculation.
+- They allow edits to `cart.py` and keep `tests/test_cart.py` unchanged.
+- For example, they choose `python -m pytest tests/test_cart.py` as the check.
+- Codex edits the code; Mercury observes file changes and runs the chosen check.
+- The person reviews the changed files and actual check results before accepting
+  the work.
+
+This repository does not provide those cart files or tests. The command above
+is not an instruction to run it here. This is the conceptual path after a real
+Python integration has been set up.
 
 ```mermaid
 flowchart LR
-    A["사람: 작업, 파일, 검사 정하기"] --> B["Codex: 코드 수정"]
-    B --> C["Mercury: 파일 변화 관찰"]
-    C --> D["Mercury: 정한 검사 실행"]
-    D --> E["결과: 변경과 검사 근거"]
-    E --> F["사람: 결과 검토"]
+    A["Person: choose task, files, checks"] --> B["Codex: edit code"]
+    B --> C["Mercury: observe file changes"]
+    C --> D["Mercury: run chosen checks"]
+    D --> E["Result: changes and check evidence"]
+    E --> F["Person: review results"]
 ```
 
-AI의 설명은 실제 검사 결과를 대신하지 않습니다. 범위를 관찰한다고 모든 잘못된
-수정을 미리 막는 것은 아니며, Mercury가 보안 격리 환경을 제공하는 것도 아닙니다.
+An AI explanation does not replace actual check results. Observing scope does
+not prevent every unwanted edit, and Mercury does not provide a security sandbox.
+Verification binds caller-managed external entry programs and declared shebang
+interpreters before native work, and freezes safe external executable and common
+loader/startup search paths. Caller programs must honor that supplied environment.
+Explicit workspace execution, workspace imports, plugin discovery, program-specific
+configuration and intentional search overrides remain caller trust decisions.
+Absolute interpreters, conventional `env program`, and simple unquoted literal
+`env -S program arguments` are supported. Quoting, dynamic expansion,
+backslash/comment dialects, non-ASCII env syntax and env lookup overrides are
+refused before any command in the batch launches. Native script invocation and
+the original command evidence are preserved. Literal external `ENV`, `BASH_ENV` and
+`PYTHONSTARTUP` paths preserve spaces; Python home pairs and loader lists retain
+their own separators. Caller-managed runtime dependencies must remain trusted.
+Entry and interpreter proofs use finite regular-file reads and bounded shebang
+recursion. External virtualenv invocation is preserved.
 
-## 지금 실행해 보기: AI 없는 모의 예제
+## Try it today: a simulator with no AI
 
-실제로 제공되는 예제는 장바구니 대신 작은 텍스트 파일을 사용합니다. 임시 Git
-저장소의 `value.txt`를 `before`에서 `after`로 바꾸고, 변경을 허용하지 않은
-`check.py`로 결과를 검사합니다. **모의 Codex 어댑터의 Python 코드가 값을 바꾸며,
-네이티브 에이전트·모델·네트워크는 호출하지 않습니다.**
+The provided example uses a small text file instead of a shopping cart. It
+changes `value.txt` from `before` to `after` in a temporary Git repository and
+checks it with `check.py`, which must stay unchanged. **Python code in a simulated
+Codex adapter makes the edit; no native agent, model, or network is invoked.**
 
-준비물은 macOS, Git, Python 3.12 이상입니다. 아래 명령은 `python3.12` 실행 파일을
-사용합니다. Codex CLI나 모델 계정, API 키는 필요하지 않습니다. 저장소 다운로드와
-패키지 설치에는 인터넷이 필요할 수 있지만, 모의 예제 실행 자체는 오프라인입니다.
+You need macOS, Git, and Python 3.12 or newer. The commands below use the
+`python3.12` executable. You need no Codex CLI, model account, or API key.
+Downloading the repository and installing the package may need internet access;
+running the simulator itself is offline.
 
-### 1. 프리뷰 브랜치 받기
+### 1. Get main
 
-빈 작업 위치에서 아래 명령을 실행합니다. 예제가 포함된 브랜치를 정확히 선택합니다.
+Run this from an empty working location. It explicitly selects the branch
+containing the example.
 
 ```sh
 git clone --branch main --single-branch https://github.com/kssk3/Mercury.git mercury-demo
 cd mercury-demo
 ```
 
-완료하면 `mercury-demo` 디렉터리에 문서, 패키지 소스, `examples/quickstart.py`가 있습니다.
+You will have the docs, package source, and `examples/quickstart.py` in `mercury-demo`.
 
-### 2. Python 환경과 패키지 준비하기
+### 2. Prepare Python and the package
 
 ```sh
 python3.12 -m venv .venv
 .venv/bin/python -m pip install .
 ```
 
-`.venv`에 별도 Python 환경을 만들고 이 저장소의 `agent-harness` 패키지를 설치합니다.
+This creates a separate Python environment in `.venv` and installs this
+repository's `agent-harness` package there.
 
-### 3. 예제 실행과 결과 확인하기
+### 3. Run the example and read its result
 
-[예제 코드](examples/quickstart.py)를 읽은 뒤 실행합니다.
-`--approve-demo`는 이 임시 파일 변경과 검사만 승인합니다. 기존 저장소의 작업을
-승인하지 않습니다. 이 옵션을 빼면 임시 저장소를 만들기 전에 종료합니다.
+Read [the example code](examples/quickstart.py), then run it. `--approve-demo`
+approves only this temporary file edit and check; it does not approve work on an
+existing repository. Omitting the flag exits before creating the temporary repository.
 
 ```sh
 .venv/bin/python examples/quickstart.py --approve-demo
 ```
 
-정상 실행 결과는 다음과 같습니다.
+A successful run prints:
 
 ```json
 {"command_boundaries": 4, "criteria_passed": true, "mode": "simulated", "reason": "final_verification", "redaction_checked": true, "status": "pass"}
 ```
 
-| 출력 | 뜻 |
+| Output | Meaning |
 | --- | --- |
-| `mode: simulated` | AI가 아닌 고정된 Python 모의 코드가 파일을 바꿨습니다. |
-| `status: pass`, `criteria_passed: true` | 정한 완료 기준과 최종 검사를 통과했습니다. |
-| `reason: final_verification` | 변경 후 검사를 별도로 다시 실행해 확인했습니다. |
-| `command_boundaries: 4` | 변경 전 검사, 모의 변경, 변경 후 검사, 별도 최종 검사의 네 경계를 거쳤습니다. |
-| `redaction_checked: true` | 예제용 가상 표시 문자열이 저장 전에 가려졌음을 확인했습니다. 일반 비밀정보 탐지 기능을 뜻하지는 않습니다. |
+| `mode: simulated` | Fixed Python simulator code changed the file, with no AI. |
+| `status: pass`, `criteria_passed: true` | The chosen completion criterion and final check passed. |
+| `reason: final_verification` | A separate check after the edit confirmed the result again. |
+| `command_boundaries: 4` | The run crossed four boundaries: check before the edit, simulated edit, check after the edit, and a distinct final check. |
+| `redaction_checked: true` | A synthetic example marker was masked before storage. This is not a general secret detector. |
 
-처음에는 값이 `before`여서 검사가 실패하고, 모의 변경 뒤에는 통과합니다. 성공하면
-종료 코드는 0입니다. 실행 결과가 실패나 미확인으로 보고되면 상태·이유가 출력되고
-0이 아닌 값으로 종료합니다.
+The initial `before` value fails the check; it passes after the simulated edit.
+Success returns exit code 0. If the run reports failure or an unconfirmed result,
+it prints the status and reason and returns nonzero.
 
-예제가 끝나면 임시 Git 저장소와 그 밖에 둔 임시 상태·출력도 삭제됩니다.
-다운로드한 `mercury-demo`와 설치한 `.venv`는 남습니다. 더 자세한 설명은
-[빠른 시작 안내](docs/quickstart.md)에 있습니다.
+When the example ends, it deletes the temporary Git repository and its temporary
+state/output stored outside that repository. Your downloaded `mercury-demo` and
+installed `.venv` remain. See [the quickstart guide](docs/quickstart.md) for details.
 
-## 실제 저장소와 에이전트 연결하기
+## Connect a real repository and agent
 
-현재 패키지는 `agent-harness` 0.1.0, 단일 에이전트 Python API 개발자 프리뷰입니다.
-초기 런타임 대상은 macOS이며 POSIX 프로세스·잠금 API가 필요합니다.
-[CodexCLIAdapter](src/agent_harness/adapter.py) and
+The current package is `agent-harness` 0.1.0, a single-agent Python API developer
+preview. macOS is the initial runtime target; POSIX process and locking APIs are
+required. [CodexCLIAdapter](src/agent_harness/adapter.py) and
 [run_loop](src/agent_harness/loop.py) support the
 [runnable disposable Codex example](docs/codex-quickstart.md). It demonstrates
 one fixed task; arbitrary user repositories require caller integration based on
 [the full simulator composition](examples/quickstart.py) and the responsibilities
 below. The installed CLI has no general task-running command.
 
-| 통합 코드에서 정할 것 | 필요한 책임 |
+| What your integration must supply | Responsibility |
 | --- | --- |
-| 작업과 실제 사람의 승인 | 허용·보호 파일과 의미 있는 완료 기준. [작업 계약](src/agent_harness/contract.py)과 [승인 기록](src/agent_harness/admission.py) API를 사용합니다. 승인 기록 API가 사람의 승인을 대신 받거나 인증하지는 않습니다. |
-| 검사 | 보호할 검사·설정, 고정된 필수 명령, 각 완료 기준과 정확한 명령의 연결. [검증 정책](src/agent_harness/policy.py)을 정합니다. |
-| 문맥과 예산 | 선택한 파일의 문맥, 입력·출력 크기, 시간·재시도·명령 경계 한도 |
-| 동시 작업과 상태 | 같은 저장소에서 공유하는 잠금 lease와 필요한 heartbeat, 작업 직렬화, 대상 저장소 밖의 상태·저널·출력 위치 |
-| 에이전트와 출력 | 신뢰하는 Codex CLI와 환경, 실제 출력에 맞는 민감정보 가림 정책. 어댑터는 기존 설정·규칙·인증·환경을 상속합니다. |
+| Task and actual human approval | Allowed/protected files and meaningful completion criteria. Use the [task contract](src/agent_harness/contract.py) and [admission record](src/agent_harness/admission.py) APIs; an admission record does not obtain or authenticate a person's approval. |
+| Checks | Protected checks/configuration, frozen mandatory commands, and exact command mappings for each criterion. Define the [verification policy](src/agent_harness/policy.py). |
+| Context and budgets | Selected file context, input/output sizes, time/retry/command-boundary limits |
+| Concurrent work and state | A lock lease shared by callers on the same repository, heartbeat as needed, serialized work, and state/journal/output locations outside the target repository |
+| Agent and output | A trusted Codex CLI and environment, plus a redaction policy for real output. Before each launch, including retries, the adapter checks the external entry and declared shebang chain using the same bounded proofs as verification and supplies safe external resolver paths. Existing configuration, rules, authentication, and unrelated environment remain active. |
 
-이 설정은 Python 입력으로 제공하며 일반 설정 파일 로더는 없습니다. 명령 경계
-예산은 네이티브 에이전트 내부의 개별 명령을 통제하지 않습니다.
+These settings are Python inputs; there is no general configuration-file loader.
+Command-boundary budgets do not control individual commands inside the native agent.
 
-설치된 CLI는 아래 정보 확인용 명령을 제공합니다. `profile`은 Git 파일명 정보를
-JSON으로 출력하며, 작업을 실행하는 `run` 하위 명령은 없습니다.
+The installed CLI offers these information commands. `profile` emits Git filename
+information as JSON; there is no task-running `run` subcommand.
 
 ```sh
 .venv/bin/local-harness --help
@@ -163,31 +204,39 @@ preview is neither human approval nor evidence that a criterion passed.
 Arbitrary-repository execution still requires Python caller integration.
 
 
-## 알아둘 한계
+## Limits to understand
 
-관찰은 특정 시점의 점검입니다. 무시된 미추적 파일과 Git 내부 파일은 집계 관찰
-범위 밖이며, 보호 입력은 호출자가 선택합니다. 프로세스 종료나 출력 저장만으로
-기술적 PASS가 성립하지 않습니다. 선택한 검사가 통과했다고 모든 동작이 옳다는
-뜻도 아니므로, 검사 기준과 최종 검토는 중요합니다.
+Observations are point-in-time checks. Ignored untracked files and Git internals
+are outside aggregate observations, and the caller selects protected inputs.
+Process exit or output storage alone does not establish technical PASS. Passing
+the chosen checks does not prove that all behavior is correct; check selection
+and final human review matter.
 
-가림 처리 전 원문이 메모리에 남을 수 있습니다. 상태 저장과 저널 순서는
-fsync·전원 손실 내구성을 보장하지 않습니다. 지원되는 체크포인트의 명시적 검증
-이어가기는 있지만, 자동 네이티브 세션 복구·런타임 다중 에이전트 오케스트레이션·
-메신저 제어는 현재 지원하지 않습니다.
+Raw text can remain in memory before redaction. State storage and journal ordering
+provide no fsync/power-loss durability guarantee. Explicit verification continuation
+exists for supported checkpoints, but automatic native-session recovery, runtime
+multi-agent orchestration, and messenger control are not currently supported.
 
-## 앞으로 살펴볼 방향
+## Proposed next priorities
 
-아래는 제안된 방향이며 구현이나 승인된 개발 일정·출시 날짜를 약속하지 않습니다.
-각 작업의 범위를 별도로 정하고, 연동에는 제공자와 실행 환경 결정도 필요합니다.
+These are proposals, not implemented commands, approved work or release dates.
+Each requires a separate bounded scope and acceptance criteria.
 
-- 처음 사용하기 쉬운 진입점과 실제 저장소 통합 예제 개선
-- 같은 기준선·검사·예산의 고정 과제로 모델과 스킬을 비교하고 결과·실패·비용 기록
-- 근거와 위치를 연결하는 구조화된 리뷰 후보·발견 사항 자료
-- 선택적 읽기 전용 리뷰와 프리뷰·런타임 검증 연동 검토
+| Priority | Proposed outcome | Reason for this order |
+| --- | --- | --- |
+| 1 | Read-only verification-plan CLI | Connect the task contract to exact command arguments, working directory, timeout and completion-criterion mappings before execution |
+| 2 | Read-only execution and review-evidence summary | Make attributable PASS, FAIL and UNKNOWN phase results and their evidence easier to inspect without starting another run |
+| 3 | One bounded integration example for a real user repository | Establish explicit approval, trusted commands, protection, external state, lease and execution budgets for one concrete task |
+| 4 | General execution CLI and configuration input | Expose repeated caller composition only after the real-repository contract is established |
 
-## 기여와 라이선스
+Model/skill comparisons and additional preview/runtime review integrations remain
+later exploration directions. Comparisons need fixed tasks with the same baseline,
+checks and budgets, and attributable outcome, failure and cost records. Structured
+review-candidate/finding artifacts should link evidence and locations. Automatic
+native-session recovery and runtime multi-agent orchestration remain unsupported;
+they are outside the proposed next task.
 
-개발 점검과 피드백 안내는 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
-[MIT 라이선스](LICENSE)를 적용합니다. Copyright (c) 2026 Mercury (kssk3).
+## Contributing and license
 
-See [the disposable real Codex example](docs/codex-quickstart.md) for an explicitly approved native CLI task, private evidence, and bounded checks.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development checks and feedback.
+Licensed under the [MIT License](LICENSE). Copyright (c) 2026 Mercury (kssk3).
