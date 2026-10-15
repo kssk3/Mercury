@@ -99,8 +99,9 @@ fsync/power-loss durability guarantee. Explicit verification continuation is
 available for supported checkpoints; automatic native-session resume is absent.
 
 The CLI offers `--help`, `--version`, `profile [path]`, and the read-only
-`contract` preview below, with no task-run command. Runtime multi-agent orchestration and messenger control are outside
-this preview. See [development checks](../CONTRIBUTING.md).
+`contract` and `plan` previews below, with no task-run command. Runtime
+multi-agent orchestration and messenger control are outside this preview.
+See [development checks](../CONTRIBUTING.md).
 
 
 ### Preview a task contract
@@ -130,3 +131,44 @@ inspect or modify a repository, create admission/state/lock/baseline records,
 or invoke Git, agents, models, network calls, or verification commands. A valid
 preview is neither human approval nor evidence that a criterion passed.
 Arbitrary-repository execution still requires Python caller integration.
+
+### Preview a verification plan
+
+Use `plan` to validate a contract, mandatory verification commands, and exact
+criterion mappings together:
+
+```sh
+.venv/bin/local-harness plan --goal "Fix the total" \
+  --allow missing/cart.py --protect missing/test_cart.py \
+  --criterion "The total is correct" \
+  --command '["python", "check.py"]' --timeout-seconds 10 \
+  --criterion-map '{"The total is correct": [["python", "check.py"]]}'
+```
+
+```json
+{"contract":{"allowed_paths":["missing/cart.py"],"completion_criteria":["The total is correct"],"goal":"Fix the total","protected_paths":["missing/test_cart.py"]},"criterion_bindings":[{"commands":[["python","check.py"]],"criterion":"The total is correct"}],"verification_policy":{"commands":[["python","check.py"]],"timeout_seconds":10,"working_directory":"."}}
+```
+
+The contract flags use the validation described above. At least one repeatable
+`--command`, a positive integer `--timeout-seconds`, and `--criterion-map` are
+required. Each command is a JSON array of nonempty string argv tokens, without
+NUL characters; tokens retain their exact spelling and order. Shell syntax is
+not interpreted. The optional `--working-directory` defaults to `.` and follows
+[VerificationPolicy](../src/agent_harness/policy.py): it must be relative and
+must not contain parent traversal, Git metadata, or NUL characters.
+
+`--criterion-map` is a JSON object whose keys exactly match the declared
+criteria. Each value is a nonempty list of command argv arrays matching
+registered commands exactly. Missing, extra, or duplicate criteria, duplicate
+JSON object keys, and unregistered commands are refused. The printed bindings
+follow declared criterion order. Malformed or excessively nested JSON is also
+refused. Valid input returns exit 0, no stderr, and one JSON line with
+`contract`, `verification_policy`, and `criterion_bindings`; invalid input
+returns exit 2 with a stderr diagnostic and no JSON stdout.
+
+This preview only validates strings. It reads no input files or target
+repository, creates no admission/state/journal/lock/baseline/output records,
+and invokes no Git commands, verification commands, agents, models, or network
+calls. Paths and executables need not exist. The JSON provides no human
+approval, delivery evidence, technical PASS, authenticity, or executable-trust
+claim. Executing a task still requires the caller integration described above.

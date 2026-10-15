@@ -1,6 +1,6 @@
 # Mercury
 
-[한국어](README.md) | English
+[Project overview and progress](README.md) | Detailed English guide
 
 After asking AI to fix code, you still need to check two things: **which files
 changed, and whether your chosen checks actually passed**. The AI's statement
