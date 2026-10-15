@@ -69,6 +69,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     plan_command.add_argument("--working-directory", default=".")
     plan_command.add_argument("--timeout-seconds", type=int, required=True)
     plan_command.add_argument("--criterion-map", required=True, metavar="JSON")
+    status_command = commands.add_parser(
+        "status", help="summarize historical execution records"
+    )
+    status_command.add_argument("--state-dir", required=True, metavar="PATH")
     arguments = parser.parse_args(argv)
 
     if arguments.show_version:
@@ -117,6 +121,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         print(contract.to_json())
         return 0
+
+    if arguments.command == "status":
+        from agent_harness.inspection import summarize_execution
+
+        summary = summarize_execution(arguments.state_dir)
+        print(json.dumps(summary, separators=(",", ":"), sort_keys=True))
+        return 1 if summary["diagnostics"] else 0
 
     if arguments.command == "profile":
         try:
