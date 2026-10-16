@@ -117,7 +117,7 @@ def require_external(root: Path, evidence: Path) -> None:
 
 def prepare(
     source: Path, root: Path, evidence: Path, check_python: Path
-) -> dict[str, str]:
+) -> dict[str, object]:
     """Copy committed content only; source dirty work is never read into the copy."""
     source = source.resolve(strict=True)
     root, evidence = root.resolve(), evidence.resolve()
@@ -173,13 +173,14 @@ def prepare(
     if git(root, "status", "--porcelain") or git(root, "remote"):
         raise ValueError("prepared copy must be clean and have no remotes")
     evidence.mkdir(mode=0o700, parents=True)
-    manifest = {
+    manifest: dict[str, object] = {
         "source_head": SOURCE_REVISION,
         "source_tree": source_tree,
         "prepared_head": git(root, "rev-parse", "HEAD"),
         "root": str(root),
         "check_python": str(check_python),
         "checker_sha256": hashlib.sha256(checker.read_bytes()).hexdigest(),
+        "prepared_snapshot": snapshot_payload(independent_snapshot(root)),
     }
     (evidence / "preparation.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest
@@ -275,13 +276,23 @@ def independent_snapshot(root: Path) -> dict[str, tuple[int, str]]:
     return result
 
 
+def snapshot_payload(snapshot: dict[str, tuple[int, str]]) -> dict[str, object]:
+    """JSON-stable preparation provenance for the bounded scanner's exact facts."""
+    return {
+        "schema_version": 1,
+        "entries": {path: list(facts) for path, facts in snapshot.items()},
+    }
+
+
 class GuardedJournal(EventJournal):
     """Refuse terminal PASS persistence when independent observations disagree."""
 
-    def __init__(self, state: Path, root: Path) -> None:
+    def __init__(
+        self, state: Path, root: Path, prepared: dict[str, tuple[int, str]]
+    ) -> None:
         super().__init__(state)
         self.root = root
-        self.before = independent_snapshot(root)
+        self.before = prepared
         self.guard_failure = False
 
     def check(self) -> None:
@@ -316,6 +327,9 @@ def execute(
     root, evidence = root.resolve(strict=True), evidence.resolve(strict=True)
     require_external(root, evidence)
     manifest = json.loads((evidence / "preparation.json").read_text())
+    prepared = independent_snapshot(root)
+    if manifest.get("prepared_snapshot") != snapshot_payload(prepared):
+        raise ValueError("prepared copy differs from the admitted preparation baseline")
     if (
         manifest.get("root") != str(root)
         or manifest.get("source_head") != SOURCE_REVISION
@@ -344,7 +358,7 @@ def execute(
     context = build_context_packet(
         root, source_paths=(TARGET, CHECK_PATH), budget_bytes=8192
     )
-    journal = GuardedJournal(evidence / "state", root)
+    journal = GuardedJournal(evidence / "state", root, prepared)
     lock = RepositoryLock(evidence / "state", timeout_seconds=300)
     adapter = RecordingAdapter(executable, evidence)
     summary: dict[str, object] = {

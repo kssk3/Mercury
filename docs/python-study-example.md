@@ -18,6 +18,20 @@ zero/one/three arguments, and a noninteger in either argument position.
 
 ## Preparation and execution
 
+The source is [kssk3/python_study](https://github.com/kssk3/python_study), a
+**private repository**. An account with repository access and configured GitHub
+Git authentication is required; this example grants no access or visibility
+change. To obtain a fresh source checkout when authorized, use:
+
+```sh
+git clone --no-checkout https://github.com/kssk3/python_study /absolute/python_study
+git -C /absolute/python_study checkout --detach f990af301da73f66c0482911a6cefca2234ce09c
+```
+
+Use a fresh destination and never overwrite an existing user checkout. Do not
+place credentials in command arguments or published receipts. The checkout must
+remain at the exact pinned revision when preparation starts.
+
 Use explicit absolute paths for the source, fresh copy, fresh external evidence,
 trusted check Python and trusted native Codex. From Mercury's root:
 
@@ -38,7 +52,17 @@ are refused. Existing user settings are not rewritten. Preparation does not
 run the target or a model. Existing output paths are refused instead of reused.
 Execution binds both retained checker bytes and the preparation digest to the
 checker embedded in the current Mercury example; mutually matching old receipts
-are insufficient after a checker change.
+are insufficient after a checker change. Preparation also serializes its full
+bounded filesystem/Git fingerprint in external preparation provenance after all
+intended Git writes. Execution compares every entry to that stored snapshot
+before creating execution state or launching a model, including ignored files
+and native project configuration. Missing, legacy or mismatched snapshots are
+refused; they are never upgraded by capturing the current copy as trusted.
+Fresh preparation is required for this stronger contract; retain older prepared
+copies as historical evidence. The verified preparation baseline is passed to
+the final guard rather than replaced with a new execution-time baseline. External
+preparation evidence must remain trusted and protected; this comparison does not
+authenticate receipts that an attacker can rewrite alongside the working copy.
 
 After inspecting preparation and checking the external supervisor, execute once:
 

@@ -318,11 +318,9 @@ def test_pr7_independent_guard_never_persists_false_success(
         example.__dict__["SOURCE_REVISION"] = example.git(source, "rev-parse", "HEAD")
     root, evidence = tmp_path / "copy", tmp_path / "evidence"
     example.prepare(source, root, evidence, Path(sys.executable))
-    if mode in ("metadata", "hidden"):
-        (root / ".git/info").mkdir()
     actions = {
-        "metadata": "pathlib.Path('.git/info/exclude').write_text('# changed metadata\\n')",
-        "hidden": "pathlib.Path('hidden.txt').write_text('hidden'); pathlib.Path('.git/info/exclude').write_text('hidden.txt\\n')",
+        "metadata": "pathlib.Path('.git/info').mkdir(); pathlib.Path('.git/info/exclude').write_text('# changed metadata\\n')",
+        "hidden": "pathlib.Path('hidden.txt').write_text('hidden'); pathlib.Path('.git/info').mkdir(); pathlib.Path('.git/info/exclude').write_text('hidden.txt\\n')",
         "ignored": "pathlib.Path('hidden.txt').write_text('hidden')",
         "delete": "pathlib.Path('uv.lock').unlink()",
         "symlink": "pathlib.Path('hidden.txt').symlink_to('/dev/null')",
@@ -345,3 +343,67 @@ def test_pr7_independent_guard_never_persists_false_success(
     assert facts["protection_clear"] is False
     assert facts["history"]["recorded_status"] != "pass"
     assert json.loads((evidence / "summary.json").read_text()) == facts
+
+
+@pytest.mark.parametrize("mode", ["native_config", "metadata", "ignored"])
+def test_pr7_between_phase_tampering_refused(
+    tmp_path: Path, example: ModuleType, mode: str
+) -> None:
+    """B1: retained-copy mutations must be refused before launch/state creation."""
+    source = create_source(tmp_path, example)
+    if mode == "ignored":
+        (source / ".gitignore").write_text("hidden.txt\n")
+        example.git(source, "add", ".gitignore")
+        example.git(source, "commit", "-m", "Admitted ignore pattern")
+        example.__dict__["SOURCE_REVISION"] = example.git(source, "rev-parse", "HEAD")
+    root, evidence = tmp_path / "copy", tmp_path / "evidence"
+    example.prepare(source, root, evidence, Path(sys.executable))
+    if mode == "native_config":
+        (root / ".codex").mkdir()
+        (root / ".codex/config.toml").write_text('model="synthetic-unadmitted"\n')
+        (root / ".git/info").mkdir()
+        (root / ".git/info/exclude").write_text(".codex/\n")
+    elif mode == "metadata":
+        with (root / ".git/config").open("a") as config:
+            config.write("\n# changed between preparation and execution\n")
+    else:
+        (root / "hidden.txt").write_text("unadmitted ignored content")
+    fake, marker = launch_probe(tmp_path)
+    with pytest.raises(ValueError, match="baseline"):
+        example.execute(root, evidence, Path(sys.executable), str(fake), {})
+    assert not marker.exists()
+    assert not (evidence / "state").exists()
+    assert not (evidence / "summary.json").exists()
+
+
+def launch_probe(tmp_path: Path) -> tuple[Path, Path]:
+    """A valid native-shaped synthetic executable makes launch observable."""
+    fake, marker = tmp_path / "fake-codex", tmp_path / "launched"
+    fake.write_text(
+        f"#!{sys.executable}\nimport json,pathlib,sys\njson.load(sys.stdin)\n"
+        f"pathlib.Path({str(marker)!r}).write_text('launched')\n"
+        "pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text('done')\n"
+        "print(json.dumps({'type':'turn.completed'}))\n"
+    )
+    fake.chmod(0o700)
+    return fake, marker
+
+
+def test_pr7_missing_preparation_snapshot_refused(
+    tmp_path: Path, example: ModuleType
+) -> None:
+    """B1: legacy provenance cannot silently adopt a new execution baseline."""
+    import json
+
+    source = create_source(tmp_path, example)
+    root, evidence = tmp_path / "copy", tmp_path / "evidence"
+    example.prepare(source, root, evidence, Path(sys.executable))
+    provenance = evidence / "preparation.json"
+    data = json.loads(provenance.read_text())
+    data.pop("prepared_snapshot", None)
+    provenance.write_text(json.dumps(data))
+    fake, marker = launch_probe(tmp_path)
+    with pytest.raises(ValueError, match="baseline"):
+        example.execute(root, evidence, Path(sys.executable), str(fake), {})
+    assert not marker.exists()
+    assert not (evidence / "state").exists()
