@@ -6,8 +6,10 @@ import argparse
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -37,7 +39,7 @@ PROTECTED = (
     "uv.lock",
 )
 CRITERION = "Two integers sum correctly; invalid argument count/type exits2 with stderr and no traceback."
-CHECKER = '''"""Seven protected black-box CLI cases; no project imports or dependencies."""
+CHECKER = '''"""Eight protected black-box CLI cases; no project imports or dependencies."""
 import json
 import os
 from pathlib import Path
@@ -46,7 +48,7 @@ import sys
 
 root = Path(__file__).resolve().parents[1]
 normal = [(('2', '3'), '5\\n'), (('-3', '1'), '-2\\n'), (('0', '0'), '0\\n')]
-invalid = [(), ('2',), ('2', '3', '4'), ('word', '3')]
+invalid = [(), ('2',), ('2', '3', '4'), ('word', '3'), ('3', 'word')]
 try:
     for args, expected in normal:
         result = subprocess.run([sys.executable, '-B', str(root/'chapter09/03.py'), *args], cwd=root, env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'), capture_output=True, text=True, timeout=1)
@@ -57,7 +59,7 @@ try:
     for args in invalid:
         result = subprocess.run([sys.executable, '-B', str(root/'chapter09/03.py'), *args], cwd=root, env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'), capture_output=True, text=True, timeout=1)
         failed += int(not (result.returncode == 2 and not result.stdout and result.stderr.strip() and 'Traceback' not in result.stderr))
-    print(json.dumps({'normal_passed':3, 'invalid_passed':4-failed, 'cases':7}))
+    print(json.dumps({'normal_passed':3, 'invalid_passed':5-failed, 'cases':8}))
     sys.exit(int(bool(failed)))
 except (OSError, subprocess.TimeoutExpired, UnicodeError):
     print(json.dumps({'status':'ENVIRONMENT_OR_TIMEOUT'}))
@@ -65,13 +67,16 @@ except (OSError, subprocess.TimeoutExpired, UnicodeError):
 '''
 
 
-def git(root: Path, *args: str) -> str:
+def git_bytes(root: Path, *args: str) -> bytes:
     """Bounded local Git without inherited hooks, signing, or global config."""
     env = {
         key: value for key, value in os.environ.items() if not key.startswith("GIT_")
     }
     env.update(
-        GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0"
+        GIT_CONFIG_NOSYSTEM="1",
+        GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_TERMINAL_PROMPT="0",
+        GIT_OPTIONAL_LOCKS="0",
     )
     return subprocess.run(
         (
@@ -92,10 +97,13 @@ def git(root: Path, *args: str) -> str:
         ),
         env=env,
         capture_output=True,
-        text=True,
         check=True,
         timeout=10,
-    ).stdout.strip()
+    ).stdout
+
+
+def git(root: Path, *args: str) -> str:
+    return git_bytes(root, *args).decode("utf-8").strip()
 
 
 def require_external(root: Path, evidence: Path) -> None:
@@ -112,7 +120,9 @@ def prepare(
 ) -> dict[str, str]:
     """Copy committed content only; source dirty work is never read into the copy."""
     source = source.resolve(strict=True)
-    root, evidence = root.absolute(), evidence.absolute()
+    root, evidence = root.resolve(), evidence.resolve()
+    if root.is_relative_to(source) or evidence.is_relative_to(source):
+        raise ValueError("copy and evidence must stay outside the source")
     require_external(root, evidence)
     if root.exists() or evidence.exists():
         raise ValueError("owned copy and evidence must be fresh")
@@ -123,39 +133,43 @@ def prepare(
         or git(source, "rev-parse", "HEAD") != SOURCE_REVISION
     ):
         raise ValueError("source Git root/revision differs from the admitted source")
-    rows = git(source, "ls-tree", "-r", "--full-tree", SOURCE_REVISION).splitlines()
-    for row in rows:
-        metadata, path = row.split("\t", 1)
-        parts = Path(path).parts
+    entries: list[tuple[str, str, Path]] = []
+    rows = git_bytes(source, "ls-tree", "-rz", "--full-tree", SOURCE_REVISION)
+    for row in rows.split(b"\0"):
+        if not row:
+            continue
+        metadata, raw_path = row.split(b"\t", 1)
+        mode, kind, oid = metadata.decode("ascii").split()
+        path = Path(raw_path.decode("utf-8"))
         if (
-            metadata.split()[0] not in ("100644", "100755")
-            or any(part in (".codex", ".agents") for part in parts)
-            or Path(path).name in ("AGENTS.md", "CODEX.md")
+            mode not in ("100644", "100755")
+            or kind != "blob"
+            or path.is_absolute()
+            or any(
+                part.casefold() in ("..", ".git", ".codex", ".agents")
+                for part in path.parts
+            )
+            or path.name in ("AGENTS.md", "CODEX.md")
         ):
             raise ValueError("unsupported copied native settings or nonregular content")
-    root.parent.mkdir(parents=True, exist_ok=True)
-    git(
-        root.parent,
-        "clone",
-        "--no-local",
-        "--no-hardlinks",
-        "--no-checkout",
-        "--template=",
-        "--",
-        str(source),
-        str(root),
-    )
-    root.chmod(0o700)
-    git(root, "remote", "remove", "origin")
-    git(root, "checkout", "--detach", SOURCE_REVISION)
-    source_tree = git(root, "rev-parse", "HEAD^{tree}")
+        entries.append((mode, oid, path))
+    root.mkdir(mode=0o700, parents=True)
+    git(root, "init", "--template=", "--initial-branch=p2-owned")
+    for mode, oid, path in entries:
+        destination = root / path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(git_bytes(source, "cat-file", "blob", oid))
+        destination.chmod(0o755 if mode == "100755" else 0o644)
+    git(root, "add", "--force", "--all")
+    source_tree = git(root, "write-tree")
     if source_tree != git(source, "rev-parse", SOURCE_REVISION + "^{tree}"):
         raise ValueError("copied source tree mismatch")
+    git(root, "commit", "-m", "Create owned root from admitted source tree")
     checker = root / CHECK_PATH
     checker.parent.mkdir()
     checker.write_text(CHECKER, encoding="utf-8")
     git(root, "add", "--", CHECK_PATH)
-    git(root, "commit", "-m", "Add protected seven-case P2 preparation checker")
+    git(root, "commit", "-m", "Add protected eight-case P2 preparation checker")
     if git(root, "status", "--porcelain") or git(root, "remote"):
         raise ValueError("prepared copy must be clean and have no remotes")
     evidence.mkdir(mode=0o700, parents=True)
@@ -169,6 +183,126 @@ def prepare(
     }
     (evidence / "preparation.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest
+
+
+def independent_snapshot(root: Path) -> dict[str, tuple[int, str]]:
+    """Bounded, ignore-independent scan; never follow symlinks or special files."""
+    result: dict[str, tuple[int, str]] = {}
+    deadline = time.monotonic() + 5
+    remaining = 128 * 1024 * 1024
+
+    def walk(directory: int, prefix: str) -> None:
+        nonlocal remaining
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if len(result) >= 10000 or time.monotonic() > deadline:
+                    raise ValueError("independent scan limit")
+                relative = prefix + entry.name
+                before = os.stat(entry.name, dir_fd=directory, follow_symlinks=False)
+                mode = before.st_mode
+                flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                if stat.S_ISDIR(mode):
+                    descriptor = os.open(
+                        entry.name, flags | os.O_DIRECTORY, dir_fd=directory
+                    )
+                    try:
+                        opened = os.fstat(descriptor)
+                        if (opened.st_dev, opened.st_ino) != (
+                            before.st_dev,
+                            before.st_ino,
+                        ):
+                            raise ValueError("independent scan changed directory")
+                        result[relative] = (mode, "directory")
+                        walk(descriptor, relative + "/")
+                    finally:
+                        os.close(descriptor)
+                elif stat.S_ISREG(mode) and before.st_nlink == 1:
+                    if before.st_size > min(16 * 1024 * 1024, remaining):
+                        raise ValueError("independent scan byte limit")
+                    descriptor = os.open(entry.name, flags, dir_fd=directory)
+                    try:
+                        opened = os.fstat(descriptor)
+                        if opened != before:
+                            raise ValueError("independent scan changed file")
+                        digest = hashlib.sha256()
+                        count = 0
+                        while chunk := os.read(descriptor, 65536):
+                            count += len(chunk)
+                            remaining -= len(chunk)
+                            if (
+                                count > before.st_size
+                                or remaining < 0
+                                or time.monotonic() > deadline
+                            ):
+                                raise ValueError("independent scan byte/time limit")
+                            digest.update(chunk)
+                        after = os.fstat(descriptor)
+
+                        # Reads may change atime; identity, content size and modification facts must stay fixed.
+                        def signature(info: os.stat_result) -> tuple[int, ...]:
+                            return (
+                                info.st_dev,
+                                info.st_ino,
+                                info.st_mode,
+                                info.st_nlink,
+                                info.st_size,
+                                info.st_mtime_ns,
+                                info.st_ctime_ns,
+                            )
+
+                        if count != before.st_size or signature(after) != signature(
+                            before
+                        ):
+                            raise ValueError("independent scan unstable file")
+                        result[relative] = (mode, digest.hexdigest())
+                    finally:
+                        os.close(descriptor)
+                else:
+                    raise ValueError("independent scan unsupported entry")
+                rebound = os.stat(entry.name, dir_fd=directory, follow_symlinks=False)
+                if (rebound.st_dev, rebound.st_ino, rebound.st_mode) != (
+                    before.st_dev,
+                    before.st_ino,
+                    mode,
+                ):
+                    raise ValueError("independent scan changed binding")
+
+    descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        walk(descriptor, "")
+    finally:
+        os.close(descriptor)
+    return result
+
+
+class GuardedJournal(EventJournal):
+    """Refuse terminal PASS persistence when independent observations disagree."""
+
+    def __init__(self, state: Path, root: Path) -> None:
+        super().__init__(state)
+        self.root = root
+        self.before = independent_snapshot(root)
+        self.guard_failure = False
+
+    def check(self) -> None:
+        try:
+            after = independent_snapshot(self.root)
+            self.guard_failure = (
+                {key: value for key, value in self.before.items() if key != TARGET}
+                != {key: value for key, value in after.items() if key != TARGET}
+                or TARGET not in after
+                or after[TARGET][0] != self.before[TARGET][0]
+            )
+        except (OSError, ValueError):
+            self.guard_failure = True
+
+    def append(self, event: Mapping[str, object]) -> None:
+        if event.get("event") == "loop_outcome":
+            self.check()
+            if self.guard_failure and event.get("status") == "pass":
+                # No terminal PASS is written; the read-only consumer returns UNKNOWN.
+                raise ValueError("independent example guard refused terminal success")
+        super().append(event)
 
 
 def execute(
@@ -189,6 +323,8 @@ def execute(
         or manifest.get("prepared_head") != git(root, "rev-parse", "HEAD")
         or manifest.get("checker_sha256")
         != hashlib.sha256((root / CHECK_PATH).read_bytes()).hexdigest()
+        or manifest.get("checker_sha256")
+        != hashlib.sha256(CHECKER.encode("utf-8")).hexdigest()
         or git(root, "status", "--porcelain")
         or git(root, "remote")
     ):
@@ -208,7 +344,7 @@ def execute(
     context = build_context_packet(
         root, source_paths=(TARGET, CHECK_PATH), budget_bytes=8192
     )
-    journal = EventJournal(evidence / "state")
+    journal = GuardedJournal(evidence / "state", root)
     lock = RepositoryLock(evidence / "state", timeout_seconds=300)
     adapter = RecordingAdapter(executable, evidence)
     summary: dict[str, object] = {
@@ -269,6 +405,20 @@ def execute(
                 summary["scope_clear"] = event.get("proceed") is True
         summary["changed_paths"] = git(root, "diff", "--name-only").splitlines()
         (evidence / "target.patch").write_text(git(root, "diff", "--binary") + "\n")
+        journal.check()
+        if journal.guard_failure:
+            summary.update(
+                status="unknown" if result.status == "pass" else result.status,
+                reason="independent_guard_violation"
+                if result.status in ("pass", "unknown")
+                else result.reason,
+                scope_clear=False,
+                protection_clear=False,
+                criteria_passed=False,
+                independent_guard="FAIL",
+            )
+        else:
+            summary["independent_guard"] = "PASS"
         summary["history"] = summarize_execution(evidence / "state")
     except Exception as error:
         summary.update(status="unknown", reason=type(error).__name__)

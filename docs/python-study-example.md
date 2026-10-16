@@ -13,8 +13,8 @@ Only `chapter09/03.py` may change during the native task. Exactly two integer
 arguments must print their sum and newline to stdout and exit zero without
 stderr. Invalid argument counts or noninteger input must emit nonempty stderr
 guidance, no stdout or traceback, and exit two. No exact guidance wording is
-required. The seven protected cases cover positive, negative and zero sums,
-zero/one/three arguments, and a noninteger.
+required. The eight protected cases cover positive, negative and zero sums,
+zero/one/three arguments, and a noninteger in either argument position.
 
 ## Preparation and execution
 
@@ -26,13 +26,19 @@ trusted check Python and trusted native Codex. From Mercury's root:
 ```
 
 The opt-in precedes any copy or native call. Preparation checks the exact source
-revision and copies committed content with `git clone --no-local --no-hardlinks`.
-It uses fresh Git metadata, disables inherited system/global Git configuration
-and hooks, removes the copied remote, checks the original tree, and commits only
-the new protected checker. Source and prepared SHAs are recorded separately.
+revision and copies only its regular committed tree entries into a fresh Git
+repository. It imports no source refs, history or unrelated objects. A new root
+commit must match the admitted source tree before adding the protected checker.
+Source commit/tree provenance and the distinct prepared SHA are recorded. Git
+queries disable inherited system/global configuration, hooks and optional index
+writes. Both resolved output paths must stay outside the original source,
+including paths through existing symlink aliases.
 Copied native settings, agent instruction files, and nonregular tree entries
 are refused. Existing user settings are not rewritten. Preparation does not
 run the target or a model. Existing output paths are refused instead of reused.
+Execution binds both retained checker bytes and the preparation digest to the
+checker embedded in the current Mercury example; mutually matching old receipts
+are insufficient after a checker change.
 
 After inspecting preparation and checking the external supervisor, execute once:
 
@@ -72,6 +78,18 @@ private evidence holds preparation provenance, `summary.json`, `target.patch`,
 do not publish these private receipts. The summary contains phase facts and
 read-only historical status, not raw native text. The [status CLI](quickstart.md)
 reads recorded history; it does not validate the live workspace or grant approval.
+
+An independent no-follow filesystem fingerprint includes ignored files, empty
+directories and Git metadata. It permits only target-content changes and refuses
+symlinks, special files, multiply linked files and unreadable or unstable entries.
+Each scan allows at most 10,000 entries, 16 MiB per file, 128 MiB total and five
+seconds; exceeding a limit cannot establish success. File bytes and modes are
+compared, including Git metadata, without trusting ignore rules. Before terminal
+loop success is persisted, the guard must pass. If it refuses, no terminal PASS
+is written, the summary clears scope/protection/criteria and the history reader
+reports UNKNOWN rather than the invalid success. Existing failure outcomes remain
+failures. These point-in-time observations do not detect a change restored before
+the final scan or constrain an adversarial process that escapes observation.
 
 Success requires actual loop/criterion PASS, clear scope and protected inputs,
 and the expected baseline contract failure. Any failed required gate stops the

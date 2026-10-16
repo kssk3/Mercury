@@ -59,7 +59,7 @@ def test_copy_uses_committed_source_and_keeps_dirty_work(
     manifest = example.prepare(source, root, evidence, Path(sys.executable))
     assert (root / "chapter09/03.py").read_bytes() == original
     assert not (root / "untracked.txt").exists()
-    assert example.git(root, "rev-parse", "HEAD^") == manifest["source_head"]
+    assert example.git(root, "rev-parse", "HEAD^1^{tree}") == manifest["source_tree"]
     assert manifest["prepared_head"] != manifest["source_head"]
     assert example.git(root, "remote") == ""
     assert example.git(root, "status", "--porcelain") == ""
@@ -114,8 +114,8 @@ def test_checker_distinguishes_contract_failure_from_success(
     assert result.returncode == (0 if compliant else 1), result.stdout + result.stderr
     assert json.loads(result.stdout) == {
         "normal_passed": 3,
-        "invalid_passed": 4 if compliant else 0,
-        "cases": 7,
+        "invalid_passed": 5 if compliant else 0,
+        "cases": 8,
     }
 
 
@@ -214,3 +214,134 @@ def test_fake_native_has_one_attempt_and_attributable_phases(
     assert json.loads((evidence / "summary.json").read_text()) == facts
     with pytest.raises(ValueError):
         example.execute(root, evidence, Path(sys.executable), str(fake), {})
+
+
+@pytest.mark.parametrize("destination", ["copy", "evidence", "alias"])
+def test_pr7_outputs_never_write_inside_source(
+    tmp_path: Path, example: ModuleType, destination: str
+) -> None:
+    """A1: both resolved destinations must stay outside source before writes."""
+    source = create_source(tmp_path, example)
+    before = example.git(source, "status", "--porcelain")
+    root, evidence = tmp_path / "copy", tmp_path / "evidence"
+    if destination == "copy":
+        root = source / "owned-copy"
+    elif destination == "evidence":
+        evidence = source / "receipts"
+    else:
+        (tmp_path / "alias").symlink_to(source, target_is_directory=True)
+        root = tmp_path / "alias" / "owned-copy"
+    with pytest.raises(ValueError, match="source"):
+        example.prepare(source, root, evidence, Path(sys.executable))
+    assert example.git(source, "status", "--porcelain") == before
+    assert not root.exists() and not evidence.exists()
+
+
+def test_pr7_copy_contains_only_admitted_tree(
+    tmp_path: Path, example: ModuleType
+) -> None:
+    """A2: unrelated refs and their private blob objects must not enter the copy."""
+    source = create_source(tmp_path, example)
+    admitted = example.SOURCE_REVISION
+    (source / "private.txt").write_text("unadmitted private content")
+    example.git(source, "add", "private.txt")
+    example.git(source, "commit", "-m", "Unrelated private work")
+    secret = example.git(source, "rev-parse", "HEAD:private.txt")
+    example.git(source, "tag", "private-tag")
+    example.git(source, "checkout", "--detach", admitted)
+    root, evidence = tmp_path / "copy", tmp_path / "evidence"
+    manifest = example.prepare(source, root, evidence, Path(sys.executable))
+    assert example.git(root, "tag") == ""
+    import subprocess
+
+    with pytest.raises(subprocess.CalledProcessError):
+        example.git(root, "cat-file", "-e", secret)
+    assert manifest["source_tree"] == example.git(
+        source, "rev-parse", admitted + "^{tree}"
+    )
+    assert not (root / "private.txt").exists()
+
+
+def test_pr7_checker_rejects_second_argument_conversion_escape(
+    tmp_path: Path, example: ModuleType
+) -> None:
+    """A3: conversion guidance and exit2 apply to either argument position."""
+    import subprocess
+
+    source = create_source(tmp_path, example)
+    root, evidence = tmp_path / "copy", tmp_path / "evidence"
+    example.prepare(source, root, evidence, Path(sys.executable))
+    (root / example.TARGET).write_text(
+        COMPLIANT.replace(
+            "first, second = map(int, sys.argv[1:])", "first = int(sys.argv[1])"
+        ).replace(
+            "print(first + second)", "second = int(sys.argv[2])\nprint(first + second)"
+        )
+    )
+    result = subprocess.run(
+        [sys.executable, "-B", str(root / example.CHECK_PATH)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+
+
+def test_pr7_stale_matching_checker_manifest_refused(
+    tmp_path: Path, example: ModuleType
+) -> None:
+    """A4: a self-consistent old checker cannot satisfy current criteria."""
+    source = create_source(tmp_path, example)
+    root, evidence = tmp_path / "copy", tmp_path / "evidence"
+    example.prepare(source, root, evidence, Path(sys.executable))
+    example.__dict__["CHECKER"] += "\n# strengthened current checker\n"
+    with pytest.raises(ValueError, match="baseline"):
+        example.execute(
+            root, evidence, Path(sys.executable), str(tmp_path / "absent"), {}
+        )
+    assert not (evidence / "state").exists()
+
+
+@pytest.mark.parametrize("mode", ["metadata", "hidden", "ignored", "delete", "symlink"])
+def test_pr7_independent_guard_never_persists_false_success(
+    tmp_path: Path, example: ModuleType, mode: str
+) -> None:
+    """A5: Git-independent scope and metadata checks invalidate native success."""
+    import json
+
+    source = create_source(tmp_path, example)
+    if mode == "ignored":
+        (source / ".gitignore").write_text("hidden.txt\n")
+        example.git(source, "add", ".gitignore")
+        example.git(source, "commit", "-m", "Admitted ignore pattern")
+        example.__dict__["SOURCE_REVISION"] = example.git(source, "rev-parse", "HEAD")
+    root, evidence = tmp_path / "copy", tmp_path / "evidence"
+    example.prepare(source, root, evidence, Path(sys.executable))
+    if mode in ("metadata", "hidden"):
+        (root / ".git/info").mkdir()
+    actions = {
+        "metadata": "pathlib.Path('.git/info/exclude').write_text('# changed metadata\\n')",
+        "hidden": "pathlib.Path('hidden.txt').write_text('hidden'); pathlib.Path('.git/info/exclude').write_text('hidden.txt\\n')",
+        "ignored": "pathlib.Path('hidden.txt').write_text('hidden')",
+        "delete": "pathlib.Path('uv.lock').unlink()",
+        "symlink": "pathlib.Path('hidden.txt').symlink_to('/dev/null')",
+    }
+    fake = tmp_path / "fake-codex"
+    fake.write_text(
+        f"#!{sys.executable}\nimport json,pathlib,sys\n"
+        "json.load(sys.stdin)\n"
+        f"pathlib.Path('chapter09/03.py').write_text({COMPLIANT!r})\n"
+        + actions[mode]
+        + "\n"
+        "pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text('done')\n"
+        "print(json.dumps({'type':'turn.completed'}))\n"
+    )
+    fake.chmod(0o700)
+    facts = example.execute(root, evidence, Path(sys.executable), str(fake), {})
+    assert facts["native"]["attempts"] == 1
+    assert facts["status"] != "pass", facts
+    assert facts["scope_clear"] is False
+    assert facts["protection_clear"] is False
+    assert facts["history"]["recorded_status"] != "pass"
+    assert json.loads((evidence / "summary.json").read_text()) == facts
