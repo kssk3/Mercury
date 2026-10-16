@@ -407,3 +407,140 @@ def test_pr7_missing_preparation_snapshot_refused(
         example.execute(root, evidence, Path(sys.executable), str(fake), {})
     assert not marker.exists()
     assert not (evidence / "state").exists()
+
+
+@pytest.mark.parametrize("replacement", ["commit", "blob"])
+def test_pr7_replacement_refs_never_change_admitted_source(
+    tmp_path: Path, example: ModuleType, replacement: str
+) -> None:
+    """C2: local replacements must not change pinned objects or user work."""
+    import json
+
+    source = create_source(tmp_path, example)
+    admitted = example.SOURCE_REVISION
+    admitted_tree = example.git(source, "rev-parse", admitted + "^{tree}")
+    original = (source / example.TARGET).read_bytes()
+    original_blob = example.git(source, "rev-parse", admitted + ":" + example.TARGET)
+    (source / example.TARGET).write_text("print('unadmitted replacement')\n")
+    (source / "unadmitted.txt").write_text("private replacement content\n")
+    example.git(source, "add", ".")
+    example.git(source, "commit", "-m", "Unadmitted replacement objects")
+    replacement_commit = example.git(source, "rev-parse", "HEAD")
+    replacement_blob = example.git(source, "rev-parse", "HEAD:" + example.TARGET)
+    example.git(source, "checkout", "--detach", admitted)
+    example.git(
+        source,
+        "replace",
+        admitted if replacement == "commit" else original_blob,
+        replacement_commit if replacement == "commit" else replacement_blob,
+    )
+    (source / example.TARGET).write_text("dirty user work\n")
+    (source / "user-untracked.txt").write_text("private untracked work\n")
+    before_refs = example.git(source, "show-ref")
+    before_status = example.git(source, "status", "--porcelain")
+    root, evidence = tmp_path / "copy", tmp_path / "evidence"
+    error = None
+    manifest: dict[str, object] = {}
+    try:
+        manifest = example.prepare(source, root, evidence, Path(sys.executable))
+    except ValueError as stopped:
+        error = str(stopped)
+    (tmp_path / "replacement-observation.json").write_text(
+        json.dumps(
+            {
+                "replacement": replacement,
+                "prepare_error": error,
+                "copied_target": (root / example.TARGET).read_text(),
+                "unadmitted_copied": (root / "unadmitted.txt").exists(),
+                "manifest": manifest,
+            },
+            indent=2,
+        )
+    )
+    assert example.git(source, "show-ref") == before_refs
+    assert example.git(source, "status", "--porcelain") == before_status
+    assert (source / example.TARGET).read_text() == "dirty user work\n"
+    assert (source / "user-untracked.txt").read_text() == "private untracked work\n"
+    assert error is None, "replacement refs changed the admitted tree: " + str(error)
+    assert (root / example.TARGET).read_bytes() == original
+    assert not (root / "unadmitted.txt").exists()
+    assert manifest["source_tree"] == admitted_tree
+
+
+def test_pr7_checker_startup_cannot_fake_success(
+    tmp_path: Path, example: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C3: caller startup code cannot forge checker results for a native no-op."""
+    source = create_source(tmp_path, example)
+    root, evidence = tmp_path / "copy", tmp_path / "evidence"
+    example.prepare(source, root, evidence, Path(sys.executable))
+    fake, launched = launch_probe(tmp_path)
+    poison, marker = tmp_path / "python-startup", tmp_path / "checker-startup"
+    poison.mkdir()
+    (poison / "sitecustomize.py").write_text(
+        "import json,os,pathlib,sys\n"
+        "if sys.argv[0].endswith('check_cli_sum.py'):\n"
+        f"    marker=pathlib.Path({str(marker)!r})\n"
+        "    count=int(marker.read_text()) if marker.exists() else 0\n"
+        "    marker.write_text(str(count+1))\n"
+        "    print(json.dumps({'normal_passed':3,'invalid_passed':0 if count==0 else 5,'cases':8}),flush=True)\n"
+        "    os._exit(1 if count==0 else 0)\n"
+    )
+    monkeypatch.setenv("PYTHONPATH", str(poison))
+    facts = example.execute(root, evidence, Path(sys.executable), str(fake), {})
+    assert launched.exists()
+    assert facts["status"] != "pass", facts
+    assert not marker.exists(), "caller startup ran before protected checker"
+
+
+@pytest.mark.parametrize("branch", ["normal", "invalid"])
+def test_pr7_target_startup_environment_is_isolated(
+    tmp_path: Path, example: ModuleType, branch: str
+) -> None:
+    """C3: both target paths ignore startup code inherited by the checker."""
+    import json
+    import os
+    import subprocess
+
+    source = create_source(tmp_path, example)
+    root, evidence = tmp_path / "copy", tmp_path / "evidence"
+    example.prepare(source, root, evidence, Path(sys.executable))
+    (root / example.TARGET).write_text(COMPLIANT)
+    poison, marker = tmp_path / "python-startup", tmp_path / "target-startup"
+    poison.mkdir()
+    (poison / "sitecustomize.py").write_text(
+        "import os,pathlib,sys\n"
+        "if sys.argv[0].endswith('chapter09/03.py'):\n"
+        f"    attack=(len(sys.argv)==3) if {branch!r}=='normal' else (len(sys.argv)!=3)\n"
+        "    if attack:\n"
+        f"        pathlib.Path({str(marker)!r}).write_text('startup executed')\n"
+        "        print('poisoned',flush=True)\n"
+        "        os._exit(0)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", str(root / example.CHECK_PATH)],
+        cwd=root,
+        env=dict(os.environ, PYTHONPATH=str(poison), PYTHONDONTWRITEBYTECODE="1"),
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    (tmp_path / "target-observation.json").write_text(
+        json.dumps(
+            {
+                "branch": branch,
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "startup_marker": marker.exists(),
+            },
+            indent=2,
+        )
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout) == {
+        "normal_passed": 3,
+        "invalid_passed": 5,
+        "cases": 8,
+    }
+    assert not marker.exists(), "caller startup ran before the target"

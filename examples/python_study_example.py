@@ -51,13 +51,13 @@ normal = [(('2', '3'), '5\\n'), (('-3', '1'), '-2\\n'), (('0', '0'), '0\\n')]
 invalid = [(), ('2',), ('2', '3', '4'), ('word', '3'), ('3', 'word')]
 try:
     for args, expected in normal:
-        result = subprocess.run([sys.executable, '-B', str(root/'chapter09/03.py'), *args], cwd=root, env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'), capture_output=True, text=True, timeout=1)
+        result = subprocess.run([sys.executable, '-I', '-B', str(root/'chapter09/03.py'), *args], cwd=root, env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'), capture_output=True, text=True, timeout=1)
         if result.returncode != 0 or result.stdout != expected or result.stderr:
             print(json.dumps({'status':'SETUP_OR_NORMAL_FAILURE'}))
             sys.exit(3)
     failed = 0
     for args in invalid:
-        result = subprocess.run([sys.executable, '-B', str(root/'chapter09/03.py'), *args], cwd=root, env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'), capture_output=True, text=True, timeout=1)
+        result = subprocess.run([sys.executable, '-I', '-B', str(root/'chapter09/03.py'), *args], cwd=root, env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'), capture_output=True, text=True, timeout=1)
         failed += int(not (result.returncode == 2 and not result.stdout and result.stderr.strip() and 'Traceback' not in result.stderr))
     print(json.dumps({'normal_passed':3, 'invalid_passed':5-failed, 'cases':8}))
     sys.exit(int(bool(failed)))
@@ -68,7 +68,7 @@ except (OSError, subprocess.TimeoutExpired, UnicodeError):
 
 
 def git_bytes(root: Path, *args: str) -> bytes:
-    """Bounded local Git without inherited hooks, signing, or global config."""
+    """Bounded local Git without replacements, hooks, signing, or global config."""
     env = {
         key: value for key, value in os.environ.items() if not key.startswith("GIT_")
     }
@@ -81,6 +81,7 @@ def git_bytes(root: Path, *args: str) -> bytes:
     return subprocess.run(
         (
             "/usr/bin/git",
+            "--no-replace-objects",
             "-c",
             "core.fsmonitor=false",
             "-c",
@@ -354,7 +355,7 @@ def execute(
     admission = record_admission(
         contract, approver="p2-human", approved_at=datetime.now(UTC).isoformat()
     )
-    command = (str(check_python), "-B", CHECK_PATH)
+    command = (str(check_python), "-I", "-B", CHECK_PATH)
     context = build_context_packet(
         root, source_paths=(TARGET, CHECK_PATH), budget_bytes=8192
     )
