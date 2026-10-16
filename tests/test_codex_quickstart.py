@@ -544,6 +544,142 @@ def example_module() -> ModuleType:
     return module
 
 
+def configure_preflight_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    example_module: ModuleType,
+    effective: dict[str, object],
+    *,
+    saved_extra: str = "",
+    requirements: object = None,
+    account: dict[str, object] | None = None,
+) -> Path:
+    """Keep the real preflight consumer while replacing only native metadata."""
+    home = tmp_path / "isolated-codex-home"
+    home.mkdir()
+    config = home / "config.toml"
+    config.write_text(
+        'model = "configured-model"\nmodel_reasoning_effort = "high"\n' + saved_extra
+    )
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    identity = (
+        {
+            "account": {"type": "chatgpt"},
+            "requiresOpenaiAuth": True,
+        }
+        if account is None
+        else account
+    )
+
+    def fake_metadata(executable: str) -> list[dict[str, object]]:
+        assert executable == "never-launch-native"
+        return [
+            {"userAgent": "fake", "platformFamily": "unix", "platformOs": "macos"},
+            {"config": effective},
+            {"requirements": requirements},
+            identity,
+        ]
+
+    monkeypatch.setattr(example_module, "metadata", fake_metadata)
+    return config
+
+
+def test_effective_null_provider_preserves_model_and_effort(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, example_module: ModuleType
+) -> None:
+    """Present-null default accepts the real consumer without model/settings writes."""
+    config = configure_preflight_metadata(
+        tmp_path,
+        monkeypatch,
+        example_module,
+        {
+            "model_provider": None,
+            "model": "configured-model",
+            "model_reasoning_effort": "high",
+        },
+    )
+    before = config.read_bytes()
+    selected = example_module.configuration("never-launch-native")
+    assert selected["model"] == "configured-model"
+    assert selected["effort"] == "high"
+    assert config.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("effective_extra", "saved_extra", "requirements", "account"),
+    [
+        ({"model_providers": {"custom": {}}}, "", None, None),
+        ({"profiles": {"legacy": {}}}, "", None, None),
+        ({"profile": "custom"}, "", None, None),
+        ({"openai_base_url": "https://example.invalid"}, "", None, None),
+        (
+            {"experimental_realtime_ws_base_url": "wss://example.invalid"},
+            "",
+            None,
+            None,
+        ),
+        ({"chatgpt_base_url": "https://example.invalid"}, "", None, None),
+        ({"project_root_markers": []}, "", None, None),
+        ({"forced_login_method": "api"}, "", None, None),
+        ({"cli_auth_credentials_store": "invalid"}, "", None, None),
+        ({}, 'model_provider = "custom"\n', None, None),
+        ({}, '[profiles.legacy]\nmodel_provider = "openai"\n', None, None),
+        ({}, "", {"modelProvider": "custom"}, None),
+        ({}, "", None, {"account": {"type": "apiKey"}, "requiresOpenaiAuth": True}),
+        ({}, "", None, {"account": {"type": "chatgpt"}, "requiresOpenaiAuth": False}),
+    ],
+)
+def test_effective_null_provider_keeps_security_restrictions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    example_module: ModuleType,
+    effective_extra: dict[str, object],
+    saved_extra: str,
+    requirements: object,
+    account: dict[str, object] | None,
+) -> None:
+    """Null default routing must continue every existing refusal boundary."""
+    effective: dict[str, object] = {"model_provider": None}
+    effective.update(effective_extra)
+    config = configure_preflight_metadata(
+        tmp_path,
+        monkeypatch,
+        example_module,
+        effective,
+        saved_extra=saved_extra,
+        requirements=requirements,
+        account=account,
+    )
+    before = config.read_bytes()
+    with pytest.raises(ValueError):
+        example_module.configuration("never-launch-native")
+    assert config.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("data", "effective"),
+    [
+        ({}, True),
+        ({"model_provider": ""}, True),
+        ({"model_provider": "custom"}, True),
+        ({"model_provider": True}, True),
+        ({"model_provider": False}, True),
+        ({"model_provider": 0}, True),
+        ({"model_provider": 1}, True),
+        ({"model_provider": {}}, True),
+        ({"model_provider": []}, True),
+        ({"model_provider": None}, False),
+        ({"model_provider": "custom"}, False),
+    ],
+)
+def test_provider_field_shape_stays_fail_closed(
+    example_module: ModuleType, data: dict[str, object], effective: bool
+) -> None:
+    """Missing effective data and invalid shapes are not a native default."""
+    with pytest.raises(ValueError, match="unsupported provider"):
+        example_module.require_standard_configuration(data, effective=effective)
+
+
 def test_cleanup_failure_preserves_receipt_without_removal_claim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, example_module: ModuleType
 ) -> None:

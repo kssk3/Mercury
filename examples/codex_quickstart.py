@@ -188,7 +188,10 @@ def metadata(executable: str) -> list[dict[str, object]]:
 
 def require_standard_configuration(data: dict[str, object], *, effective: bool) -> None:
     """Refuse routing that this deliberately narrow example cannot establish."""
-    if data.get("model_provider", None if effective else "openai") != "openai":
+    provider = data.get("model_provider", None if effective else "openai")
+    if effective and "model_provider" in data and provider is None:
+        provider = "openai"
+    if provider != "openai":
         raise ValueError("unsupported provider")
     for key in ("model_providers", "profiles"):
         if key in data and data[key] is not None and data[key] != {}:
