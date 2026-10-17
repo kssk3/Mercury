@@ -20,7 +20,11 @@ the fixture or evidence directory, the example uses one model-free
 `codex --strict-config app-server` process to read effective configuration,
 admin requirements, and account metadata (`config/read`,
 `configRequirements/read`, and `account/read` with `refreshToken: false`).
-It requires an explicit effective `openai` provider and a saved ChatGPT account.
+It requires an effective `model_provider` field and a saved ChatGPT account.
+The effective provider must be `openai`, or a present `null` representing the
+native default OpenAI provider. A missing field, another provider, an empty
+string, or an invalid value type is refused. This narrow default exception
+does not change saved-configuration validation or bypass later security checks.
 It refuses custom provider definitions, selected or legacy profiles, nonstandard
 endpoints/authentication, custom project-root markers, and managed requirements.
 Effective configuration may materialize the native ChatGPT endpoint
