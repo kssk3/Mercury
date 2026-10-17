@@ -15,6 +15,7 @@ from pathlib import Path
 
 from codex_quickstart import RecordingAdapter, configuration, phase_facts
 
+from agent_harness import repository
 from agent_harness.adapter import TurnBudgets
 from agent_harness.admission import record_admission
 from agent_harness.context import build_context_packet
@@ -80,7 +81,7 @@ def git_bytes(root: Path, *args: str) -> bytes:
     )
     return subprocess.run(
         (
-            "/usr/bin/git",
+            repository.git_executable(),
             "--no-replace-objects",
             "-c",
             "core.fsmonitor=false",
@@ -116,15 +117,20 @@ def require_external(root: Path, evidence: Path) -> None:
         raise ValueError("evidence must be separate from the working copy")
 
 
+def require_source_boundary(source: Path, root: Path, evidence: Path) -> None:
+    """Resolved output locations must stay outside the original source."""
+    if root.is_relative_to(source) or evidence.is_relative_to(source):
+        raise ValueError("copy and evidence must stay outside the source")
+    require_external(root, evidence)
+
+
 def prepare(
     source: Path, root: Path, evidence: Path, check_python: Path
 ) -> dict[str, object]:
     """Copy committed content only; source dirty work is never read into the copy."""
     source = source.resolve(strict=True)
     root, evidence = root.resolve(), evidence.resolve()
-    if root.is_relative_to(source) or evidence.is_relative_to(source):
-        raise ValueError("copy and evidence must stay outside the source")
-    require_external(root, evidence)
+    require_source_boundary(source, root, evidence)
     if root.exists() or evidence.exists():
         raise ValueError("owned copy and evidence must be fresh")
     if not check_python.is_absolute() or not check_python.is_file():
@@ -175,6 +181,7 @@ def prepare(
         raise ValueError("prepared copy must be clean and have no remotes")
     evidence.mkdir(mode=0o700, parents=True)
     manifest: dict[str, object] = {
+        "source": str(source),
         "source_head": SOURCE_REVISION,
         "source_tree": source_tree,
         "prepared_head": git(root, "rev-parse", "HEAD"),
@@ -323,11 +330,16 @@ def execute(
     check_python: Path,
     executable: str,
     selected: dict[str, object],
+    *,
+    source: Path,
 ) -> dict[str, object]:
     """One admitted native attempt, three distinct checks, retained external state."""
+    source = source.resolve(strict=True)
     root, evidence = root.resolve(strict=True), evidence.resolve(strict=True)
-    require_external(root, evidence)
+    require_source_boundary(source, root, evidence)
     manifest = json.loads((evidence / "preparation.json").read_text())
+    if manifest.get("source") != str(source):
+        raise ValueError("explicit source differs from the preparation source binding")
     prepared = independent_snapshot(root)
     if manifest.get("prepared_snapshot") != snapshot_payload(prepared):
         raise ValueError("prepared copy differs from the admitted preparation baseline")
@@ -495,17 +507,25 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(
             "unsupported provider/auth environment overrides; native task not started"
         )
+    try:
+        source = args.source.resolve(strict=True)
+        root = args.working_copy.resolve(strict=True)
+        evidence = args.evidence_directory.resolve(strict=True)
+        require_source_boundary(source, root, evidence)
+    except (OSError, ValueError):
+        parser.error("copy and evidence must stay outside the source")
     # Existing configuration gate, unchanged; no model or effort override.
     try:
         selected = configuration(args.codex_executable)
     except (OSError, ValueError, RecursionError, subprocess.TimeoutExpired):
         parser.error("configuration UNKNOWN or unsupported; native task not started")
     summary = execute(
-        args.working_copy,
-        args.evidence_directory,
+        root,
+        evidence,
         args.check_python,
         args.codex_executable,
         selected,
+        source=source,
     )
     print(json.dumps(summary, sort_keys=True))
     return int(

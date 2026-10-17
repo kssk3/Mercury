@@ -157,7 +157,12 @@ def test_fake_native_has_one_attempt_and_attributable_phases(
     )
     fake.chmod(0o700)
     facts = example.execute(
-        root, evidence, Path(sys.executable), str(fake), {"model": "synthetic"}
+        root,
+        evidence,
+        Path(sys.executable),
+        str(fake),
+        {"model": "synthetic"},
+        source=source,
     )
     assert facts["native"]["attempts"] == 1
     assert (source / "chapter09/03.py").read_bytes() == original_source
@@ -213,7 +218,9 @@ def test_fake_native_has_one_attempt_and_attributable_phases(
         )
     assert json.loads((evidence / "summary.json").read_text()) == facts
     with pytest.raises(ValueError):
-        example.execute(root, evidence, Path(sys.executable), str(fake), {})
+        example.execute(
+            root, evidence, Path(sys.executable), str(fake), {}, source=source
+        )
 
 
 @pytest.mark.parametrize("destination", ["copy", "evidence", "alias"])
@@ -298,7 +305,12 @@ def test_pr7_stale_matching_checker_manifest_refused(
     example.__dict__["CHECKER"] += "\n# strengthened current checker\n"
     with pytest.raises(ValueError, match="baseline"):
         example.execute(
-            root, evidence, Path(sys.executable), str(tmp_path / "absent"), {}
+            root,
+            evidence,
+            Path(sys.executable),
+            str(tmp_path / "absent"),
+            {},
+            source=source,
         )
     assert not (evidence / "state").exists()
 
@@ -336,7 +348,9 @@ def test_pr7_independent_guard_never_persists_false_success(
         "print(json.dumps({'type':'turn.completed'}))\n"
     )
     fake.chmod(0o700)
-    facts = example.execute(root, evidence, Path(sys.executable), str(fake), {})
+    facts = example.execute(
+        root, evidence, Path(sys.executable), str(fake), {}, source=source
+    )
     assert facts["native"]["attempts"] == 1
     assert facts["status"] != "pass", facts
     assert facts["scope_clear"] is False
@@ -370,7 +384,9 @@ def test_pr7_between_phase_tampering_refused(
         (root / "hidden.txt").write_text("unadmitted ignored content")
     fake, marker = launch_probe(tmp_path)
     with pytest.raises(ValueError, match="baseline"):
-        example.execute(root, evidence, Path(sys.executable), str(fake), {})
+        example.execute(
+            root, evidence, Path(sys.executable), str(fake), {}, source=source
+        )
     assert not marker.exists()
     assert not (evidence / "state").exists()
     assert not (evidence / "summary.json").exists()
@@ -404,7 +420,9 @@ def test_pr7_missing_preparation_snapshot_refused(
     provenance.write_text(json.dumps(data))
     fake, marker = launch_probe(tmp_path)
     with pytest.raises(ValueError, match="baseline"):
-        example.execute(root, evidence, Path(sys.executable), str(fake), {})
+        example.execute(
+            root, evidence, Path(sys.executable), str(fake), {}, source=source
+        )
     assert not marker.exists()
     assert not (evidence / "state").exists()
 
@@ -487,7 +505,9 @@ def test_pr7_checker_startup_cannot_fake_success(
         "    os._exit(1 if count==0 else 0)\n"
     )
     monkeypatch.setenv("PYTHONPATH", str(poison))
-    facts = example.execute(root, evidence, Path(sys.executable), str(fake), {})
+    facts = example.execute(
+        root, evidence, Path(sys.executable), str(fake), {}, source=source
+    )
     assert launched.exists()
     assert facts["status"] != "pass", facts
     assert not marker.exists(), "caller startup ran before protected checker"
@@ -544,3 +564,234 @@ def test_pr7_target_startup_environment_is_isolated(
         "cases": 8,
     }
     assert not marker.exists(), "caller startup ran before the target"
+
+
+def test_pr7_trusted_git_selection_is_used(
+    tmp_path: Path, example: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R1: the selected external trusted Git performs the actual query."""
+    import json
+
+    from agent_harness import repository
+
+    wrapper, marker = tmp_path / "trusted-git", tmp_path / "git-invoked.json"
+    wrapper.write_text(
+        f"#!{sys.executable}\nimport json,os,pathlib,sys\n"
+        f"pathlib.Path({str(marker)!r}).write_text(json.dumps(sys.argv[1:]))\n"
+        "os.execv('/usr/bin/git', ['/usr/bin/git', *sys.argv[1:]])\n"
+    )
+    wrapper.chmod(0o700)
+    monkeypatch.setattr(repository, "git_executable", lambda: str(wrapper))
+    version = example.git(tmp_path, "--version")
+    arguments: list[str] = json.loads(marker.read_text()) if marker.exists() else []
+    observation = {
+        "version": version,
+        "selected_executable": str(wrapper),
+        "executed": marker.exists(),
+        "arguments": arguments,
+    }
+    (tmp_path / "git-selection-observation.json").write_text(
+        json.dumps(observation, indent=2)
+    )
+    assert marker.exists(), "trusted selector's external executable was bypassed"
+    assert version.startswith("git version ")
+    assert "--no-replace-objects" in arguments
+    assert "core.hooksPath=/dev/null" in arguments
+
+
+def test_pr7_relocated_evidence_rejected_before_configuration(
+    tmp_path: Path, example: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R2: CLI refuses relocated evidence before configuration or any receipt."""
+    import json
+    import os
+    import shutil
+
+    source = create_source(tmp_path, example)
+    root, evidence = tmp_path / "copy", tmp_path / "evidence"
+    example.prepare(source, root, evidence, Path(sys.executable))
+    relocated = source / "relocated-evidence"
+    shutil.move(str(evidence), relocated)
+    before = {path.name: path.read_bytes() for path in relocated.iterdir()}
+    fake, marker = launch_probe(tmp_path)
+    configuration_calls: list[str] = []
+
+    def synthetic_configuration(executable: str) -> dict[str, object]:
+        configuration_calls.append(executable)
+        return {"model": "synthetic"}
+
+    monkeypatch.setattr(example, "configuration", synthetic_configuration)
+    for key in os.environ:
+        if key.startswith(("OPENAI_", "CODEX_", "CHATGPT_")):
+            monkeypatch.delenv(key)
+    error = None
+    try:
+        example.main(
+            [
+                "--approve-python-study",
+                "--source",
+                str(source),
+                "--working-copy",
+                str(root),
+                "--evidence-directory",
+                str(relocated),
+                "--check-python",
+                sys.executable,
+                "--codex-executable",
+                str(fake),
+            ]
+        )
+    except (ValueError, SystemExit) as stopped:
+        error = str(stopped)
+    observation = {
+        "error": error,
+        "configuration_reached": bool(configuration_calls),
+        "native_reached": marker.exists(),
+        "state_written": (relocated / "state").exists(),
+        "summary_written": (relocated / "summary.json").exists(),
+        "receipt_names": sorted(path.name for path in relocated.iterdir()),
+    }
+    (tmp_path / "relocated-evidence-observation.json").write_text(
+        json.dumps(observation, indent=2)
+    )
+    assert not configuration_calls, (
+        "configuration reached before source-boundary refusal"
+    )
+    assert error is not None, "relocated evidence was accepted"
+    assert not marker.exists()
+    assert {path.name: path.read_bytes() for path in relocated.iterdir()} == before
+
+
+@pytest.mark.parametrize("destination", ["copy", "evidence"])
+def test_pr7_execute_checks_bound_source_boundary(
+    tmp_path: Path,
+    example: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    destination: str,
+) -> None:
+    """R2: direct API resolves aliases and refuses source outputs before scanning."""
+    import shutil
+
+    source = create_source(tmp_path, example)
+    root, evidence = tmp_path / "copy", tmp_path / "evidence"
+    manifest = example.prepare(source, root, evidence, Path(sys.executable))
+    assert manifest["source"] == str(source.resolve())
+    relocated = source / "relocated"
+    shutil.move(str(root if destination == "copy" else evidence), relocated)
+    alias = tmp_path / "source-alias"
+    alias.symlink_to(source, target_is_directory=True)
+    if destination == "copy":
+        root = alias / "relocated"
+    else:
+        evidence = alias / "relocated"
+    before = example.independent_snapshot(source)
+    fake, marker = launch_probe(tmp_path)
+
+    def unexpected_scan(path: Path) -> dict[str, tuple[int, str]]:
+        raise AssertionError("metadata scan preceded source-boundary refusal")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(example, "independent_snapshot", unexpected_scan)
+        with pytest.raises(ValueError, match="source"):
+            example.execute(
+                root, evidence, Path(sys.executable), str(fake), {}, source=source
+            )
+    assert example.independent_snapshot(source) == before
+    assert not marker.exists()
+    assert not (evidence / "state").exists()
+    assert not (evidence / "summary.json").exists()
+
+
+def test_pr7_execute_rejects_wrong_bound_source(
+    tmp_path: Path, example: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R2: explicit source must equal provenance; absent legacy binding fails closed."""
+    import json
+
+    source = create_source(tmp_path, example)
+    root, evidence = tmp_path / "copy", tmp_path / "evidence"
+    example.prepare(source, root, evidence, Path(sys.executable))
+    other_source = tmp_path / "other-source"
+    other_source.mkdir()
+    fake, marker = launch_probe(tmp_path)
+
+    def unexpected_scan(path: Path) -> dict[str, tuple[int, str]]:
+        raise AssertionError("metadata scan preceded source-binding refusal")
+
+    monkeypatch.setattr(example, "independent_snapshot", unexpected_scan)
+    with pytest.raises(ValueError, match="source binding"):
+        example.execute(
+            root, evidence, Path(sys.executable), str(fake), {}, source=other_source
+        )
+    provenance = evidence / "preparation.json"
+    manifest = json.loads(provenance.read_text())
+    manifest.pop("source")
+    provenance.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="source binding"):
+        example.execute(
+            root, evidence, Path(sys.executable), str(fake), {}, source=source
+        )
+    assert not marker.exists()
+    assert sorted(path.name for path in evidence.iterdir()) == ["preparation.json"]
+
+
+def test_pr7_main_forwards_source_on_safe_execution(
+    tmp_path: Path, example: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R2: a safe CLI execution passes canonical explicit source to its API."""
+    import os
+
+    source = create_source(tmp_path, example)
+    root, evidence = tmp_path / "copy", tmp_path / "evidence"
+    example.prepare(source, root, evidence, Path(sys.executable))
+    alias = tmp_path / "source-alias"
+    alias.symlink_to(source, target_is_directory=True)
+    fake, marker = launch_probe(tmp_path)
+    observed: list[tuple[Path, Path, Path]] = []
+    monkeypatch.setattr(
+        example, "configuration", lambda executable: {"model": "synthetic"}
+    )
+    for key in os.environ:
+        if key.startswith(("OPENAI_", "CODEX_", "CHATGPT_")):
+            monkeypatch.delenv(key)
+
+    def synthetic_execute(
+        working_copy: Path,
+        receipts: Path,
+        check_python: Path,
+        executable: str,
+        selected: dict[str, object],
+        *,
+        source: Path,
+    ) -> dict[str, object]:
+        observed.append((source, working_copy, receipts))
+        return {
+            "status": "pass",
+            "criteria_passed": True,
+            "scope_clear": True,
+            "protection_clear": True,
+            "baseline_expected_behavioral_failure": True,
+        }
+
+    monkeypatch.setattr(example, "execute", synthetic_execute)
+    assert (
+        example.main(
+            [
+                "--approve-python-study",
+                "--source",
+                str(alias),
+                "--working-copy",
+                str(root),
+                "--evidence-directory",
+                str(evidence),
+                "--check-python",
+                sys.executable,
+                "--codex-executable",
+                str(fake),
+            ]
+        )
+        == 0
+    )
+    assert observed == [(source.resolve(), root.resolve(), evidence.resolve())]
+    assert not marker.exists()
+    assert sorted(path.name for path in evidence.iterdir()) == ["preparation.json"]
