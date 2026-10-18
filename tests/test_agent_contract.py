@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from dataclasses import replace
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal, cast
 
@@ -167,6 +168,7 @@ def test_structural_adapter_completes_verified_loop(
     assert launches.read_text() == "xxx"  # baseline, development, distinct final
     assert result.usage.commands == 4
     assert len(adapter.sandboxes) == 1
+    assert adapter.prepared == [repository]
     assert any(event["event"] == "scope_decision" for event in journal.read())
     assert any(event["event"] == "native_output_stored" for event in journal.read())
     assert result.criteria and all(item.passed for item in result.criteria)
@@ -306,3 +308,170 @@ def test_structural_process_failures_keep_observation_semantics(
         "turn_observation",
         "scope_decision",
     ]
+
+
+@pytest.mark.parametrize("consumer", ["observed", "scoped", "loop"])
+@pytest.mark.parametrize("protected", [False, True])
+def test_prepare_mutation_is_observed(
+    repository: Path, tmp_path: Path, consumer: str, protected: bool
+) -> None:
+    from agent_harness.scope import run_scoped_turn
+
+    class Mutating(StructuralAdapter):
+        def prepare(self, repository_root: Path) -> None:
+            super().prepare(repository_root)
+            (repository_root / "outside").write_text("changed")
+
+    (repository / "outside").write_text("original")
+    task = TaskContract(
+        "change value", ("value",), ("outside",) if protected else (), ("new value",)
+    )
+    args = (
+        Mutating(),
+        task,
+        record_admission(task, approver="human", approved_at="2026-10-18T00:00:00Z"),
+        ContextPacket(str(repository), 4096, ()),
+    )
+    journal = EventJournal(tmp_path / "state")
+    budgets = TurnBudgets(2, 16000, 128, 128, 128)
+    if consumer == "observed":
+        observed = run_observed_turn(*args, journal=journal, budgets=budgets)
+        assert "outside" in observed.delta.modified
+    elif consumer == "scoped":
+        scoped = run_scoped_turn(*args, journal=journal, budgets=budgets)
+        assert not scoped.decision.proceed
+    else:
+        command = (sys.executable, "-c", "assert True")
+        result = run_loop(
+            *args,
+            policy=VerificationPolicy((command,), ".", 2),
+            criterion_commands={"new value": (command,)},
+            journal=journal,
+            state_store=CurrentStateStore(tmp_path / "state"),
+            budgets=budgets,
+            limits=RetryLimits(0, 1, 4, 50),
+            redactor=lambda text: text,
+            max_output_bytes=128,
+        )
+        assert result.status != "pass"
+
+
+def test_preflight_does_not_prepare(repository: Path, tmp_path: Path) -> None:
+    from agent_harness.turn import _validate_turn
+
+    adapter = StructuralAdapter()
+    assert (
+        _validate_turn(
+            adapter,
+            *inputs(repository),
+            EventJournal(tmp_path / "state"),
+            TurnBudgets(2, 16000, 128, 128, 128),
+            "workspace-write",
+        )
+        == repository
+    )
+    assert adapter.prepared == []
+
+
+@pytest.mark.parametrize("field", ["process_status", "final_output_status"])
+@pytest.mark.parametrize("kind", ["enum", "impersonator"])
+def test_status_requires_plain_string_before_persistence(
+    repository: Path, tmp_path: Path, field: str, kind: str
+) -> None:
+    class Status(StrEnum):
+        PROCESS = "successful_exit"
+        FINAL = "available"
+
+    class Impersonator:
+        def __eq__(self, other: object) -> bool:
+            return other == (
+                "successful_exit" if field == "process_status" else "available"
+            )
+
+    class Malformed(StructuralAdapter):
+        def run(
+            self,
+            contract: TaskContract,
+            admission: AdmissionRecord,
+            context: ContextPacket,
+            *,
+            budgets: TurnBudgets,
+            sandbox: Literal["read-only", "workspace-write"] = "workspace-write",
+        ) -> CodexTurnResult:
+            result = super().run(
+                contract, admission, context, budgets=budgets, sandbox=sandbox
+            )
+            value = (
+                (Status.PROCESS if field == "process_status" else Status.FINAL)
+                if kind == "enum"
+                else Impersonator()
+            )
+            if field == "process_status":
+                return replace(
+                    result,
+                    process_status=cast(
+                        Literal[
+                            "launch_error", "timeout", "nonzero_exit", "successful_exit"
+                        ],
+                        value,
+                    ),
+                )
+            return replace(
+                result,
+                final_output_status=cast(
+                    Literal["available", "missing", "unsafe", "unreadable"], value
+                ),
+            )
+
+    journal = EventJournal(tmp_path / "state")
+    with pytest.raises(TurnObservationError) as raised:
+        run_observed_turn(
+            Malformed(),
+            *inputs(repository),
+            journal=journal,
+            budgets=TurnBudgets(2, 16000, 128, 128, 128),
+        )
+    assert raised.value.adapter_result is None
+    assert journal.read()[-1]["event"] == "turn_observation_failed"
+    assert "process" not in journal.read()[-1]
+
+
+@pytest.mark.parametrize("consumer", ["observed", "scoped", "loop"])
+def test_failed_prepare_cannot_publish_success(
+    repository: Path, tmp_path: Path, consumer: str
+) -> None:
+    from agent_harness.scope import run_scoped_turn
+
+    class Refusing(StructuralAdapter):
+        def prepare(self, repository_root: Path) -> None:
+            (repository_root / "outside").write_text("changed")
+            raise ValueError("prepare_refused")
+
+    adapter = Refusing()
+    journal = EventJournal(tmp_path / "state")
+    args = (adapter, *inputs(repository))
+    budgets = TurnBudgets(2, 16000, 128, 128, 128)
+    if consumer == "loop":
+        command = (sys.executable, "-c", "assert True")
+        result = run_loop(
+            *args,
+            policy=VerificationPolicy((command,), ".", 2),
+            criterion_commands={"new value": (command,)},
+            journal=journal,
+            state_store=CurrentStateStore(tmp_path / "state"),
+            budgets=budgets,
+            limits=RetryLimits(0, 1, 4, 50),
+            redactor=lambda text: text,
+            max_output_bytes=128,
+        )
+        assert result.status != "pass"
+    else:
+        run = run_observed_turn if consumer == "observed" else run_scoped_turn
+        with pytest.raises(ValueError, match="^prepare_refused$"):
+            run(*args, journal=journal, budgets=budgets)
+    assert not adapter.sandboxes
+    assert not any(
+        event["event"]
+        in {"turn_intent", "turn_observation", "scope_decision", "native_output_stored"}
+        for event in journal.read()
+    )

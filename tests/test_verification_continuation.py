@@ -315,6 +315,11 @@ def test_development_checkpoint_continues_only_final(
                 None if corruption == "reserved_summary_null" else {"status": "pass"}
             )
             original(conflicting)
+    monkeypatch.setattr(
+        adapter,
+        "prepare",
+        lambda root: pytest.fail("verification-only continuation must not prepare"),
+    )
     before_resume = (journal.path.read_bytes(), store.path.read_bytes())
     result = loop.continue_verification(
         *args,

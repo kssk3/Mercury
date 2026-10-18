@@ -67,7 +67,10 @@ class AgentTurnResult:
 
 
 class AgentAdapter(Protocol):
-    """Prepare before intent, then return bounded process facts from one run.
+    """Prepare once per actual turn, after its snapshot and before intent.
+
+    Compatibility preflight and verification-only continuation do not prepare.
+    Preparation changes share the turn observation; failures cannot prove scope.
 
     Implementations are trusted code. This interface supplies no confinement or
     task-success authority; the harness still observes scope and verifies work.
@@ -96,12 +99,14 @@ def _validate_result(
         isinstance(result.argv, tuple)
         and all(isinstance(argument, str) for argument in result.argv)
         and result.repository_root == str(root)
+        and type(result.process_status) is str
         and result.process_status
         in ("launch_error", "timeout", "nonzero_exit", "successful_exit")
         and (result.exit_code is None or type(result.exit_code) is int)
         and type(result.duration_seconds) in (int, float)
         and math.isfinite(result.duration_seconds)
         and result.duration_seconds >= 0
+        and type(result.final_output_status) is str
         and result.final_output_status
         in ("available", "missing", "unsafe", "unreadable")
     ):

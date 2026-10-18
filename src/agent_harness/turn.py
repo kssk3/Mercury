@@ -335,6 +335,9 @@ def run_observed_turn(
     _validate_journal(journal, root, bind=True)
     before = RepositoryObservation.capture(root)
     _reject_allowed_symlinks(contract, before)
+    # Preparation belongs to this turn and is covered by its initial snapshot.
+    # Keep identity/refusal checks before intent without making a new baseline.
+    adapter.prepare(root)
     attempt_id = uuid.uuid4().hex
     intent: dict[str, object] = {
         "event": "turn_intent",
@@ -519,7 +522,6 @@ def _validate_turn(
         raise ValueError("input envelope must be strict UTF-8") from error
     if size > budgets.input_bytes:
         raise ValueError("complete input envelope exceeds input byte budget")
-    adapter.prepare(root)
     return root
 
 
