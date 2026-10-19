@@ -5,6 +5,14 @@ Licensed under the [MIT License](../LICENSE).
 The example demonstrates API composition with a **simulated Codex
 adapter**. It performs no native-agent, model, or network invocation.
 
+Status as of 2026-10-19: this guide describes
+[main `5fd4b3d1`](https://github.com/kssk3/Mercury/commit/5fd4b3d10f13f41ab7118bfe4648a576b104aecf),
+including the bounded user-repository example in
+[PR #7](https://github.com/kssk3/Mercury/pull/7) and the common agent contract in
+[PR #8](https://github.com/kssk3/Mercury/pull/8). The existing automatic
+[main CI](https://github.com/kssk3/Mercury/actions/runs/39189330048) passed;
+this documentation update reuses that evidence without rerunning it.
+
 ## Install and run
 
 From the repository root:
@@ -82,6 +90,27 @@ For an existing native integration example, read the
 explicitly approved temporary-repository task, its prerequisites, budgets,
 and retained evidence. Arbitrary repositories still require caller integration.
 
+The [python_study integration](python-study-example.md), delivered in PR #7,
+adds one fixed addition-CLI task on a separate copy of an access-restricted
+repository at a pinned revision. It is not a general repository importer.
+Historical live Codex evidence applies to its recorded candidate, not a new live
+execution of every subsequent correction.
+
+### Common agent contract
+
+PR #8 provides [AgentAdapter and AgentTurnResult](../src/agent_harness/agent.py)
+for trusted backend implementations. Preparation belongs to an actual turn,
+after its before snapshot and persisted intent; compatibility preflight and
+verification-only continuation do not prepare. Backend results are validated
+before downstream persistence, and scope observation and final verification
+remain harness responsibilities. See the existing
+[contract tests](../tests/test_agent_contract.py) for the supported behavior.
+
+Codex remains the provided native backend. This common interface does not supply
+Claude or Gemini adapters, a general task-run CLI, or multi-agent orchestration.
+New backends still need their own trusted execution and configuration handling;
+the interface itself supplies no confinement or task-success authority.
+
 ## Using a real repository
 
 The example's subclass replaces `CodexCLIAdapter.run` entirely. A real
@@ -98,9 +127,10 @@ State writes and journal ordering provide recovery evidence without an
 fsync/power-loss durability guarantee. Explicit verification continuation is
 available for supported checkpoints; automatic native-session resume is absent.
 
-The CLI offers `--help`, `--version`, `profile [path]`, and the read-only
-`contract` and `plan` previews below, with no task-run command. Runtime
-multi-agent orchestration and messenger control are outside this preview.
+The CLI offers `--help`, `--version`, `profile [path]`, the read-only
+`contract` and `plan` previews, and the `status` record summary below, with no
+task-run command. Runtime multi-agent orchestration and messenger control are
+outside this preview.
 See [development checks](../CONTRIBUTING.md).
 
 
@@ -175,8 +205,9 @@ claim. Executing a task still requires the caller integration described above.
 
 ### Summarize recorded execution
 
-The local candidate adds a historical reader (not yet delivered on main
-`31e2c212` or in PR #5):
+The historical reader is available on
+[main `34c7439e`](https://github.com/kssk3/Mercury/commit/34c7439ed3ad8eb6cf3be7483f0cbea5f7df162e)
+through [PR #6](https://github.com/kssk3/Mercury/pull/6):
 
 ```sh
 .venv/bin/local-harness status --state-dir /absolute/path/to/external-state
