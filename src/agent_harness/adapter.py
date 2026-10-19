@@ -54,7 +54,7 @@ class _Capture:
         )
 
 
-class CodexCLIAdapter:
+class _NativeExecutableBinding:
     """Caller selects a trusted executable; no arbitrary flag/config surface.
 
     Inherited user configuration, rules, authentication and unrelated environment
@@ -80,7 +80,7 @@ class CodexCLIAdapter:
             self._bind_executable(None)
 
     def prepare(self, repository_root: Path) -> None:
-        """Bind and validate the native executable before the harness writes intent."""
+        """Bind and validate after the harness saves its snapshot and intent."""
         self._bind_executable(repository_root)
 
     def _bind_executable(self, root: Path | None) -> None:
@@ -148,6 +148,14 @@ class CodexCLIAdapter:
                     else:
                         environment[name] = value
                 self._launch_environment = environment
+
+
+class CodexCLIAdapter(_NativeExecutableBinding):
+    """Bounded Codex execution with inherited native configuration/authentication.
+
+    Allowed paths are instructions, not filesystem confinement. Executable trust
+    and resolver isolation are shared with other native backends.
+    """
 
     def run(
         self,

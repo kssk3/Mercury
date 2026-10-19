@@ -19,9 +19,9 @@ Requirements: Python 3.12+, Git, and uv. Run from the repository root:
 uv sync --locked --dev
 uv run --no-sync python -m agent_harness.schema_validation --state tests/fixtures/project-state-v1.json
 uv run --no-sync pytest
-uv run --no-sync ruff check src tests scripts/ci_changes.py examples/quickstart.py examples/codex_quickstart.py
-uv run --no-sync ruff format --check src tests scripts/ci_changes.py examples/quickstart.py examples/codex_quickstart.py
-uv run --no-sync mypy src tests scripts/ci_changes.py examples/quickstart.py examples/codex_quickstart.py
+uv run --no-sync ruff check src tests scripts/ci_changes.py examples/quickstart.py examples/codex_quickstart.py examples/javascript_quickstart.py
+uv run --no-sync ruff format --check src tests scripts/ci_changes.py examples/quickstart.py examples/codex_quickstart.py examples/javascript_quickstart.py
+uv run --no-sync mypy src tests scripts/ci_changes.py examples/quickstart.py examples/codex_quickstart.py examples/javascript_quickstart.py
 uv run --no-sync python examples/quickstart.py --approve-demo
 git diff --check
 ```

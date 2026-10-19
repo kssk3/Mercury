@@ -73,11 +73,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         "status", help="summarize historical execution records"
     )
     status_command.add_argument("--state-dir", required=True, metavar="PATH")
+    run_command = commands.add_parser("run", help="execute one hash-approved task")
+    run_command.add_argument("--config", required=True, metavar="PATH")
+    run_command.add_argument("--approve-config-sha256", metavar="SHA256")
+    run_command.add_argument("--approver", metavar="NAME")
     arguments = parser.parse_args(argv)
 
     if arguments.show_version:
         print(f"local-harness {__version__}")
         return 0
+
+    if arguments.command == "run":
+        from agent_harness.run_config import load_run_config
+        from agent_harness.task_run import execute_run
+
+        try:
+            config = load_run_config(
+                arguments.config, arguments.approve_config_sha256, arguments.approver
+            )
+        except ValueError:
+            print("local-harness: invalid_run_config", file=sys.stderr)
+            return 2
+        outcome, code = execute_run(config)
+        print(json.dumps(outcome, separators=(",", ":"), sort_keys=True))
+        return code
 
     if arguments.command in {"contract", "plan"}:
         try:
