@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 from test_run_config import make_fixture, write_config
 
 from agent_harness.admission import AdmissionRecord
 from agent_harness.agent import AgentTurnResult, CapturedText, TurnBudgets
+from agent_harness.cli import main
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract
+from agent_harness.inspection import summarize_execution
 from agent_harness.lock import RepositoryLock
+from agent_harness.policy import VerificationPolicy
 from agent_harness.repository import resolve_repository_state_location
 from agent_harness.run_config import load_run_config
 from agent_harness.task_run import execute_run
@@ -57,7 +62,10 @@ class FakeAgent:
 
 @pytest.mark.parametrize("mode", ["pass", "fail", "timeout", "protected"])
 def test_real_loop_one_fake_turn_and_redacted_evidence(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    mode: str,
 ) -> None:
     path, data = make_fixture(tmp_path)
     config = load_run_config(path, write_config(path, data), "human")
@@ -72,6 +80,11 @@ def test_real_loop_one_fake_turn_and_redacted_evidence(
     assert outcome["config_sha256"] == config.config_sha256
     assert outcome["initial_head"] == data["expected_head"]
     state_dir = Path(str(outcome["state_dir"]))
+    summary = summarize_execution(state_dir)
+    assert summary["recorded_status"] == outcome["status"]
+    assert summary["diagnostics"] == []
+    assert main(["status", "--state-dir", str(state_dir)]) == 0
+    assert json.loads(capsys.readouterr().out)["recorded_status"] == outcome["status"]
     for artifact in state_dir.rglob("*"):
         if artifact.is_file():
             assert "secret-output" not in artifact.read_text()
@@ -187,3 +200,93 @@ def test_short_run_cannot_expire_long_cli_lease(
     assert lease["owner_token"] == original_lease.owner_token
     assert lease["heartbeat_at"] == original_lease.heartbeat_at
     holder.release()
+
+
+@pytest.mark.parametrize("phase", ["mismatch", "before_git", "under_lease"])
+def test_initial_head_reports_observation_not_expectation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    actual = data["expected_head"]
+    calls = 0
+
+    def git(config: object, *arguments: str) -> bytes:
+        nonlocal calls
+        if phase == "before_git":
+            raise ValueError("no observation")
+        if arguments == ("rev-parse", "HEAD"):
+            calls += 1
+            return (("b" * 40 if calls == 2 else actual) + "\n").encode()
+        return b""
+
+    monkeypatch.setattr("agent_harness.task_run._git", git)
+    if phase == "mismatch":
+        config = replace(config, expected_head="a" * 40)
+    outcome, code = execute_run(config)
+    assert code in (1, 2)
+    assert outcome["status"] != "pass"
+    assert outcome["initial_head"] == (None if phase == "before_git" else actual)
+
+
+class _DigestAlias(str):
+    pass
+
+
+@pytest.mark.parametrize(
+    "digest",
+    ["/outside", "../escape", "a" * 63, "A" * 64, None, _DigestAlias("a" * 64)],
+)
+def test_direct_digest_rejected_before_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, digest: object
+) -> None:
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    agent = FakeAgent()
+    monkeypatch.setattr("agent_harness.task_run._adapter", lambda config: agent)
+    if digest == "/outside":
+        digest = str(tmp_path / "escaped")
+    config = replace(config, config_sha256=cast(str, digest))
+    outcome, code = execute_run(config)
+    assert code == 2
+    assert outcome["state_dir"] is None
+    assert not config.state_root.exists()
+    assert agent.preparations == 0
+
+
+def test_direct_state_root_in_other_worktree_has_no_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    other = tmp_path / "other"
+    other.mkdir()
+    _, other_data = make_fixture(other)
+    state_root = Path(other_data["repository"]) / "evidence"
+    agent = FakeAgent()
+    monkeypatch.setattr("agent_harness.task_run._adapter", lambda config: agent)
+    outcome, code = execute_run(replace(config, state_root=state_root))
+    assert code == 2
+    assert outcome["status"] == "blocked"
+    assert not state_root.exists()
+    assert agent.preparations == 0
+
+
+def test_direct_api_rejects_env_before_preparation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    command = ("/usr/bin/env", f"PATH={config.repository}/bin", "checker")
+    config = replace(
+        config,
+        policy=VerificationPolicy((command,), ".", 2),
+        criterion_commands={"value correct": [list(command)]},
+    )
+    agent = FakeAgent()
+    monkeypatch.setattr("agent_harness.task_run._adapter", lambda config: agent)
+    outcome, code = execute_run(config)
+    assert code == 2
+    assert outcome["status"] == "blocked"
+    assert not config.state_root.exists()
+    assert agent.preparations == 0

@@ -7,6 +7,7 @@ saved evidence by default; structured status remains, reducing diagnostics.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from datetime import UTC, datetime
 
@@ -24,7 +25,7 @@ from agent_harness.repository import (
     resolve_repository_state_location,
     validate_runtime_state_directory,
 )
-from agent_harness.run_config import RunConfig
+from agent_harness.run_config import RunConfig, validate_run_verification
 from agent_harness.state import CurrentStateStore
 
 # Lease expiry uses the observer's horizon, so every CLI invocation must share
@@ -59,8 +60,11 @@ def _git(config: RunConfig, *arguments: str) -> bytes:
     return result.stdout
 
 
-def _baseline(config: RunConfig) -> None:
-    if _git(config, "rev-parse", "HEAD").decode().strip() != config.expected_head:
+def _baseline(config: RunConfig, outcome: dict[str, object]) -> None:
+    observed = _git(config, "rev-parse", "HEAD").decode().strip()
+    if outcome["initial_head"] is None:
+        outcome["initial_head"] = observed
+    if observed != config.expected_head:
         raise ValueError("baseline_mismatch")
     if _git(config, "status", "--porcelain=v1", "-z", "--untracked-files=all"):
         raise ValueError("workspace_not_clean")
@@ -78,7 +82,7 @@ def execute_run(config: RunConfig) -> tuple[dict[str, object], int]:
         "reason": "preflight_failed",
         "backend": config.backend,
         "repository": str(config.repository),
-        "initial_head": config.expected_head,
+        "initial_head": None,
         "config_sha256": config.config_sha256,
         "state_dir": None,
         "attempts": 0,
@@ -89,26 +93,39 @@ def execute_run(config: RunConfig) -> tuple[dict[str, object], int]:
     held = False
     code = 2
     try:
+        if (
+            type(config.config_sha256) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", config.config_sha256) is None
+        ):
+            raise ValueError("invalid configuration digest")
         validate_runtime_state_directory(config.state_root, config.repository)
+        validate_runtime_state_directory(config.state_root)
         location = resolve_repository_state_location(
             config.repository, config.state_root
         )
         if location.repository_root != config.repository:
             raise ValueError("repository_rebound")
-        run_directory = location.state_directory / "runs" / config.config_sha256
-        outcome["state_dir"] = str(run_directory)
+        runs_directory = location.state_directory / "runs"
+        run_directory = runs_directory / config.config_sha256
+        if run_directory.resolve().parent != runs_directory.resolve():
+            raise ValueError("run directory escaped evidence root")
         validate_runtime_state_directory(run_directory, config.repository)
+        validate_runtime_state_directory(run_directory)
+        validate_run_verification(config.repository, config.contract, config.policy)
+        outcome["state_dir"] = str(run_directory)
         if run_directory.exists():
             raise ValueError("existing_history")
-        _baseline(config)
+        _baseline(config, outcome)
         lock = RepositoryLock(
             location.state_directory, timeout_seconds=_CLI_LEASE_SECONDS
         )
         lock.acquire()
         held = True
         code = 1
-        _baseline(config)
+        _baseline(config, outcome)
         validate_runtime_state_directory(run_directory, config.repository)
+        validate_runtime_state_directory(run_directory)
+        validate_run_verification(config.repository, config.contract, config.policy)
         # Reserve serialized-contract/envelope overhead conservatively.
         context_budget = (
             config.budgets.input_bytes
@@ -126,7 +143,7 @@ def execute_run(config: RunConfig) -> tuple[dict[str, object], int]:
             {
                 "event": "run_binding",
                 "schema_version": 1,
-                "initial_head": config.expected_head,
+                "initial_head": outcome["initial_head"],
                 "config_sha256": config.config_sha256,
                 "backend": config.backend,
             }

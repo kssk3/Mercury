@@ -204,3 +204,21 @@ def test_unsafe_config_read_is_bounded(tmp_path: Path, kind: str) -> None:
     )
     with pytest.raises(ValueError, match="^invalid_run_config$"):
         load_run_config(path, digest, "human")
+
+
+@pytest.mark.parametrize("alias", [False, True])
+def test_env_dispatcher_cannot_select_mutable_checker(
+    tmp_path: Path, alias: bool
+) -> None:
+    """Delegated env programs are unsupported, including resolved aliases."""
+    path, data = make_fixture(tmp_path)
+    executable = Path("/usr/bin/env")
+    if alias:
+        executable = tmp_path / "dispatcher"
+        executable.symlink_to("/usr/bin/env")
+    command = [str(executable), f"PATH={data['repository']}/bin", "checker"]
+    data["verification"]["commands"] = [command]
+    data["criterion_commands"] = {"value correct": [command]}
+    with pytest.raises(ValueError, match="invalid_run_config"):
+        load_run_config(path, write_config(path, data), "human")
+    assert not Path(data["state_root"]).exists()

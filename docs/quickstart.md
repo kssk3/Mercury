@@ -358,7 +358,12 @@ loop time at most 240 seconds. Git preflight and setup are separate bounded
 operations, so the loop limit is not an end-to-end wall-clock guarantee.
 
 Output is one JSON summary with status/reason, initial HEAD, configuration hash,
-state directory, attempts, command boundaries and criterion success. Captured
+state directory, attempts, command boundaries and criterion success. The
+initial HEAD is the first Git HEAD observed during preflight, or `null` if
+preflight stops before that observation; the expected HEAD remains an input.
+Verifier commands must invoke their trusted program directly; `env` dispatch,
+including executable aliases, is unsupported because it can override the
+sanitized environment and select an unbound delegated checker. Captured
 text is omitted from stored output by default; structured evidence remains.
 Exit 0 requires loop PASS and all mapped criteria. Invalid configuration or
 preflight returns 2; execution failure/unknown returns 1. Lease-release failure

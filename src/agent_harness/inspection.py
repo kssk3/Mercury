@@ -257,6 +257,22 @@ def _project(path: Path, current_raw: bytes, journal_raw: bytes) -> dict[str, ob
     _require(len(lines) <= 10000, "input_limit")
     events = [_decode(line) for line in lines]
     _require(len(events) >= 2, "incomplete_history")
+    binding: dict[str, object] | None = None
+    if events[0].get("event") == "run_binding":
+        binding = events[0]
+        _require(
+            set(binding)
+            == {"event", "schema_version", "initial_head", "config_sha256", "backend"}
+        )
+        _require(
+            type(binding["schema_version"]) is int and binding["schema_version"] == 1
+        )
+        _digest(binding["initial_head"], (40, 64))
+        _digest(binding["config_sha256"])
+        _require(binding["backend"] in ("codex", "claude"))
+        events = events[1:]
+    _require(len(events) >= 2, "incomplete_history")
+    _require(not any(event.get("event") == "run_binding" for event in events))
     _require(events[0].get("event") == "loop_start")
     terminal = events[-1]
     _require(terminal.get("event") == "loop_outcome", "incomplete_history")
@@ -307,6 +323,8 @@ def _project(path: Path, current_raw: bytes, journal_raw: bytes) -> dict[str, ob
         type(summary["attempt_count"]) is int and summary["attempt_count"] == len(ids)
     )
     for intent in intents:
+        if binding is not None:
+            _require(_mapping(intent["before"])["head"] == binding["initial_head"])
         _require(intent["repository_id"] == events[0]["repository_id"])
         before = _mapping(intent["before"])
         _require(

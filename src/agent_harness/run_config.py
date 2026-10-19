@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import shutil
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -142,6 +143,36 @@ def _covered(path: str, boundaries: tuple[str, ...]) -> bool:
     return any(path == prefix or path.startswith(prefix + "/") for prefix in boundaries)
 
 
+def validate_run_verification(
+    repository: Path, contract: TaskContract, policy: VerificationPolicy
+) -> None:
+    """Apply the wrapper's verifier boundary to loaded and direct API configs."""
+    directory = repository / policy.working_directory
+    _absolute(str(directory))
+    if not directory.is_dir() or not directory.resolve().is_relative_to(repository):
+        raise ValueError("invalid verification directory")
+    system_env = shutil.which("env", path=os.defpath)
+    for command in policy.commands:
+        selected = _absolute(command[0], canonical=False)
+        resolved = selected.resolve()
+        if resolved.is_relative_to(repository):
+            raise ValueError("verification executable is inside repository")
+        # env applies its argv environment after the runner's inherited-env
+        # sanitation. Its delegated program is not bound by the outer proof.
+        if resolved.name == "env" or (
+            system_env is not None
+            and selected.exists()
+            and selected.samefile(system_env)
+        ):
+            raise ValueError("env verifier delegation is unsupported")
+        for argument in command[1:]:
+            candidate = directory / argument
+            if candidate.is_file() and candidate.resolve().is_relative_to(repository):
+                relative = candidate.resolve().relative_to(repository).as_posix()
+                if not _covered(relative, contract.protected_paths):
+                    raise ValueError("verification input is not protected")
+
+
 def load_run_config(
     path: Path | str, approval: str | None, approver: str | None
 ) -> RunConfig:
@@ -214,27 +245,12 @@ def load_run_config(
             _text(verification["working_directory"]),
             int(_number(verification["timeout_seconds"], 120, integer=True)),
         )
-        directory = repository / policy.working_directory
-        _absolute(str(directory))
-        if not directory.is_dir() or not directory.resolve().is_relative_to(repository):
-            raise ValueError
         for protected in contract.protected_paths:
             selected = repository / protected
             _absolute(str(selected))
             if not selected.exists():
                 raise ValueError
-        for command in policy.commands:
-            selected_executable = _absolute(command[0], canonical=False)
-            if selected_executable.resolve().is_relative_to(repository):
-                raise ValueError
-            for argument in command[1:]:
-                candidate = directory / argument
-                if candidate.is_file() and candidate.resolve().is_relative_to(
-                    repository
-                ):
-                    relative = candidate.resolve().relative_to(repository).as_posix()
-                    if not _covered(relative, contract.protected_paths):
-                        raise ValueError
+        validate_run_verification(repository, contract, policy)
         bind_completion_criteria(contract, policy, data["criterion_commands"])
         context_paths = _strings(data["context_paths"])
         if len(context_paths) != len(set(context_paths)):
