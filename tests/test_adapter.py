@@ -527,6 +527,7 @@ def test_relative_selection_is_bound_at_turn_admission(
         )
         == repository
     )
+    adapter.prepare(repository)
     alias.unlink()
     alias.symlink_to(other)
     result = adapter.run(task, admission, context, budgets=budgets)

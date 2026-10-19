@@ -9,8 +9,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
 from agent_harness.admission import AdmissionRecord
+from agent_harness.agent import AgentAdapter, TurnBudgets
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract, _path_key
 from agent_harness.journal import EventJournal
@@ -261,7 +261,7 @@ class ScopeTurnError(RuntimeError):
 
 
 def run_scoped_turn(
-    adapter: CodexCLIAdapter,
+    adapter: AgentAdapter,
     contract: TaskContract,
     admission: AdmissionRecord,
     context: ContextPacket,

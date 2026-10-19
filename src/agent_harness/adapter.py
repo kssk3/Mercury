@@ -7,7 +7,6 @@ commands, redact output, recover escaped descendants or establish technical PASS
 from __future__ import annotations
 
 import json
-import math
 import os
 import selectors
 import shutil
@@ -16,11 +15,13 @@ import stat
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from agent_harness.admission import AdmissionRecord, admit
+from agent_harness.agent import AgentTurnResult
+from agent_harness.agent import CapturedText as CapturedText
+from agent_harness.agent import TurnBudgets as TurnBudgets
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract
 from agent_harness.policy import VerificationPolicy
@@ -31,59 +32,7 @@ from agent_harness.runner import (
     bind_verification_executables,
 )
 
-
-@dataclass(frozen=True)
-class TurnBudgets:
-    timeout_seconds: float
-    input_bytes: int
-    stdout_bytes: int
-    stderr_bytes: int
-    final_bytes: int
-
-    def __post_init__(self) -> None:
-        if (
-            isinstance(self.timeout_seconds, bool)
-            or not isinstance(self.timeout_seconds, (int, float))
-            or not math.isfinite(self.timeout_seconds)
-            or self.timeout_seconds <= 0
-        ):
-            raise ValueError("timeout_seconds must be finite and positive")
-        for value in (
-            self.input_bytes,
-            self.stdout_bytes,
-            self.stderr_bytes,
-            self.final_bytes,
-        ):
-            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-                raise ValueError("byte budgets must be positive integer bytes")
-
-
-@dataclass(frozen=True)
-class CapturedText:
-    """UTF-8 with surrogateescape; re-encode with it to recover retained bytes.
-
-    Invalid UTF-8 and partial final code points are preserved, not expanded into
-    replacement characters. Text remains opaque, untrusted and unredacted.
-    """
-
-    text: str
-    retained_bytes: int
-    truncated: bool
-
-
-@dataclass(frozen=True)
-class CodexTurnResult:
-    argv: tuple[str, ...]
-    repository_root: str
-    process_status: Literal[
-        "launch_error", "timeout", "nonzero_exit", "successful_exit"
-    ]
-    exit_code: int | None
-    duration_seconds: float
-    stdout: CapturedText
-    stderr: CapturedText
-    final_message: CapturedText | None
-    final_output_status: Literal["available", "missing", "unsafe", "unreadable"]
+CodexTurnResult = AgentTurnResult
 
 
 class _Capture:
@@ -129,6 +78,10 @@ class CodexCLIAdapter:
         # absolute paths can be bound before the repository is admitted.
         if requested.is_absolute() or os.sep not in self._requested_executable:
             self._bind_executable(None)
+
+    def prepare(self, repository_root: Path) -> None:
+        """Bind and validate the native executable before the harness writes intent."""
+        self._bind_executable(repository_root)
 
     def _bind_executable(self, root: Path | None) -> None:
         if self._executable is None and self._selection_error is None:

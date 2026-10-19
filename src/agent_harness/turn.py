@@ -16,13 +16,14 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from agent_harness.adapter import (
-    CapturedText,
-    CodexCLIAdapter,
-    CodexTurnResult,
-    TurnBudgets,
-)
 from agent_harness.admission import AdmissionRecord, admit
+from agent_harness.agent import (
+    AgentAdapter,
+    AgentTurnResult,
+    CapturedText,
+    TurnBudgets,
+    _validate_result,
+)
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract, _path_key
 from agent_harness.journal import EventJournal
@@ -307,14 +308,14 @@ def _reject_special_entries(root: Path) -> None:
 @dataclass(frozen=True)
 class ObservedTurnResult:
     attempt_id: str
-    adapter_result: CodexTurnResult
+    adapter_result: AgentTurnResult
     before: RepositoryObservation
     after: RepositoryObservation
     delta: ObservationDelta
 
 
 def run_observed_turn(
-    adapter: CodexCLIAdapter,
+    adapter: AgentAdapter,
     contract: TaskContract,
     admission: AdmissionRecord,
     context: ContextPacket,
@@ -325,8 +326,8 @@ def run_observed_turn(
 ) -> ObservedTurnResult:
     """Caller owns serialization/the B4 repository lock; no lock is acquired here.
 
-    Raw F1 output remains in memory. Intent closes before invocation; this is
-    logical ordering through EventJournal, not fsync/power-loss durability.
+    Raw F1 output remains in memory. Intent closes before preparation or native
+    invocation; this is logical ordering, not fsync/power-loss durability.
     """
     root = _validate_turn(
         adapter, contract, admission, context, journal, budgets, sandbox
@@ -355,8 +356,13 @@ def run_observed_turn(
             "intent_append_failed", attempt_id, None, False
         ) from None
     try:
-        result = adapter.run(
-            contract, admission, context, budgets=budgets, sandbox=sandbox
+        # The saved intent covers preparation changes and survives hook failure.
+        # Preparation/refusal is not evidence that a native process launched.
+        adapter.prepare(root)
+        result = _validate_result(
+            adapter.run(contract, admission, context, budgets=budgets, sandbox=sandbox),
+            root,
+            budgets,
         )
     except Exception:
         raise _failure(journal, root, "adapter_raised", attempt_id, None) from None
@@ -467,7 +473,7 @@ def _reject_allowed_symlinks(
 
 
 def _validate_turn(
-    adapter: CodexCLIAdapter,
+    adapter: AgentAdapter,
     contract: TaskContract,
     admission: AdmissionRecord,
     context: ContextPacket,
@@ -476,9 +482,9 @@ def _validate_turn(
     sandbox: str,
 ) -> Path:
     if os.name != "posix":
-        raise ValueError("observed Codex turn requires a POSIX host")
-    if not isinstance(adapter, CodexCLIAdapter):
-        raise TypeError("adapter must be a CodexCLIAdapter")
+        raise ValueError("observed agent turn requires a POSIX host")
+    if not all(callable(getattr(adapter, name, None)) for name in ("prepare", "run")):
+        raise TypeError("adapter must provide callable prepare and run methods")
     if not isinstance(contract, TaskContract):
         raise TypeError("contract must be a TaskContract")
     admit(contract, admission)
@@ -516,7 +522,6 @@ def _validate_turn(
         raise ValueError("input envelope must be strict UTF-8") from error
     if size > budgets.input_bytes:
         raise ValueError("complete input envelope exceeds input byte budget")
-    adapter._bind_executable(root)
     return root
 
 
@@ -570,7 +575,7 @@ def _capture_metadata(capture: CapturedText | None) -> dict[str, object] | None:
     )
 
 
-def _process_metadata(result: CodexTurnResult) -> dict[str, object]:
+def _process_metadata(result: AgentTurnResult) -> dict[str, object]:
     return {
         "process_status": result.process_status,
         "exit_code": result.exit_code,
@@ -601,7 +606,7 @@ class TurnObservationError(RuntimeError):
         self,
         code: FailureCode,
         attempt_id: str,
-        adapter_result: CodexTurnResult | None,
+        adapter_result: AgentTurnResult | None,
         terminal_recorded: bool,
     ) -> None:
         super().__init__(code)
@@ -616,7 +621,7 @@ def _failure(
     root: Path,
     code: Literal["adapter_raised", "after_observation_failed"],
     attempt_id: str,
-    result: CodexTurnResult | None,
+    result: AgentTurnResult | None,
 ) -> TurnObservationError:
     event: dict[str, object] = {
         "event": "turn_observation_failed",

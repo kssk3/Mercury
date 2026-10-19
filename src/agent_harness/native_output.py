@@ -7,8 +7,8 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from agent_harness.adapter import CapturedText, CodexCLIAdapter, TurnBudgets
 from agent_harness.admission import AdmissionRecord
+from agent_harness.agent import AgentAdapter, CapturedText, TurnBudgets
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract
 from agent_harness.journal import EventJournal
@@ -192,7 +192,7 @@ def _validate_storage(journal: EventJournal, root: Path) -> None:
 
 
 def run_stored_scoped_turn(
-    adapter: CodexCLIAdapter,
+    adapter: AgentAdapter,
     contract: TaskContract,
     admission: AdmissionRecord,
     context: ContextPacket,

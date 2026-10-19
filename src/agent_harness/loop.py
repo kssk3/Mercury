@@ -9,8 +9,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from typing import cast
 
-from agent_harness.adapter import CodexCLIAdapter, CodexTurnResult, TurnBudgets
 from agent_harness.admission import AdmissionRecord
+from agent_harness.agent import AgentAdapter, AgentTurnResult, TurnBudgets
 from agent_harness.attempt import AttemptJournal, _observation
 from agent_harness.baseline import VerificationBaseline
 from agent_harness.context import ContextPacket
@@ -144,7 +144,7 @@ class LoopResult:
 
 
 def run_loop(
-    adapter: CodexCLIAdapter,
+    adapter: AgentAdapter,
     contract: TaskContract,
     admission: AdmissionRecord,
     context: ContextPacket,
@@ -182,7 +182,7 @@ def run_loop(
 
 
 def _run_loop(
-    adapter: CodexCLIAdapter,
+    adapter: AgentAdapter,
     contract: TaskContract,
     admission: AdmissionRecord,
     context: ContextPacket,
@@ -862,7 +862,7 @@ def _run_loop(
 
 
 def continue_verification(
-    adapter: CodexCLIAdapter,
+    adapter: AgentAdapter,
     contract: TaskContract,
     admission: AdmissionRecord,
     context: ContextPacket,
@@ -908,7 +908,7 @@ def _phase_seconds(policy: VerificationPolicy) -> int:
     return len(policy.commands) * (policy.timeout_seconds + 2)
 
 
-def _native_launches(result: CodexTurnResult) -> int:
+def _native_launches(result: AgentTurnResult) -> int:
     """A returned launch_error proves no Popen launch; other statuses prove one."""
     return int(result.process_status != "launch_error")
 
