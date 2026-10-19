@@ -67,10 +67,11 @@ class AgentTurnResult:
 
 
 class AgentAdapter(Protocol):
-    """Prepare once per actual turn, after its snapshot and before intent.
+    """Prepare once per actual turn, after its snapshot and persisted intent.
 
     Compatibility preflight and verification-only continuation do not prepare.
-    Preparation changes share the turn observation; failures cannot prove scope.
+    Preparation changes share the turn observation; failures cannot prove scope
+    or a native launch. The original intent remains available for reconciliation.
 
     Implementations are trusted code. This interface supplies no confinement or
     task-success authority; the harness still observes scope and verifies work.

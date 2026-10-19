@@ -326,8 +326,8 @@ def run_observed_turn(
 ) -> ObservedTurnResult:
     """Caller owns serialization/the B4 repository lock; no lock is acquired here.
 
-    Raw F1 output remains in memory. Intent closes before invocation; this is
-    logical ordering through EventJournal, not fsync/power-loss durability.
+    Raw F1 output remains in memory. Intent closes before preparation or native
+    invocation; this is logical ordering, not fsync/power-loss durability.
     """
     root = _validate_turn(
         adapter, contract, admission, context, journal, budgets, sandbox
@@ -335,9 +335,6 @@ def run_observed_turn(
     _validate_journal(journal, root, bind=True)
     before = RepositoryObservation.capture(root)
     _reject_allowed_symlinks(contract, before)
-    # Preparation belongs to this turn and is covered by its initial snapshot.
-    # Keep identity/refusal checks before intent without making a new baseline.
-    adapter.prepare(root)
     attempt_id = uuid.uuid4().hex
     intent: dict[str, object] = {
         "event": "turn_intent",
@@ -359,6 +356,9 @@ def run_observed_turn(
             "intent_append_failed", attempt_id, None, False
         ) from None
     try:
+        # The saved intent covers preparation changes and survives hook failure.
+        # Preparation/refusal is not evidence that a native process launched.
+        adapter.prepare(root)
         result = _validate_result(
             adapter.run(contract, admission, context, budgets=budgets, sandbox=sandbox),
             root,

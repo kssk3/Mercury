@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
@@ -196,20 +198,24 @@ def test_legacy_types_keep_identity() -> None:
     assert isinstance(value, AgentTurnResult)
 
 
-def test_prepare_refusal_precedes_intent_and_run(
+def test_prepare_refusal_retains_intent_without_run(
     repository: Path, tmp_path: Path
 ) -> None:
     adapter = StructuralAdapter()
     adapter.refuse = True
     journal = EventJournal(tmp_path / "state")
-    with pytest.raises(ValueError, match="^prepare_refused$"):
+    with pytest.raises(TurnObservationError, match="^adapter_raised$"):
         run_observed_turn(
             adapter,
             *inputs(repository),
             journal=journal,
             budgets=TurnBudgets(2, 16000, 128, 128, 128),
         )
-    assert not journal.read() and not adapter.sandboxes
+    assert [event["event"] for event in journal.read()] == [
+        "turn_intent",
+        "turn_observation_failed",
+    ]
+    assert not adapter.sandboxes
     assert (repository / "value").read_text() == "old"
 
 
@@ -467,11 +473,132 @@ def test_failed_prepare_cannot_publish_success(
         assert result.status != "pass"
     else:
         run = run_observed_turn if consumer == "observed" else run_scoped_turn
-        with pytest.raises(ValueError, match="^prepare_refused$"):
+        with pytest.raises(TurnObservationError, match="^adapter_raised$"):
             run(*args, journal=journal, budgets=budgets)
     assert not adapter.sandboxes
     assert not any(
-        event["event"]
-        in {"turn_intent", "turn_observation", "scope_decision", "native_output_stored"}
+        event["event"] in {"turn_observation", "scope_decision", "native_output_stored"}
         for event in journal.read()
     )
+
+
+@pytest.mark.parametrize("failure_append", [False, True])
+@pytest.mark.parametrize("failure_type", [ValueError, KeyboardInterrupt, SystemExit])
+def test_prepare_failure_keeps_saved_recovery_evidence(
+    repository: Path,
+    tmp_path: Path,
+    failure_append: bool,
+    failure_type: type[BaseException],
+) -> None:
+    from agent_harness.attempt import AttemptJournal
+    from agent_harness.startup import reconcile_startup
+
+    class Journal(EventJournal):
+        def append(self, event: Mapping[str, object]) -> None:
+            if failure_append and event["event"] != "turn_intent":
+                raise OSError("PRIVATE JOURNAL FAILURE")
+            super().append(event)
+
+    journal = Journal(tmp_path / "state")
+    entered: list[bool] = []
+    cancellation = failure_type("PRIVATE PREPARATION FAILURE")
+
+    class Failing(StructuralAdapter):
+        def prepare(self, repository_root: Path) -> None:
+            # Read through a fresh reader: the original snapshot must be on disk.
+            events = EventJournal(tmp_path / "state").read()
+            assert len(events) == 1 and events[0]["event"] == "turn_intent"
+            before = cast(dict[str, object], events[0]["before"])
+            files = cast(list[dict[str, object]], before["files"])
+            value = next(item for item in files if item["path"] == "value")
+            assert value["sha256"] == hashlib.sha256(b"old").hexdigest()
+            assert events[0]["attempt_id"]
+            entered.append(True)
+            (repository_root / "value").write_text("preparation changed")
+            raise cancellation
+
+    adapter = Failing()
+    task, admission, context = inputs(repository)
+    expected = TurnObservationError if failure_type is ValueError else failure_type
+    with pytest.raises(expected) as raised:
+        run_observed_turn(
+            adapter,
+            task,
+            admission,
+            context,
+            journal=journal,
+            budgets=TurnBudgets(2, 16000, 128, 128, 128),
+        )
+    assert entered == [True] and not adapter.sandboxes
+    if failure_type is ValueError:
+        error = cast(TurnObservationError, raised.value)
+        assert error.code == "adapter_raised"
+        assert error.adapter_result is None
+        assert error.terminal_recorded is not failure_append
+    else:
+        assert raised.value is cancellation
+    saved = EventJournal(tmp_path / "state")
+    events = saved.read()
+    assert len(events) == (1 if failure_append else 2)
+    if not failure_append:
+        assert events[1] == {
+            "event": "turn_observation_failed",
+            "attempt_id": events[0]["attempt_id"],
+            "classification": "adapter_raised",
+        }
+    assert "PRIVATE" not in saved.path.read_text()
+    store = CurrentStateStore(tmp_path / "state")
+    recovered = AttemptJournal(repository, journal=saved, state_store=store).read()
+    assert len(recovered) == 1
+    entry = recovered[0]
+    assert entry["attempt_id"] == events[0]["attempt_id"]
+    assert entry["scope"] is None and entry["outputs"] is None
+    assert entry["verification"] is None and entry["after_head"] is None
+    assert entry["observation"] == (
+        None
+        if failure_append
+        else {"status": "failed", "classification": "adapter_raised", "process": None}
+    )
+    raw = saved.path.read_bytes()
+    decision = reconcile_startup(
+        repository,
+        journal=saved,
+        state_store=store,
+        expected_contract_sha256=hashlib.sha256(task.to_json().encode()).hexdigest(),
+    )
+    assert decision.status == "interrupted"
+    assert decision.attempt_ids == (events[0]["attempt_id"],)
+    assert decision.usage is None and not decision.accounting_complete
+    assert decision.workspace_delta is not None
+    assert decision.workspace_delta.modified == ("value",)
+    assert saved.path.read_bytes() == raw
+    assert not store.path.exists()
+    assert not adapter.sandboxes
+
+
+def test_intent_append_failure_never_calls_preparation(
+    repository: Path, tmp_path: Path
+) -> None:
+    class Journal(EventJournal):
+        def append(self, event: Mapping[str, object]) -> None:
+            raise OSError("PRIVATE APPEND FAILURE")
+
+    class Mutating(StructuralAdapter):
+        def prepare(self, repository_root: Path) -> None:
+            self.prepared.append(repository_root)
+            (repository_root / "value").write_text("unexpected mutation")
+
+    adapter = Mutating()
+    journal = Journal(tmp_path / "state")
+    with pytest.raises(TurnObservationError, match="^intent_append_failed$") as raised:
+        run_observed_turn(
+            adapter,
+            *inputs(repository),
+            journal=journal,
+            budgets=TurnBudgets(2, 16000, 128, 128, 128),
+        )
+    assert not adapter.prepared and not adapter.sandboxes
+    assert (repository / "value").read_text() == "old"
+    assert raised.value.adapter_result is None
+    assert not raised.value.terminal_recorded
+    assert journal.read() == []
