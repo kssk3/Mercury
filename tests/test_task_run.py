@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -12,10 +13,10 @@ from test_run_config import make_fixture, write_config
 from agent_harness.admission import AdmissionRecord
 from agent_harness.agent import AgentTurnResult, CapturedText, TurnBudgets
 from agent_harness.cli import main
-from agent_harness.context import ContextPacket
+from agent_harness.context import ContextPacket, build_context_packet
 from agent_harness.contract import TaskContract
 from agent_harness.inspection import summarize_execution
-from agent_harness.lock import RepositoryLock
+from agent_harness.lock import RepositoryLease, RepositoryLock
 from agent_harness.policy import VerificationPolicy
 from agent_harness.repository import resolve_repository_state_location
 from agent_harness.run_config import load_run_config
@@ -59,6 +60,206 @@ class FakeAgent:
             capture,
             "available",
         )
+
+
+@pytest.mark.parametrize(
+    "change", ["goal", "budgets", "context", "limits", "mapping", "bytes"]
+)
+def test_execution_requires_complete_approved_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    agent = FakeAgent()
+    monkeypatch.setattr("agent_harness.task_run._adapter", lambda config: agent)
+    if change == "goal":
+        config = replace(
+            config, contract=replace(config.contract, goal="unapproved goal")
+        )
+    elif change == "budgets":
+        config = replace(config, budgets=replace(config.budgets, stdout_bytes=1000))
+    elif change == "context":
+        config = replace(config, context_paths=("check.py",))
+    elif change == "limits":
+        config = replace(config, limits=replace(config.limits, max_seconds=39))
+    elif change == "mapping":
+        cast(dict[str, object], config.criterion_commands).clear()
+    else:
+        path.write_bytes(path.read_bytes() + b"\n")
+    outcome, code = execute_run(config)
+    assert (code, outcome["status"], outcome["reason"]) == (
+        2,
+        "blocked",
+        "preflight_failed",
+    )
+    assert outcome["state_dir"] is None
+    assert not config.state_root.exists()
+    assert agent.preparations == 0
+
+
+def test_execution_uses_fresh_mapping_not_callers_mutable_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agent_harness.task_run as task_run
+
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    original = build_context_packet
+
+    def context(*args: object, **kwargs: object) -> ContextPacket:
+        cast(dict[str, object], config.criterion_commands).clear()
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(task_run, "build_context_packet", context)
+    monkeypatch.setattr(task_run, "_adapter", lambda config: FakeAgent())
+    outcome, code = execute_run(config)
+    assert (code, outcome["status"]) == (0, "pass")
+
+
+def test_lease_renews_during_setup_and_execution_beyond_original_horizon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agent_harness.task_run as task_run
+    from agent_harness.lock import LockUnavailableError
+
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    clock = [0.0]
+    setup_renewed, run_renewed = threading.Event(), threading.Event()
+    location = resolve_repository_state_location(config.repository, config.state_root)
+
+    class ClockLock(RepositoryLock):
+        def heartbeat(self) -> RepositoryLease:
+            lease = super().heartbeat()
+            if lease.heartbeat_at == 310:
+                setup_renewed.set()
+            if lease.heartbeat_at == 620:
+                run_renewed.set()
+            return lease
+
+    def factory(
+        state_directory: Path | str, *, timeout_seconds: float
+    ) -> RepositoryLock:
+        return ClockLock(
+            state_directory, timeout_seconds=timeout_seconds, now=lambda: clock[0]
+        )
+
+    def contender() -> None:
+        other = RepositoryLock(
+            location.state_directory, timeout_seconds=300, now=lambda: clock[0]
+        )
+        with pytest.raises(LockUnavailableError, match="active"):
+            other.acquire()
+
+    original_context = build_context_packet
+
+    def context(*args: object, **kwargs: object) -> ContextPacket:
+        clock[0] = 310
+        assert setup_renewed.wait(1), "no lease renewal during setup"
+        contender()
+        return original_context(*args, **kwargs)  # type: ignore[arg-type]
+
+    class SlowAgent(FakeAgent):
+        def run(self, *args: object, **kwargs: object) -> AgentTurnResult:
+            clock[0] = 620
+            assert run_renewed.wait(1), "no lease renewal during execution"
+            contender()
+            return super().run(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(task_run, "RepositoryLock", factory)
+    monkeypatch.setattr(task_run, "_CLI_HEARTBEAT_SECONDS", 0.005, raising=False)
+    monkeypatch.setattr(task_run, "build_context_packet", context)
+    monkeypatch.setattr(task_run, "_adapter", lambda config: SlowAgent())
+    outcome, code = execute_run(config)
+    assert (code, outcome["status"]) == (0, "pass")
+    assert not (location.state_directory / "lock").exists()
+    assert not any(
+        thread.name == "mercury-run-lease" for thread in threading.enumerate()
+    )
+
+
+def test_lease_renewal_failure_blocks_before_native_preparation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    agent = FakeAgent()
+    monkeypatch.setattr("agent_harness.task_run._adapter", lambda config: agent)
+
+    def heartbeat(self: RepositoryLock) -> object:
+        raise RuntimeError("private renewal failure")
+
+    monkeypatch.setattr(RepositoryLock, "heartbeat", heartbeat)
+    outcome, code = execute_run(config)
+    assert (code, outcome["status"]) == (2, "blocked")
+    assert agent.preparations == 0
+    assert "private renewal failure" not in json.dumps(outcome)
+
+
+@pytest.mark.parametrize("phase", ["setup", "native"])
+def test_lost_renewal_never_reports_pass_or_releases_successor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    import agent_harness.task_run as task_run
+    from agent_harness.lock import LockOwnershipError
+
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    fail = threading.Event()
+    renewals: list[task_run._LeaseRenewal] = []
+    original_heartbeat = RepositoryLock.heartbeat
+
+    class ObservedRenewal(task_run._LeaseRenewal):
+        def __init__(self, lock: RepositoryLock) -> None:
+            super().__init__(lock)
+            renewals.append(self)
+
+    def heartbeat(self: RepositoryLock) -> RepositoryLease:
+        if fail.is_set():
+            metadata = self.path / "lease.json"
+            payload = json.loads(metadata.read_text())
+            payload["owner_token"] = "successor"
+            metadata.write_text(json.dumps(payload))
+            raise LockOwnershipError("successor owns lease")
+        return original_heartbeat(self)
+
+    def lose_lease() -> None:
+        fail.set()
+        assert renewals[0].failed.wait(1), "renewal failure was not observed"
+
+    original_context = build_context_packet
+
+    def context(*args: object, **kwargs: object) -> ContextPacket:
+        if phase == "setup":
+            lose_lease()
+        return original_context(*args, **kwargs)  # type: ignore[arg-type]
+
+    class LosingAgent(FakeAgent):
+        def run(self, *args: object, **kwargs: object) -> AgentTurnResult:
+            lose_lease()
+            return super().run(*args, **kwargs)  # type: ignore[arg-type]
+
+    agent = LosingAgent()
+    monkeypatch.setattr(task_run, "_LeaseRenewal", ObservedRenewal)
+    monkeypatch.setattr(task_run, "_CLI_HEARTBEAT_SECONDS", 0.005)
+    monkeypatch.setattr(task_run, "build_context_packet", context)
+    monkeypatch.setattr(task_run, "_adapter", lambda config: agent)
+    monkeypatch.setattr(RepositoryLock, "heartbeat", heartbeat)
+    outcome, code = execute_run(config)
+    assert (code, outcome["status"], outcome["reason"]) == (
+        1,
+        "unknown",
+        "execution_failed",
+    )
+    assert agent.preparations == (0 if phase == "setup" else 1)
+    assert renewals[0].thread is not None and not renewals[0].thread.is_alive()
+    lease = json.loads((renewals[0].lock.path / "lease.json").read_text())
+    assert lease["owner_token"] == "successor"
+    if phase == "native":
+        summary = summarize_execution(Path(str(outcome["state_dir"])))
+        assert summary["recorded_status"] == "unknown"
+        assert summary["recorded_reason"] == "execution_failed"
+        assert summary["diagnostics"] == []
 
 
 @pytest.mark.parametrize("mode", ["pass", "fail", "timeout", "protected"])
@@ -208,8 +409,10 @@ def test_initial_head_reports_observation_not_expectation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
     path, data = make_fixture(tmp_path)
-    config = load_run_config(path, write_config(path, data), "human")
     actual = data["expected_head"]
+    if phase == "mismatch":
+        data["expected_head"] = "a" * 40
+    config = load_run_config(path, write_config(path, data), "human")
     calls = 0
 
     def git(config: object, *arguments: str) -> bytes:
@@ -222,8 +425,6 @@ def test_initial_head_reports_observation_not_expectation(
         return b""
 
     monkeypatch.setattr("agent_harness.task_run._git", git)
-    if phase == "mismatch":
-        config = replace(config, expected_head="a" * 40)
     outcome, code = execute_run(config)
     assert code in (1, 2)
     assert outcome["status"] != "pass"

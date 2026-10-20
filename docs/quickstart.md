@@ -292,8 +292,12 @@ claim. Executing a task requires the separate admission described below.
 Use a clean Git repository with a full pinned HEAD, a trusted external backend,
 existing protected checker inputs, and canonical external configuration/state
 paths. Every caller for the same repository must share `state_root` to share
-its lease. All `run` invocations use the same 300-second lease horizon, covering
-the admitted maximum loop budget plus setup/cleanup margin. The existing lock
+its lease. All `run` invocations use the same 300-second lease horizon and renew
+every 30 seconds throughout setup and execution. Renewal stops and joins before
+release; an observed renewal failure prevents success and further native phases.
+An already-running native phase is not forcibly interrupted by renewal failure.
+If the renewal worker cannot stop within its bounded join, the result is UNKNOWN
+and the lease is left in place rather than released beneath that worker. The existing lock
 evaluates expiry using the acquiring caller's horizon; Python API callers sharing
 this state must use the same horizon and maintain their heartbeat for longer
 work. Different state roots do not coordinate. These are cooperative leases,
@@ -348,10 +352,17 @@ then supply the digest and an approver label:
 
 The hash binds the entire configuration, including commands, paths and budgets;
 it is not identity authentication. Missing or mismatched approval is refused
-before state writes or native execution. JSON has a 64 KiB limit; duplicate or
+before state writes or native execution. The direct Python execution entry point
+reloads those approved bytes, compares every configuration field and uses the
+fresh snapshot, including its independent criterion mapping. Changing a loaded
+configuration requires newly approved bytes, rather than `dataclasses.replace`
+with the old digest. JSON has a 64 KiB limit; duplicate or
 unknown keys, symlink/hardlink configuration files, nonfinite limits and unsafe
 path overlap are rejected. Backends are `codex` and `claude`; arbitrary flags,
 shell command strings and model/auth overrides are not accepted.
+Verification children discard inherited `NODE_OPTIONS`, including preload flags;
+the existing resolver filters still constrain `NODE_PATH`. Unrelated caller
+environment remains available. This does not change native backend configuration.
 
 The wrapper rechecks HEAD and cleanliness under its repository lease. Both
 preflight checks reject tracked skip-worktree/assume-unchanged index flags rather
