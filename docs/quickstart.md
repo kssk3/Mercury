@@ -176,9 +176,12 @@ The adapter sets both available and preapproved tools to `Read,Edit,Write,Glob,G
 for workspace-write mode, and `Read,Glob,Grep` for read-only mode. It denies
 permission prompts, supplies an empty strict MCP configuration, disables slash
 commands and session persistence, and does not enable permission bypass, shell,
-subagent or network tools. This is a native tool policy, not process confinement:
-inherited hooks, native settings and the executable itself remain trusted.
-Authentication and model selection stay with the caller's existing Claude setup.
+subagent or network tools. Mandatory `--safe-mode` disables user/project/local
+customizations, including hooks, plugins, CLAUDE.md and autoloaded extensions.
+Authentication, model selection, permissions and admin-managed policy remain
+active; managed policy hooks and the executable itself remain trusted. This is
+a native tool policy, not process confinement. Unsupported CLIs fail closed;
+Mercury never retries without safe mode.
 No API key, login or settings change is performed by Mercury.
 
 The USD option is a native CLI budget, not a measured invoice or a cap on the
@@ -187,15 +190,16 @@ process duration and retained bytes. Fake-executable contract tests establish
 the adapter boundary, not compatibility with every Claude version or provider.
 Before live use, confirm the installed CLI supports these flags and has the
 intended authentication. The implementation was prepared against Claude Code
-2.1.302 help and the official [CLI reference](https://code.claude.com/docs/en/cli-reference).
+2.1.303 help and the official [CLI reference](https://code.claude.com/docs/en/cli-reference).
 
 ## Using a real repository
 
 The example's subclass replaces `CodexCLIAdapter.run` entirely. A real
 integration must supply its own trusted executable/environment and genuinely
 admitted task, verification policy, protection set, redactor, budgets, external
-state, and caller-held lease. The real adapter inherits native configuration,
-authentication, rules, and environment. No credential setup or live execution
+state, and caller-held lease. Codex inherits native configuration, authentication, rules and environment.
+Claude uses the safe-mode boundary described above, retaining authentication,
+model selection and trusted managed policy. No credential setup or live execution
 is part of this quickstart.
 
 Allowed paths guide the agent; observations are point-in-time scope checks,
@@ -349,7 +353,9 @@ unknown keys, symlink/hardlink configuration files, nonfinite limits and unsafe
 path overlap are rejected. Backends are `codex` and `claude`; arbitrary flags,
 shell command strings and model/auth overrides are not accepted.
 
-The wrapper rechecks HEAD and cleanliness under its repository lease. Each
+The wrapper rechecks HEAD and cleanliness under its repository lease. Both
+preflight checks reject tracked skip-worktree/assume-unchanged index flags rather
+than trusting a porcelain status that can hide modified checker contents. Each
 configuration digest gets a fresh `runs/<digest>` evidence directory; existing
 history is refused, including an empty directory. There is one native invocation
 and no automatic retry. The loop reserves baseline, development and distinct
@@ -376,8 +382,9 @@ cannot return PASS. New wrapper records declare version-2 binding and remain
 UNKNOWN to `status` until the post-release wrapper result is saved. Historical
 version-1 binding and direct-loop records remain readable without that field.
 No automatic rollback, session resume, publication or merge
-is performed. Native settings/hooks remain trusted and the limits do not provide
-OS confinement or prove that the chosen tests are sufficient.
+is performed. Codex native configuration and Claude managed policy remain trusted;
+Claude user/project customizations are disabled by mandatory safe mode. These
+limits do not provide OS confinement or prove that the chosen tests are sufficient.
 
 ### JavaScript integration example
 

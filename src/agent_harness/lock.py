@@ -76,27 +76,44 @@ class RepositoryLock:
         validate_runtime_state_directory(self.path)
         self._state_directory.mkdir(parents=True, exist_ok=True)
 
-        with self._ownership_transition():
-            sampled_at = self._sample_now()
-            validate_runtime_state_directory(self.path)
-            while True:
-                try:
-                    self.path.mkdir()
-                except FileExistsError:
-                    lease = self._read_lease()
-                    if not self._is_expired(lease, sampled_at):
-                        raise LockUnavailableError(
-                            "repository lock is active"
-                        ) from None
-                    self._reclaim_expired_lock()
-                else:
-                    lease = RepositoryLease(self._owner_token, sampled_at)
+        created = False
+        try:
+            with self._ownership_transition():
+                sampled_at = self._sample_now()
+                validate_runtime_state_directory(self.path)
+                while True:
                     try:
-                        self._write_lease(lease)
-                    except BaseException:
-                        self.path.rmdir()
-                        raise
-                    return lease
+                        self.path.mkdir()
+                    except FileExistsError:
+                        lease = self._read_lease()
+                        if not self._is_expired(lease, sampled_at):
+                            raise LockUnavailableError(
+                                "repository lock is active"
+                            ) from None
+                        self._reclaim_expired_lock()
+                    else:
+                        created = True
+                        lease = RepositoryLease(self._owner_token, sampled_at)
+                        try:
+                            self._write_lease(lease)
+                        except BaseException:
+                            # Only the newly created empty directory is safe here.
+                            # Committed metadata needs the ownership check below.
+                            try:
+                                self.path.rmdir()
+                            except OSError:
+                                pass
+                            raise
+                        return lease
+        except BaseException:
+            # A committed lease can outlive a failed write/transition return.
+            # Cleanup must not replace the original failure or touch a successor.
+            if created:
+                try:
+                    self.release_if_owned()
+                except (OSError, ValueError, RuntimeError, KeyboardInterrupt):
+                    pass
+            raise
 
     def heartbeat(self) -> RepositoryLease:
         with self._ownership_transition():
@@ -108,6 +125,16 @@ class RepositoryLock:
     def release(self) -> None:
         with self._ownership_transition():
             self._require_owner()
+            self._validate_cleanup()
+            shutil.rmtree(self.path)
+
+    def release_if_owned(self) -> None:
+        """Reconcile an uncertain acquire without releasing another owner's lease."""
+        with self._ownership_transition():
+            if not self.path.exists():
+                return
+            if self._read_lease().owner_token != self._owner_token:
+                return
             self._validate_cleanup()
             shutil.rmtree(self.path)
 

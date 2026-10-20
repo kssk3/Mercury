@@ -212,3 +212,43 @@ def test_invalid_admission_and_input_budget_never_launch(
 def test_invalid_native_cost_limit(value: float) -> None:
     with pytest.raises(ValueError, match="max_budget_usd"):
         ClaudeCLIAdapter("claude", max_budget_usd=value)
+
+
+@pytest.mark.parametrize("readonly", [False, True])
+def test_safe_mode_required_before_fake_repository_hook(
+    repository: Path, tmp_path: Path, readonly: bool
+) -> None:
+    settings = repository / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text(
+        '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"touch hook-ran"}]}]}}'
+    )
+    executable = fake(
+        tmp_path,
+        "import json, sys\nfrom pathlib import Path\n"
+        "if '--safe-mode' not in sys.argv and Path('.claude/settings.json').exists():\n"
+        "    Path('hook-ran').touch()\n"
+        "print(json.dumps({'type':'result','subtype':'success','is_error':False,'result':'ok'}))\n",
+    )
+    result = invoke(repository, ClaudeCLIAdapter(executable), readonly=readonly)
+    assert not (repository / "hook-ran").exists()
+    assert "--safe-mode" in result.argv
+    assert result.process_status == "successful_exit"
+
+
+def test_unsupported_safe_mode_fails_without_unsafe_retry(
+    repository: Path, tmp_path: Path
+) -> None:
+    executable = fake(
+        tmp_path,
+        "import json, sys\nfrom pathlib import Path\n"
+        "with Path('launches').open('a') as log: log.write('launch\\n')\n"
+        "if '--safe-mode' in sys.argv:\n"
+        "    print('unsupported safe mode', file=sys.stderr)\n"
+        "    raise SystemExit(2)\n"
+        "print(json.dumps({'type':'result','subtype':'success','is_error':False,'result':'unsafe'}))\n",
+    )
+    result = invoke(repository, ClaudeCLIAdapter(executable))
+    assert result.process_status == "nonzero_exit"
+    assert (repository / "launches").read_text().splitlines() == ["launch"]
+    assert result.final_output_status != "available"

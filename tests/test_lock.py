@@ -5,7 +5,8 @@ import multiprocessing
 import os
 import subprocess
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from multiprocessing.process import BaseProcess
 from multiprocessing.synchronize import Event as ProcessEvent
 from pathlib import Path
@@ -751,7 +752,7 @@ def test_transition_requires_regular_file_with_one_link(
     assert transition.lstat().st_nlink == (2 if kind == "hardlink" else 1)
 
 
-@pytest.mark.parametrize("action", ["release", "acquire"])
+@pytest.mark.parametrize("action", ["release", "acquire", "release_if_owned"])
 def test_cleanup_preserves_nested_git_metadata(tmp_path: Path, action: str) -> None:
     clock = Clock(100)
     lock = create_lock(tmp_path / "state", clock, "owner")
@@ -800,3 +801,78 @@ def test_cleanup_unlinks_directory_symlink_without_removing_target(
         p.relative_to(metadata): p.read_bytes() if p.is_file() else None
         for p in metadata.rglob("*")
     } == before
+
+
+@pytest.mark.parametrize("phase", ["write", "transition-exit"])
+@pytest.mark.parametrize("error", [KeyboardInterrupt, RuntimeError])
+def test_interrupted_committed_acquire_releases_own_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    error: type[BaseException],
+) -> None:
+    lock = RepositoryLock(tmp_path / "state", timeout_seconds=10)
+    if phase == "write":
+        original_write = lock._write_lease
+
+        def write(lease: RepositoryLease) -> None:
+            original_write(lease)
+            assert (lock.path / "lease.json").is_file()
+            raise error("committed lease interruption")
+
+        monkeypatch.setattr(lock, "_write_lease", write)
+    else:
+        original_transition = lock._ownership_transition
+        interrupted = False
+
+        @contextmanager
+        def transition() -> Iterator[None]:
+            nonlocal interrupted
+            with original_transition():
+                yield
+            if not interrupted:
+                interrupted = True
+                assert (lock.path / "lease.json").is_file()
+                raise error("committed lease interruption")
+
+        monkeypatch.setattr(lock, "_ownership_transition", transition)
+    with pytest.raises(error, match="committed lease interruption"):
+        lock.acquire()
+    assert not lock.path.exists()
+
+
+def test_failed_acquire_cleanup_preserves_replacement_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock = RepositoryLock(tmp_path / "state", timeout_seconds=10)
+    original = lock._write_lease
+    replacement = RepositoryLease("replacement-owner", 1000)
+
+    def write(lease: RepositoryLease) -> None:
+        original(lease)
+        original(replacement)
+        raise KeyboardInterrupt("owner changed before cancellation")
+
+    monkeypatch.setattr(lock, "_write_lease", write)
+    with pytest.raises(KeyboardInterrupt, match="owner changed"):
+        lock.acquire()
+    assert (
+        json.loads((lock.path / "lease.json").read_text())["owner_token"]
+        == replacement.owner_token
+    )
+
+
+@pytest.mark.parametrize("same_owner", [False, True])
+def test_failed_reacquire_preserves_existing_live_lease(
+    tmp_path: Path, same_owner: bool
+) -> None:
+    owner = RepositoryLock(tmp_path / "state", timeout_seconds=10)
+    owner.acquire()
+    before = (owner.path / "lease.json").read_bytes()
+    contender = (
+        owner if same_owner else RepositoryLock(tmp_path / "state", timeout_seconds=10)
+    )
+    with pytest.raises(LockUnavailableError):
+        contender.acquire()
+    assert (owner.path / "lease.json").read_bytes() == before
+    owner.release()

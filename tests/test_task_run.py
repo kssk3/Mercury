@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -503,3 +504,93 @@ def test_post_commit_error_without_matching_evidence_stays_unknown(
         "finalization_failed",
         1,
     )
+
+
+@pytest.mark.parametrize("flag", ["--skip-worktree", "--assume-unchanged"])
+@pytest.mark.parametrize("phase", ["initial", "under-lease"])
+def test_hidden_index_checker_is_refused_before_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str, phase: str
+) -> None:
+    path, data = make_fixture(tmp_path)
+    root = Path(data["repository"])
+    checker = "검사 with space.py"
+    (root / "check.py").rename(root / checker)
+
+    def git(*args: str) -> bytes:
+        return subprocess.run(
+            ["/usr/bin/git", "-C", str(root), *args],
+            capture_output=True,
+            check=True,
+            timeout=10,
+        ).stdout
+
+    git("add", "--all")
+    git(
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=f@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-qm",
+        "checker name",
+    )
+    data["expected_head"] = git("rev-parse", "HEAD").decode().strip()
+    data["contract"]["protected_paths"] = [checker]
+    data["context_paths"] = ["value.txt", checker]
+    command = [data["verification"]["commands"][0][0], "-I", checker]
+    data["verification"]["commands"] = [command]
+    data["criterion_commands"] = {"value correct": [command]}
+    config = load_run_config(path, write_config(path, data), "human")
+    agent = FakeAgent()
+    monkeypatch.setattr("agent_harness.task_run._adapter", lambda config: agent)
+
+    def hide_checker() -> None:
+        git("update-index", flag, "--", checker)
+        (root / checker).write_text("pass\n")
+        assert git("status", "--porcelain=v1", "-z") == b""
+
+    if phase == "initial":
+        hide_checker()
+    else:
+        original = RepositoryLock.acquire
+
+        def acquire(self: RepositoryLock) -> object:
+            lease = original(self)
+            hide_checker()
+            return lease
+
+        monkeypatch.setattr(RepositoryLock, "acquire", acquire)
+    outcome, code = execute_run(config)
+    assert (code, outcome["status"], outcome["reason"]) == (
+        2,
+        "blocked",
+        "preflight_failed",
+    )
+    assert agent.preparations == 0
+    assert not Path(str(outcome["state_dir"])).exists()
+    location = resolve_repository_state_location(config.repository, config.state_root)
+    assert not (location.state_directory / "lock").exists()
+
+
+def test_cancel_after_acquire_commit_releases_owned_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    agent = FakeAgent()
+    monkeypatch.setattr("agent_harness.task_run._adapter", lambda config: agent)
+    original = RepositoryLock.acquire
+
+    def acquire(self: RepositoryLock) -> object:
+        original(self)
+        raise KeyboardInterrupt("after acquire returned to wrapper")
+
+    monkeypatch.setattr(RepositoryLock, "acquire", acquire)
+    outcome, code = execute_run(config)
+    assert (code, outcome["reason"]) == (1, "interrupted")
+    assert agent.preparations == 0
+    location = resolve_repository_state_location(config.repository, config.state_root)
+    assert not (location.state_directory / "lock").exists()
+    assert not Path(str(outcome["state_dir"])).exists()

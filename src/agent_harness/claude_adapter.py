@@ -1,7 +1,8 @@
-"""One bounded Claude Code invocation; native settings/hooks remain active.
+"""One bounded Claude Code invocation with mandatory customization safe mode.
 
-Tool restrictions are CLI permissions, not an OS sandbox. This trusted adapter
-does not redact output, control hooks, or confer task-success authority.
+Tool restrictions are CLI permissions, not an OS sandbox. Managed policy and
+the native executable remain trusted; this adapter does not redact output or
+confer task-success authority.
 """
 
 from __future__ import annotations
@@ -29,10 +30,12 @@ from agent_harness.repository import resolve_repository_root
 class ClaudeCLIAdapter(_NativeExecutableBinding):
     """Use caller-selected Claude with fixed tools and noninteractive denials.
 
-    Authentication, user model selection, hooks and native settings are inherited.
+    Authentication, model selection and managed policy remain active. Safe mode
+    disables user/project customizations, including hooks; managed hooks remain
+    trusted. Unsupported CLIs fail without retrying in an unsafe mode.
     No arbitrary flags, permission bypass, shell/subagent tools or MCP servers are
     admitted. Read-only mode omits Edit and Write; it does not confine a hostile
-    native process or inherited hooks. The harness still observes and verifies.
+    native process or managed hooks. The harness still observes and verifies.
     """
 
     def __init__(self, executable: Path | str, *, max_budget_usd: float = 0.25) -> None:
@@ -96,6 +99,7 @@ class ClaudeCLIAdapter(_NativeExecutableBinding):
         argv = (
             self._executable or self._requested_executable,
             "--print",
+            "--safe-mode",
             "--output-format",
             "json",
             "--no-session-persistence",

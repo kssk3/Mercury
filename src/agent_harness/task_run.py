@@ -69,6 +69,10 @@ def _baseline(config: RunConfig, outcome: dict[str, object]) -> None:
         outcome["initial_head"] = observed
     if observed != config.expected_head:
         raise ValueError("baseline_mismatch")
+    # Porcelain can hide changed tracked bytes behind these index flags.
+    index = _git(config, "ls-files", "--cached", "-v", "-z")
+    if any(entry[:1] == b"S" or entry[:1].islower() for entry in index.split(b"\0")):
+        raise ValueError("unsupported_hidden_index_flags")
     if _git(config, "status", "--porcelain=v1", "-z", "--untracked-files=all"):
         raise ValueError("workspace_not_clean")
 
@@ -195,9 +199,13 @@ def execute_run(config: RunConfig) -> tuple[dict[str, object], int]:
             reason="preflight_failed" if code == 2 else "execution_failed",
         )
     finally:
-        if held and lock is not None:
+        if lock is not None:
             try:
-                lock.release()
+                if held:
+                    lock.release()
+                else:
+                    # acquire may commit before returning or held is assigned.
+                    lock.release_if_owned()
             except (OSError, ValueError, RuntimeError, KeyboardInterrupt):
                 outcome.update(status="unknown", reason="lock_release_failed")
                 code = 1
