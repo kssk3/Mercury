@@ -361,13 +361,21 @@ Output is one JSON summary with status/reason, initial HEAD, configuration hash,
 state directory, attempts, command boundaries and criterion success. The
 initial HEAD is the first Git HEAD observed during preflight, or `null` if
 preflight stops before that observation; the expected HEAD remains an input.
-Verifier commands must invoke their trusted program directly; `env` dispatch,
-including executable aliases, is unsupported because it can override the
-sanitized environment and select an unbound delegated checker. Captured
-text is omitted from stored output by default; structured evidence remains.
+Verifier commands must invoke their trusted program directly; recognized shell
+and `env` dispatch, including resolved/same-file aliases, are unsupported.
+Python and Node verifiers require an existing script operand; repository scripts
+must be protected. Python accepts only `-I`, `-B`, `-E`, `-s`, `-S`, `-u`, `-O`,
+`-OO`, and `-q` before that script; Node accepts only `--no-warnings` and
+`--disable-proto=throw`. Either permits `--` before the script. Evaluation,
+module and stdin forms are refused. This bounded check does not classify
+arbitrary renamed/copied executables. Captured text is omitted from stored
+output by default; structured evidence remains.
 Exit 0 requires loop PASS and all mapped criteria. Invalid configuration or
 preflight returns 2; execution failure/unknown returns 1. Lease-release failure
-cannot return PASS. No automatic rollback, session resume, publication or merge
+cannot return PASS. New wrapper records declare version-2 binding and remain
+UNKNOWN to `status` until the post-release wrapper result is saved. Historical
+version-1 binding and direct-loop records remain readable without that field.
+No automatic rollback, session resume, publication or merge
 is performed. Native settings/hooks remain trusted and the limits do not provide
 OS confinement or prove that the chosen tests are sufficient.
 

@@ -290,3 +290,216 @@ def test_direct_api_rejects_env_before_preparation(
     assert outcome["status"] == "blocked"
     assert not config.state_root.exists()
     assert agent.preparations == 0
+
+
+@pytest.mark.parametrize("backend", ["claud", "", "CODEX"])
+def test_direct_backend_rejected_before_state_or_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str
+) -> None:
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    agent = FakeAgent()
+    monkeypatch.setattr("agent_harness.task_run._adapter", lambda config: agent)
+    outcome, code = execute_run(replace(config, backend=backend))
+    assert (code, outcome["status"], outcome["reason"]) == (
+        2,
+        "blocked",
+        "preflight_failed",
+    )
+    assert not config.state_root.exists()
+    assert agent.preparations == 0
+
+
+@pytest.mark.parametrize("phase", ["baseline", "verification", "storage", "context"])
+def test_under_lease_validation_remains_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    import agent_harness.task_run as task_run
+
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    agent = FakeAgent()
+    monkeypatch.setattr(task_run, "_adapter", lambda config: agent)
+    if phase == "baseline":
+        original_git = task_run._git
+        heads = 0
+
+        def git(config: object, *arguments: str) -> bytes:
+            nonlocal heads
+            if arguments == ("rev-parse", "HEAD"):
+                heads += 1
+                if heads == 2:
+                    return b"b" * 40 + b"\n"
+            return original_git(config, *arguments)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(task_run, "_git", git)
+    elif phase == "context":
+
+        def context(*args: object, **kwargs: object) -> ContextPacket:
+            raise ValueError("context rejected")
+
+        monkeypatch.setattr(task_run, "build_context_packet", context)
+    else:
+        name = (
+            "validate_run_verification"
+            if phase == "verification"
+            else "validate_runtime_state_directory"
+        )
+        original = getattr(task_run, name)
+        calls = 0
+
+        def validate(*args: object, **kwargs: object) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == (2 if phase == "verification" else 5):
+                raise ValueError("admission rejected")
+            original(*args, **kwargs)
+
+        monkeypatch.setattr(task_run, name, validate)
+    outcome, code = execute_run(config)
+    assert (code, outcome["status"], outcome["reason"]) == (
+        2,
+        "blocked",
+        "preflight_failed",
+    )
+    assert outcome["initial_head"] == config.expected_head
+    assert agent.preparations == 0
+    assert not Path(str(outcome["state_dir"])).exists()
+
+
+@pytest.mark.parametrize(
+    "failure", ["release", "finalization", "interrupted-finalization"]
+)
+def test_wrapper_terminal_failure_never_leaves_readable_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    from agent_harness.state import CurrentStateStore
+
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    monkeypatch.setattr("agent_harness.task_run._adapter", lambda config: FakeAgent())
+    if failure == "release":
+        original_release = RepositoryLock.release
+
+        def release(self: RepositoryLock) -> None:
+            original_release(self)
+            raise ValueError("release failed")
+
+        monkeypatch.setattr(RepositoryLock, "release", release)
+    else:
+        original_write = CurrentStateStore.write
+
+        def write(self: CurrentStateStore, state: object) -> None:
+            if isinstance(state, dict) and "run_result" in state:
+                if failure == "interrupted-finalization":
+                    raise KeyboardInterrupt
+                raise OSError("finalization failed")
+            original_write(self, state)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(CurrentStateStore, "write", write)
+    outcome, code = execute_run(config)
+    summary = summarize_execution(Path(str(outcome["state_dir"])))
+    assert code == 1
+    assert outcome["status"] == "unknown"
+    assert summary["recorded_status"] == "unknown"
+    if failure == "release":
+        assert summary["recorded_reason"] == outcome["reason"] == "lock_release_failed"
+    else:
+        assert summary["diagnostics"]
+
+
+@pytest.mark.parametrize("arguments", [["-c", "pass"], ["-I", "new_checker.py"]])
+def test_direct_api_rejects_unbound_interpreter_before_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: list[str]
+) -> None:
+    import sys
+
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    command = (sys.executable, *arguments)
+    config = replace(
+        config,
+        policy=VerificationPolicy((command,), ".", 2),
+        criterion_commands={"value correct": [list(command)]},
+    )
+    agent = FakeAgent()
+    monkeypatch.setattr("agent_harness.task_run._adapter", lambda config: agent)
+    outcome, code = execute_run(config)
+    assert (code, outcome["status"]) == (2, "blocked")
+    assert not config.state_root.exists()
+    assert agent.preparations == 0
+
+
+@pytest.mark.parametrize("error", [OSError, RuntimeError, KeyboardInterrupt])
+@pytest.mark.parametrize("release_failed", [False, True])
+def test_post_commit_error_preserves_observed_terminal_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    error: type[BaseException],
+    release_failed: bool,
+) -> None:
+    from agent_harness.state import CurrentStateStore
+
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    monkeypatch.setattr("agent_harness.task_run._adapter", lambda config: FakeAgent())
+    original_write = CurrentStateStore.write
+
+    def write(self: CurrentStateStore, state: object) -> None:
+        original_write(self, state)  # type: ignore[arg-type]
+        if isinstance(state, dict) and "run_result" in state:
+            raise error("post-commit interruption")
+
+    monkeypatch.setattr(CurrentStateStore, "write", write)
+    if release_failed:
+        original_release = RepositoryLock.release
+
+        def release(self: RepositoryLock) -> None:
+            original_release(self)
+            raise OSError("release failed")
+
+        monkeypatch.setattr(RepositoryLock, "release", release)
+    outcome, code = execute_run(config)
+    expected = (
+        ("unknown", "lock_release_failed", 1)
+        if release_failed
+        else ("pass", "final_verification", 0)
+    )
+    assert (outcome["status"], outcome["reason"], code) == expected
+    state_dir = Path(str(outcome["state_dir"]))
+    summary = summarize_execution(state_dir)
+    assert summary["recorded_status"] == outcome["status"]
+    assert summary["recorded_reason"] == outcome["reason"]
+    assert summary["diagnostics"] == []
+    assert main(["status", "--state-dir", str(state_dir)]) == 0
+    assert json.loads(capsys.readouterr().out)["recorded_status"] == outcome["status"]
+
+
+@pytest.mark.parametrize("readback", ["mismatched", "unreadable"])
+def test_post_commit_error_without_matching_evidence_stays_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, readback: str
+) -> None:
+    from agent_harness.state import CurrentStateStore
+
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    monkeypatch.setattr("agent_harness.task_run._adapter", lambda config: FakeAgent())
+    original_write = CurrentStateStore.write
+
+    def write(self: CurrentStateStore, state: object) -> None:
+        original_write(self, state)  # type: ignore[arg-type]
+        if isinstance(state, dict) and "run_result" in state:
+            saved = dict(state, unrelated_metadata=True)
+            self.path.write_text(
+                json.dumps(saved) if readback == "mismatched" else "not JSON"
+            )
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(CurrentStateStore, "write", write)
+    outcome, code = execute_run(config)
+    assert (outcome["status"], outcome["reason"], code) == (
+        "unknown",
+        "finalization_failed",
+        1,
+    )

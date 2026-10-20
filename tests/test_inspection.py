@@ -600,3 +600,40 @@ def test_status_loop_protected_null_rejects_invalid_contexts(
     result = summarize_execution(tmp_path)
     assert result["recorded_status"] == "unknown"
     assert result["diagnostics"]
+
+
+@pytest.mark.parametrize(
+    "completion", ["missing", "invalid", "mismatch", "pass", "release-failed"]
+)
+def test_status_version_two_wrapper_requires_consistent_finalization(
+    tmp_path: Path, completion: str
+) -> None:
+    state = write_history(tmp_path)
+    journal = tmp_path / "events.jsonl"
+    binding = {
+        "event": "run_binding",
+        "schema_version": 2,
+        "initial_head": "c" * 40,
+        "config_sha256": "f" * 64,
+        "backend": "codex",
+    }
+    raw = json.dumps(binding).encode() + b"\n" + journal.read_bytes()
+    journal.write_bytes(raw)
+    state["attempt_summary"]["journal"]["sha256"] = hashlib.sha256(raw).hexdigest()
+    if completion != "missing":
+        state["run_result"] = {
+            "status": "pass",
+            "reason": state["loop_summary"]["reason"],
+        }
+        if completion == "invalid":
+            state["run_result"]["status"] = ["pass"]
+        elif completion == "mismatch":
+            state["run_result"]["reason"] = "invented-success"
+        elif completion == "release-failed":
+            state["run_result"] = {"status": "unknown", "reason": "lock_release_failed"}
+    store_state(tmp_path, state)
+    summary = summarize_execution(tmp_path)
+    assert summary["recorded_status"] == ("pass" if completion == "pass" else "unknown")
+    assert bool(summary["diagnostics"]) == (
+        completion in {"missing", "invalid", "mismatch"}
+    )

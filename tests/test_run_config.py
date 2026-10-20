@@ -222,3 +222,35 @@ def test_env_dispatcher_cannot_select_mutable_checker(
     with pytest.raises(ValueError, match="invalid_run_config"):
         load_run_config(path, write_config(path, data), "human")
     assert not Path(data["state_root"]).exists()
+
+
+@pytest.mark.parametrize("alias", [False, True])
+def test_shell_evaluation_is_not_an_admitted_checker(
+    tmp_path: Path, alias: bool
+) -> None:
+    path, data = make_fixture(tmp_path)
+    shell = Path("/bin/sh")
+    if alias:
+        shell = tmp_path / "dispatcher"
+        shell.symlink_to("/bin/sh")
+    command = [str(shell), "-c", "python unprotected.py"]
+    data["verification"]["commands"] = [command]
+    data["criterion_commands"] = {"value correct": [command]}
+    with pytest.raises(ValueError, match="invalid_run_config"):
+        load_run_config(path, write_config(path, data), "human")
+    assert not Path(data["state_root"]).exists()
+
+
+@pytest.mark.parametrize(
+    "arguments", [["-c", "pass"], ["-m", "unprotected"], ["-I", "new_checker.py"]]
+)
+def test_interpreter_requires_existing_script_operand(
+    tmp_path: Path, arguments: list[str]
+) -> None:
+    path, data = make_fixture(tmp_path)
+    command = [sys.executable, *arguments]
+    data["verification"]["commands"] = [command]
+    data["criterion_commands"] = {"value correct": [command]}
+    with pytest.raises(ValueError, match="invalid_run_config"):
+        load_run_config(path, write_config(path, data), "human")
+    assert not Path(data["state_root"]).exists()

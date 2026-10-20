@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import stat
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -143,28 +144,65 @@ def _covered(path: str, boundaries: tuple[str, ...]) -> bool:
     return any(path == prefix or path.startswith(prefix + "/") for prefix in boundaries)
 
 
+def _program_matches(selected: Path, names: tuple[str, ...]) -> bool:
+    """Recognize supported names and same-file aliases, not arbitrary binaries."""
+    resolved = selected.resolve()
+    if selected.name in names or resolved.name in names:
+        return True
+    for name in names:
+        known = shutil.which(name, path=os.defpath)
+        if known is not None and selected.exists() and selected.samefile(known):
+            return True
+    return False
+
+
 def validate_run_verification(
     repository: Path, contract: TaskContract, policy: VerificationPolicy
 ) -> None:
-    """Apply the wrapper's verifier boundary to loaded and direct API configs."""
+    """Bind supported direct-script verifiers at both public entry points.
+
+    Shell/env delegation and interpreter evaluation/module forms are unsupported.
+    This is bounded argv admission, not classification of arbitrary executables.
+    """
     directory = repository / policy.working_directory
     _absolute(str(directory))
     if not directory.is_dir() or not directory.resolve().is_relative_to(repository):
         raise ValueError("invalid verification directory")
-    system_env = shutil.which("env", path=os.defpath)
     for command in policy.commands:
         selected = _absolute(command[0], canonical=False)
         resolved = selected.resolve()
         if resolved.is_relative_to(repository):
             raise ValueError("verification executable is inside repository")
-        # env applies its argv environment after the runner's inherited-env
-        # sanitation. Its delegated program is not bound by the outer proof.
-        if resolved.name == "env" or (
-            system_env is not None
-            and selected.exists()
-            and selected.samefile(system_env)
+        if _program_matches(
+            selected, ("env", "sh", "bash", "dash", "zsh", "ksh", "csh", "tcsh", "fish")
         ):
-            raise ValueError("env verifier delegation is unsupported")
+            raise ValueError("verifier delegation is unsupported")
+        python = (
+            re.fullmatch(r"python(?:[23](?:\.[0-9]+)?)?", resolved.name) is not None
+            or re.fullmatch(r"python(?:[23](?:\.[0-9]+)?)?", selected.name) is not None
+            or selected.samefile(sys.executable)
+        )
+        node = _program_matches(selected, ("node", "nodejs"))
+        if python or node:
+            flags = (
+                {"-I", "-B", "-E", "-s", "-S", "-u", "-O", "-OO", "-q"}
+                if python
+                else {"--no-warnings", "--disable-proto=throw"}
+            )
+            operands = iter(command[1:])
+            script = None
+            for argument in operands:
+                if argument == "--":
+                    script = next(operands, None)
+                    break
+                if argument.startswith("-"):
+                    if argument not in flags:
+                        raise ValueError("unsupported interpreter verifier option")
+                else:
+                    script = argument
+                    break
+            if script is None or script == "-" or not (directory / script).is_file():
+                raise ValueError("verification script must already exist")
         for argument in command[1:]:
             candidate = directory / argument
             if candidate.is_file() and candidate.resolve().is_relative_to(repository):

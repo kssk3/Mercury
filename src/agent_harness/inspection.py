@@ -265,7 +265,8 @@ def _project(path: Path, current_raw: bytes, journal_raw: bytes) -> dict[str, ob
             == {"event", "schema_version", "initial_head", "config_sha256", "backend"}
         )
         _require(
-            type(binding["schema_version"]) is int and binding["schema_version"] == 1
+            type(binding["schema_version"]) is int
+            and binding["schema_version"] in (1, 2)
         )
         _digest(binding["initial_head"], (40, 64))
         _digest(binding["config_sha256"])
@@ -427,6 +428,21 @@ def _project(path: Path, current_raw: bytes, journal_raw: bytes) -> dict[str, ob
             _require(
                 verification is not None and verification["overall_kind"] == "pass"
             )
+    if binding is not None and binding["schema_version"] == 2:
+        _require("run_result" in current, "incomplete_history")
+        wrapper = _mapping(current["run_result"])
+        _require(set(wrapper) == {"status", "reason"})
+        _require(type(wrapper["status"]) is str and wrapper["status"] in _STATUSES)
+        _text(wrapper["reason"])
+        _require(
+            wrapper == {"status": outcome["status"], "reason": outcome["reason"]}
+            or (
+                wrapper["status"] == "unknown"
+                and wrapper["reason"]
+                in {"lock_release_failed", "execution_failed", "interrupted"}
+            )
+        )
+        outcome.update(status=wrapper["status"], reason=wrapper["reason"])
     return {
         "schema_version": 1,
         "historical_only": True,

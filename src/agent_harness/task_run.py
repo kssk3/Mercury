@@ -7,6 +7,7 @@ saved evidence by default; structured status remains, reducing diagnostics.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from datetime import UTC, datetime
@@ -37,7 +38,9 @@ _CLI_LEASE_SECONDS = 300
 def _adapter(config: RunConfig) -> AgentAdapter:
     if config.backend == "codex":
         return CodexCLIAdapter(config.executable)
-    return ClaudeCLIAdapter(config.executable)
+    if config.backend == "claude":
+        return ClaudeCLIAdapter(config.executable)
+    raise ValueError("unsupported backend")
 
 
 def _git(config: RunConfig, *arguments: str) -> bytes:
@@ -75,7 +78,7 @@ def _omit_output(text: str) -> str:
 
 
 def execute_run(config: RunConfig) -> tuple[dict[str, object], int]:
-    """Run once; interruption/persistence/lease errors cannot produce PASS."""
+    """Run once; finalization errors require exact observed commit evidence."""
     outcome: dict[str, object] = {
         "schema_version": 1,
         "status": "blocked",
@@ -91,8 +94,11 @@ def execute_run(config: RunConfig) -> tuple[dict[str, object], int]:
     }
     lock: RepositoryLock | None = None
     held = False
+    store: CurrentStateStore | None = None
     code = 2
     try:
+        if type(config.backend) is not str or config.backend not in {"codex", "claude"}:
+            raise ValueError("unsupported backend")
         if (
             type(config.config_sha256) is not str
             or re.fullmatch(r"[0-9a-f]{64}", config.config_sha256) is None
@@ -121,7 +127,6 @@ def execute_run(config: RunConfig) -> tuple[dict[str, object], int]:
         )
         lock.acquire()
         held = True
-        code = 1
         _baseline(config, outcome)
         validate_runtime_state_directory(run_directory, config.repository)
         validate_runtime_state_directory(run_directory)
@@ -137,22 +142,24 @@ def execute_run(config: RunConfig) -> tuple[dict[str, object], int]:
             source_paths=config.context_paths,
             budget_bytes=context_budget,
         )
-        run_directory.mkdir(parents=True, exist_ok=False)
-        journal = EventJournal(run_directory)
-        journal.append(
-            {
-                "event": "run_binding",
-                "schema_version": 1,
-                "initial_head": outcome["initial_head"],
-                "config_sha256": config.config_sha256,
-                "backend": config.backend,
-            }
-        )
         admission = record_admission(
             config.contract,
             approver=config.approver,
             approved_at=datetime.now(UTC).isoformat(),
         )
+        code = 1
+        run_directory.mkdir(parents=True, exist_ok=False)
+        journal = EventJournal(run_directory)
+        journal.append(
+            {
+                "event": "run_binding",
+                "schema_version": 2,
+                "initial_head": outcome["initial_head"],
+                "config_sha256": config.config_sha256,
+                "backend": config.backend,
+            }
+        )
+        store = CurrentStateStore(run_directory)
         result = run_loop(
             _adapter(config),
             config.contract,
@@ -161,7 +168,7 @@ def execute_run(config: RunConfig) -> tuple[dict[str, object], int]:
             policy=config.policy,
             criterion_commands=config.criterion_commands,
             journal=journal,
-            state_store=CurrentStateStore(run_directory),
+            state_store=store,
             budgets=config.budgets,
             limits=config.limits,
             redactor=_omit_output,
@@ -191,7 +198,36 @@ def execute_run(config: RunConfig) -> tuple[dict[str, object], int]:
         if held and lock is not None:
             try:
                 lock.release()
-            except (OSError, ValueError, RuntimeError):
+            except (OSError, ValueError, RuntimeError, KeyboardInterrupt):
                 outcome.update(status="unknown", reason="lock_release_failed")
                 code = 1
+        # Version-2 binding declares finalization pending before the loop can
+        # persist PASS. Missing finalization stays UNKNOWN even if this write fails.
+        if store is not None:
+            intended_state: str | None = None
+            try:
+                current = store.read()
+                if current is None:
+                    raise ValueError("missing loop state")
+                current["run_result"] = {
+                    "status": outcome["status"],
+                    "reason": outcome["reason"],
+                }
+                intended_state = json.dumps(current, sort_keys=True)
+                store.write(current)
+            except (OSError, ValueError, RuntimeError, KeyboardInterrupt):
+                # Atomic replacement can finish before cleanup is interrupted.
+                # Preserve the selected outcome only if the entire intended
+                # state is observed, including an already-selected UNKNOWN.
+                committed = False
+                if intended_state is not None:
+                    try:
+                        committed = (
+                            json.dumps(store.read(), sort_keys=True) == intended_state
+                        )
+                    except (OSError, ValueError, RuntimeError, KeyboardInterrupt):
+                        pass
+                if not committed:
+                    outcome.update(status="unknown", reason="finalization_failed")
+                    code = 1
     return outcome, code
