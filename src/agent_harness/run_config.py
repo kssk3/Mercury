@@ -10,7 +10,7 @@ import re
 import shutil
 import stat
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import cast
 
@@ -48,6 +48,25 @@ class RunConfig:
     config_path: Path
     config_sha256: str
     approver: str
+    repository: Path
+    expected_head: str
+    state_root: Path
+    backend: str
+    executable: Path
+    contract: TaskContract
+    policy: VerificationPolicy
+    criterion_commands: object
+    context_paths: tuple[str, ...]
+    budgets: TurnBudgets
+    limits: RetryLimits
+
+
+@dataclass(frozen=True)
+class _ParsedRunConfig:
+    """Validated settings without execution approval."""
+
+    config_path: Path
+    config_sha256: str
     repository: Path
     expected_head: str
     state_root: Path
@@ -212,23 +231,15 @@ def validate_run_verification(
                     raise ValueError("verification input is not protected")
 
 
-def load_run_config(
-    path: Path | str, approval: str | None, approver: str | None
-) -> RunConfig:
-    """Validate without writes; errors never echo untrusted configuration values."""
+def _parse_run_config(
+    path: Path | str, *, approval: str | None = None
+) -> _ParsedRunConfig:
+    """Share bounded read-only validation without manufacturing approval."""
     try:
-        if (
-            not isinstance(approval, str)
-            or re.fullmatch(r"[0-9a-f]{64}", approval) is None
-            or not isinstance(approver, str)
-            or not approver.strip()
-            or len(approver) > 128
-            or not approver.isprintable()
-        ):
-            raise ValueError
         config_path = _absolute(os.fspath(path))
         raw = _read_config(config_path)
-        if hashlib.sha256(raw).hexdigest() != approval:
+        digest = hashlib.sha256(raw).hexdigest()
+        if approval is not None and digest != approval:
             raise ValueError
         data = _object(
             json.loads(
@@ -332,10 +343,9 @@ def load_run_config(
         )
         if total < required:
             raise ValueError
-        return RunConfig(
+        return _ParsedRunConfig(
             config_path,
-            approval,
-            approver,
+            digest,
             repository,
             head,
             state_root,
@@ -350,3 +360,63 @@ def load_run_config(
         )
     except (ValueError, OSError, TypeError, KeyError, OverflowError, RecursionError):
         raise ValueError("invalid_run_config") from None
+
+
+def load_run_config(
+    path: Path | str, approval: str | None, approver: str | None
+) -> RunConfig:
+    """Require explicit hash approval before returning executable settings."""
+    if (
+        not isinstance(approval, str)
+        or re.fullmatch(r"[0-9a-f]{64}", approval) is None
+        or not isinstance(approver, str)
+        or not approver.strip()
+        or len(approver) > 128
+        or not approver.isprintable()
+    ):
+        raise ValueError("invalid_run_config")
+    parsed = _parse_run_config(path, approval=approval)
+    return RunConfig(
+        parsed.config_path,
+        parsed.config_sha256,
+        approver,
+        parsed.repository,
+        parsed.expected_head,
+        parsed.state_root,
+        parsed.backend,
+        parsed.executable,
+        parsed.contract,
+        parsed.policy,
+        parsed.criterion_commands,
+        parsed.context_paths,
+        parsed.budgets,
+        parsed.limits,
+    )
+
+
+def preview_run_config(path: Path | str) -> dict[str, object]:
+    """Describe observed settings only; no execution approval or preflight claim."""
+    parsed = _parse_run_config(path)
+    return {
+        "schema_version": 1,
+        "config_path": str(parsed.config_path),
+        "config_sha256": parsed.config_sha256,
+        "repository": str(parsed.repository),
+        "expected_head": parsed.expected_head,
+        "backend": parsed.backend,
+        "executable": str(parsed.executable),
+        "state_root": str(parsed.state_root),
+        "contract": asdict(parsed.contract),
+        "verification": asdict(parsed.policy),
+        "criterion_commands": parsed.criterion_commands,
+        "context_paths": parsed.context_paths,
+        "budgets": asdict(parsed.budgets),
+        "total_timeout_seconds": parsed.limits.max_seconds,
+        "limits": {
+            "max_retries": parsed.limits.max_retries,
+            "max_turns": 1,
+            "max_commands": parsed.limits.max_commands,
+        },
+        "approval_required": True,
+        "execution_performed": False,
+    }

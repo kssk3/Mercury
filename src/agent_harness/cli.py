@@ -73,7 +73,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "status", help="summarize historical execution records"
     )
     status_command.add_argument("--state-dir", required=True, metavar="PATH")
-    run_command = commands.add_parser("run", help="execute one hash-approved task")
+    run_command = commands.add_parser(
+        "run", help="preview settings or execute one hash-approved task"
+    )
+    run_command.add_argument("--preview", action="store_true")
     run_command.add_argument("--config", required=True, metavar="PATH")
     run_command.add_argument("--approve-config-sha256", metavar="SHA256")
     run_command.add_argument("--approver", metavar="NAME")
@@ -84,16 +87,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if arguments.command == "run":
-        from agent_harness.run_config import load_run_config
-        from agent_harness.task_run import execute_run
+        from agent_harness.run_config import load_run_config, preview_run_config
 
         try:
+            if arguments.preview:
+                if (
+                    arguments.approve_config_sha256 is not None
+                    or arguments.approver is not None
+                ):
+                    raise ValueError("invalid_run_config")
+                preview = preview_run_config(arguments.config)
+                print(json.dumps(preview, separators=(",", ":"), sort_keys=True))
+                return 0
             config = load_run_config(
                 arguments.config, arguments.approve_config_sha256, arguments.approver
             )
         except ValueError:
             print("local-harness: invalid_run_config", file=sys.stderr)
             return 2
+        from agent_harness.task_run import execute_run
+
         outcome, code = execute_run(config)
         print(json.dumps(outcome, separators=(",", ":"), sort_keys=True))
         return code
