@@ -16,10 +16,11 @@ Mercury는 사람이 정한 작업·파일 범위·검사 명령에 따라 코�
 ## 현재 프로젝트 상태
 
 Mercury는 버전 0.1.0의 단일 에이전트 API·CLI 개발자 프리뷰입니다.
-아래 안내는 현재 소스 트리를 설명합니다. 마지막으로 확인한 배포 기준은
-**2026-10-19**의 [main 84367471](https://github.com/kssk3/Mercury/commit/843674716483e828686d4a9f79f53e453046e1c3)입니다.
-Claude 백엔드와 작업 실행 CLI·JavaScript 예제는 그 이후의 로컬 후보이며,
-이 문서에 설명됐다는 사실이 main 반영이나 실제 모델 실행 성공을 뜻하지 않습니다.
+기능 반영과 검증을 확인한 기준은 **2026-10-21**의
+[main 4184f01d](https://github.com/kssk3/Mercury/commit/4184f01dd9e5c5d24dd8476994f77e4011604de1)입니다.
+[PR #10](https://github.com/kssk3/Mercury/pull/10)으로 Claude 백엔드·명시적 작업 실행
+CLI·JavaScript 예제가 main에 반영됐습니다. 아래 현황은 해당 리비전의 스냅샷이며,
+기능 반영과 기존 자동 CI 성공이 현재 백엔드의 새 실제 모델 실행 성공을 뜻하지는 않습니다.
 
 | 기능 | 현재 상태 | 안내 |
 | --- | --- | --- |
@@ -31,14 +32,14 @@ Claude 백엔드와 작업 실행 CLI·JavaScript 예제는 그 이후의 로컬
 | 읽기 전용 실행 기록 요약 CLI | [PR #6](https://github.com/kssk3/Mercury/pull/6) 반영 완료. 저장된 과거 상태·리비전·시도 ID·증거 참조를 JSON으로 요약 | [실행 기록 요약](#실행-기록-요약) |
 | 실제 사용자 저장소 통합 예제 | [PR #7](https://github.com/kssk3/Mercury/pull/7) 반영 완료. 접근 권한이 필요한 `python_study`의 지정 리비전·덧셈 CLI 작업을 별도 사본에서 수행 | [제한된 저장소 예제](docs/python-study-example.md) |
 | 공통 에이전트 계약 1단계 | [PR #8](https://github.com/kssk3/Mercury/pull/8) 반영 완료. `AgentAdapter`·`AgentTurnResult`로 준비·실행·결과 경계를 분리 | [공통 계약](src/agent_harness/agent.py) |
-| 추가 Claude Code 백엔드 | 기존 실행 파일 검증·입출력 제한을 재사용하는 어댑터. 모의 계약 검사와 실제 모델 실행 근거는 구분 | [백엔드 책임·제한](docs/quickstart.md#claude-code-backend-boundaries) |
-| 명시적 작업 실행 CLI | 깨끗한 Git 저장소·고정 HEAD·보호 검사·외부 상태를 명시한 JSON과 원문 SHA-256 승인을 요구. 한 번 실행하며 자동 재시도하지 않음 | [작업 실행](docs/quickstart.md#execute-an-explicit-task) |
-| JavaScript 통합 예제 | Node 내장 검사와 별도 일회용 저장소를 사용. 실행·검사 언어를 분리하며 npm 설치 불필요 | [JavaScript 예제](docs/quickstart.md#javascript-integration-example) |
+| 추가 Claude Code 백엔드 | PR #10 반영 완료. 기존 실행 파일 검증·입출력 제한을 재사용하는 어댑터. 모의 계약 검사와 실제 모델 실행 근거는 구분 | [백엔드 책임·제한](docs/quickstart.md#claude-code-backend-boundaries) |
+| 명시적 작업 실행 CLI | PR #10 반영 완료. 깨끗한 Git 저장소·고정 HEAD·보호 검사·외부 상태를 명시한 JSON과 원문 SHA-256 승인을 요구. 한 번 실행하며 자동 재시도하지 않음 | [작업 실행](docs/quickstart.md#execute-an-explicit-task) |
+| JavaScript 통합 예제 | PR #10 반영 완료. Node 내장 검사와 별도 일회용 저장소를 사용. 실행·검사 언어를 분리하며 npm 설치 불필요 | [JavaScript 예제](docs/quickstart.md#javascript-integration-example) |
 
-PR #3부터 PR #9까지 Merge됐고 소유한 작업 브랜치도 삭제됐습니다.
-해당 배포 기준의 기존 자동 [main CI 실행](https://github.com/kssk3/Mercury/actions/runs/39210422432)은
-정적 검사와 Linux 테스트를 포함해 성공했습니다. 이 현황에는 기존 통과 검사·리뷰를
-재사용했으며, 진행 현황을 정리하기 위해 모델 작업이나 CI를 다시 실행하지 않았습니다.
+PR #3부터 PR #10까지 Merge됐고 소유한 작업 브랜치도 삭제됐습니다.
+위 main 리비전의 기존 자동 [CI 실행](https://github.com/kssk3/Mercury/actions/runs/39527528702)은
+성공했습니다. 이 현황은 기존 통과 검사·리뷰와 실제 Merge·CI 완료 기록을 재사용하며,
+현황 정정을 위해 모델 작업이나 CI를 다시 실행하지 않았습니다.
 
 ## 어떤 문제를 돕나요?
 
@@ -171,7 +172,7 @@ Claude Code용 어댑터도 같은 계약을 사용하며, Gemini 어댑터와 �
 | 검사 | 검사·설정을 보호하고 필수 명령과 각 기준의 정확한 명령 매핑을 고정합니다. [검증 정책](src/agent_harness/policy.py)을 정의합니다. |
 | 컨텍스트와 예산 | 선택한 파일 컨텍스트, 입력·출력 크기, 시간·재시도·명령 경계 한도 |
 | 동시 작업과 상태 | 같은 저장소 호출자가 공유하는 잠금 임대, 필요한 heartbeat, 직렬화된 작업, 대상 저장소 외부의 상태·저널·출력 위치 |
-| 에이전트와 출력 | 신뢰할 수 있는 Codex CLI·환경과 실제 출력 가림 정책. 어댑터는 재시도를 포함한 매 실행 전에 검증과 같은 제한된 확인으로 외부 진입 파일·선언된 shebang 체인을 검사하고 안전한 외부 검색 경로를 전달합니다. 기존 설정·규칙·인증과 관련 없는 환경은 유지됩니다. |
+| 에이전트와 출력 | 신뢰할 수 있는 Codex 또는 Claude CLI·환경과 실제 출력 가림 정책. 어댑터는 재시도를 포함한 매 실행 전에 외부 진입 파일·선언된 shebang 체인을 검사하고 안전한 외부 검색 경로를 전달합니다. Codex는 기존 네이티브 설정을 유지합니다. Claude는 `NODE_OPTIONS`를 제거하고 safe/restricted 모드를 요구하며, 사용자·프로젝트 설정과 훅·모델 선호를 제외합니다. 명시적 settings 파일은 제공하지 않으며 관리 정책은 신뢰합니다. 인증은 외부에서 관리합니다. |
 
 Python API 외에도 `run`은 제한된 v1 JSON 설정을 받습니다. 명령 경계 예산은
 네이티브 에이전트 내부의 개별 명령까지 제어하지 않습니다.
@@ -247,9 +248,10 @@ PASS가 성립하지 않습니다. 선택한 검사의 통과가 모든 동작�
 
 ## 진행 범위와 후속 작업
 
-이번 로컬 후보는 백엔드 연결 안내 → Claude 백엔드 → 명시적 작업 실행 CLI →
-JavaScript 통합 예제 순서로 구성됩니다. 검사·실제 실행·독립 리뷰·게시 상태는
-각 후보의 실행 기록으로 확인하며, 기능 설명만으로 통과를 추정하지 않습니다.
+PR #10에서 백엔드 연결 안내 → Claude 백엔드 → 명시적 작업 실행 CLI →
+JavaScript 통합 예제의 네 범위가 main에 반영됐습니다. 기존 검사·독립 리뷰와
+해당 main의 자동 CI 성공 근거를 재사용하며, 과거 실제 모델 실행 근거는 당시
+후보에만 적용합니다. 기능 설명만으로 새 실제 실행의 성공을 추정하지 않습니다.
 
 | 범위 | 결과 | 목적 |
 | --- | --- | --- |

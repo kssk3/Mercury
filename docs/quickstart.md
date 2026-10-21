@@ -5,17 +5,19 @@ Licensed under the [MIT License](../LICENSE).
 The first example demonstrates API composition with a **simulated Codex
 adapter**. It performs no native-agent, model, or network invocation.
 
-This guide describes the current source tree. The last recorded delivered base,
-as of 2026-10-19, is
-[main `84367471`](https://github.com/kssk3/Mercury/commit/843674716483e828686d4a9f79f53e453046e1c3),
+Feature delivery was verified on 2026-10-21 at
+[main `4184f01d`](https://github.com/kssk3/Mercury/commit/4184f01dd9e5c5d24dd8476994f77e4011604de1),
 including the bounded user-repository example in
 [PR #7](https://github.com/kssk3/Mercury/pull/7) and the common agent contract in
 [PR #8](https://github.com/kssk3/Mercury/pull/8), followed by documentation in
-[PR #9](https://github.com/kssk3/Mercury/pull/9). Its existing automatic
-[main CI](https://github.com/kssk3/Mercury/actions/runs/39210422432) passed.
-Claude integration, explicit task execution and the JavaScript example below
-are subsequent local candidate features. Their documentation does not establish
-publication or successful live execution; consult attributable candidate evidence.
+[PR #9](https://github.com/kssk3/Mercury/pull/9).
+[PR #10](https://github.com/kssk3/Mercury/pull/10) delivered the backend connection
+guide, Claude adapter, explicit task execution CLI and JavaScript example below.
+The owned work branches were deleted, and this revision's existing automatic
+[main CI](https://github.com/kssk3/Mercury/actions/runs/39527528702) passed.
+This is a revision-specific delivery snapshot using existing check, review and
+merge evidence. It does not establish a fresh live model run of the current
+backends; historical live evidence applies to its recorded candidate.
 
 ## Install and run
 
