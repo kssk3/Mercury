@@ -857,6 +857,8 @@ def _run_loop(
             "unknown",
             error.code if error.adapter_result is not None else "native_launch_unknown",
         )
+    except KeyboardInterrupt:
+        return finish("unknown", "interrupted")
     except Exception:
         return finish("unknown", "execution_or_persistence_failed")
 

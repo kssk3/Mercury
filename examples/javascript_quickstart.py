@@ -1,7 +1,10 @@
 """Explicitly approved, retained JavaScript demo through the actual run CLI.
 
-One Claude invocation, no retry, USD 0.25 native CLI cap. Authentication/model,
-settings and hooks are inherited; this is not hostile-process containment.
+One Claude invocation, no retry, USD 0.25 native CLI cap, not measured billing.
+Authentication stays external; trusted managed policy remains. Safe/restricted
+mode excludes user/project settings and customizations, including their hooks and
+model preferences. No explicit settings file is supplied; these limits do not
+provide OS confinement.
 No package installation or network bootstrap. Run artifacts remain on failure.
 """
 

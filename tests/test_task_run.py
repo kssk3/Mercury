@@ -336,6 +336,74 @@ def test_real_loop_one_fake_turn_and_redacted_evidence(
     assert not (state_dir.parent.parent / "lock").exists()
 
 
+@pytest.mark.parametrize("phase", ["baseline", "development", "final"])
+def test_interrupted_verification_preserves_observed_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    from agent_harness.journal import EventJournal
+    from agent_harness.runner import CommandResult, ControlledCommandRunner
+
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    location = resolve_repository_state_location(config.repository, config.state_root)
+    state_dir = location.state_directory / "runs" / config.config_sha256
+    journal = EventJournal(state_dir)
+    completed: list[CommandResult] = []
+    observed_ids: list[object] = []
+    boundary = {"baseline": 0, "development": 1, "final": 2}[phase]
+    interrupted = False
+    original_run = ControlledCommandRunner.run
+
+    def run(
+        self: ControlledCommandRunner, *args: object, **kwargs: object
+    ) -> tuple[CommandResult, ...]:
+        nonlocal interrupted
+        if len(completed) == boundary:
+            interrupted = True
+            observed_ids.extend(
+                event["attempt_id"]
+                for event in journal.read()
+                if event["event"] == "turn_observation"
+                and cast(dict[str, object], event["process"])["process_status"]
+                == "successful_exit"
+            )
+            raise KeyboardInterrupt("deterministic verification boundary")
+        assert not interrupted, "verification continued after interruption"
+        results = original_run(self, *args, **kwargs)  # type: ignore[arg-type]
+        completed.extend(results)
+        return results
+
+    agent = FakeAgent()
+    monkeypatch.setattr("agent_harness.task_run._adapter", lambda config: agent)
+    monkeypatch.setattr(ControlledCommandRunner, "run", run)
+    outcome, code = execute_run(config)
+
+    assert interrupted
+    assert (code, outcome["status"], outcome["reason"]) == (
+        1,
+        "unknown",
+        "interrupted",
+    )
+    assert bool(observed_ids) == (phase != "baseline")
+    assert len(completed) == boundary
+    assert agent.preparations == (0 if phase == "baseline" else 1)
+    assert outcome["attempts"] == len(observed_ids)
+    assert outcome["command_boundaries"] == len(completed) + len(observed_ids)
+    assert outcome["criteria_passed"] is False
+    terminal = [event for event in journal.read() if event["event"] == "loop_outcome"]
+    assert len(terminal) == 1
+    assert terminal[0]["attempt_ids"] == observed_ids
+    assert terminal[0]["commands"] == outcome["command_boundaries"]
+    current = json.loads((state_dir / "current.json").read_text())
+    assert current["loop_summary"] == terminal[0]
+    summary = summarize_execution(state_dir)
+    assert summary["recorded_status"] == "unknown"
+    assert not (location.state_directory / "lock").exists()
+    assert not any(
+        thread.name == "mercury-run-lease" for thread in threading.enumerate()
+    )
+
+
 @pytest.mark.parametrize("reason", ["head", "dirty", "held", "history"])
 def test_preflight_rejects_before_agent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str
