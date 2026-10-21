@@ -125,13 +125,14 @@ installed `.venv` remain. See [the quickstart guide](docs/quickstart.md) for det
 ## Connect a real repository and agent
 
 The current package is `agent-harness` 0.1.0, a single-agent Python API developer
-preview. macOS is the initial runtime target; POSIX process and locking APIs are
+preview with explicit single-agent execution. macOS is the initial runtime target; POSIX process and locking APIs are
 required. [CodexCLIAdapter](src/agent_harness/adapter.py) and
 [run_loop](src/agent_harness/loop.py) support the
 [runnable disposable Codex example](docs/codex-quickstart.md). It demonstrates
-one fixed task; arbitrary user repositories require caller integration based on
-[the full simulator composition](examples/quickstart.py) and the responsibilities
-below. The installed CLI has no general task-running command.
+one fixed task. For another repository, use the explicitly approved `run` CLI
+with Codex or Claude, or integrate [the Python APIs](examples/quickstart.py),
+while supplying the responsibilities below. Mercury does not discover tasks
+or select sufficient checks for you.
 
 | What your integration must supply | Responsibility |
 | --- | --- |
@@ -139,13 +140,19 @@ below. The installed CLI has no general task-running command.
 | Checks | Protected checks/configuration, frozen mandatory commands, and exact command mappings for each criterion. Define the [verification policy](src/agent_harness/policy.py). |
 | Context and budgets | Selected file context, input/output sizes, time/retry/command-boundary limits |
 | Concurrent work and state | A lock lease shared by callers on the same repository, heartbeat as needed, serialized work, and state/journal/output locations outside the target repository |
-| Agent and output | A trusted Codex CLI and environment, plus a redaction policy for real output. Before each launch, including retries, the adapter checks the external entry and declared shebang chain using the same bounded proofs as verification and supplies safe external resolver paths. Existing configuration, rules, authentication, and unrelated environment remain active. |
+| Agent and output | A trusted Codex or Claude CLI and environment, plus a redaction policy for real output. Before each launch, including retries, the adapter checks the external entry and declared shebang chain using the same bounded proofs as verification and supplies safe external resolver paths. Codex retains native configuration; Claude removes inherited `NODE_OPTIONS` and requires safe mode plus restricted mode: built-in file tools stay within working directories, user/project customizations are disabled, and only managed or explicitly supplied settings load. Authentication stays external; model preferences in excluded settings are not inherited. Managed policy remains trusted. |
 
-These settings are Python inputs; there is no general configuration-file loader.
-Command-boundary budgets do not control individual commands inside the native agent.
+The `run` CLI loads a bounded JSON contract with a full pinned Git HEAD, protected
+checker inputs, exact criterion mappings, external state, and explicit budgets.
+Approval binds the complete file with `--approve-config-sha256` and an approver
+label; it does not authenticate identity. Callers for one repository must share
+the same state root to coordinate their lease. Runs permit one native invocation
+and no automatic retry; command-boundary budgets do not count native internal
+tool calls. See [execution configuration and limits](docs/quickstart.md#execute-an-explicit-task)
+for the complete schema, example and supported verifier forms.
 
-The installed CLI offers these information commands. `profile` emits Git filename
-information as JSON; there is no task-running `run` subcommand.
+The installed CLI also offers these information commands. `profile` emits Git
+filename information as JSON.
 
 ```sh
 .venv/bin/local-harness --help

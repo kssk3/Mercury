@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -13,6 +14,47 @@ import pytest
 import agent_harness.runner as runner_module
 from agent_harness.policy import VerificationPolicy
 from agent_harness.runner import ControlledCommandRunner
+
+
+@pytest.mark.parametrize("invocation", ["direct", "shebang"])
+def test_node_startup_options_cannot_preload_mutable_hook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invocation: str
+) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("local Node is unavailable")
+    root = tmp_path / "repository"
+    root.mkdir()
+    marker = tmp_path / "preload-ran"
+    hook = root / "allowed-hook.cjs"
+    hook.write_text(
+        f"require('node:fs').writeFileSync({str(marker)!r}, 'ran'); process.exit(0);\n"
+    )
+    checker = root / "protected-check.cjs"
+    checker.write_text(
+        f"#!{node}\n"
+        "console.log((process.env.NODE_OPTIONS ?? 'absent') + ':' + "
+        "process.env.MERCURY_CALLER); process.exit(7);\n"
+    )
+    checker.chmod(0o700)
+    # Executable scripts must be external; a direct interpreter script may be protected.
+    if invocation == "shebang":
+        external = tmp_path / "external-checker"
+        external.write_bytes(checker.read_bytes())
+        external.chmod(0o700)
+        command: tuple[str, ...] = (str(external),)
+    else:
+        command = (node, str(checker))
+    monkeypatch.setenv("NODE_OPTIONS", f"--require={hook}")
+    monkeypatch.setenv("MERCURY_CALLER", "retained")
+    policy = VerificationPolicy((command,), ".", 2)
+    selected = runner_module.bind_verification_executables(policy, root)
+    # Invocation must scrub even a value installed after selection.
+    monkeypatch.setenv("NODE_OPTIONS", f"--require={hook} --no-warnings")
+    result = ControlledCommandRunner().run(policy, root, selections=selected)[0]
+    assert result.exit_code == 7
+    assert result.stdout == "absent:retained\n"
+    assert not marker.exists()
 
 
 @pytest.mark.parametrize("kind", ["entry", "interpreter"])

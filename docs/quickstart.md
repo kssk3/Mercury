@@ -1,17 +1,21 @@
-# Single-agent API quickstart
+# Single-agent API and CLI quickstart
 
 This developer preview requires Python 3.12+, Git, and a local macOS environment.
 Licensed under the [MIT License](../LICENSE).
-The example demonstrates API composition with a **simulated Codex
+The first example demonstrates API composition with a **simulated Codex
 adapter**. It performs no native-agent, model, or network invocation.
 
-Status as of 2026-10-19: this guide describes
-[main `5fd4b3d1`](https://github.com/kssk3/Mercury/commit/5fd4b3d10f13f41ab7118bfe4648a576b104aecf),
+This guide describes the current source tree. The last recorded delivered base,
+as of 2026-10-19, is
+[main `84367471`](https://github.com/kssk3/Mercury/commit/843674716483e828686d4a9f79f53e453046e1c3),
 including the bounded user-repository example in
 [PR #7](https://github.com/kssk3/Mercury/pull/7) and the common agent contract in
-[PR #8](https://github.com/kssk3/Mercury/pull/8). The existing automatic
-[main CI](https://github.com/kssk3/Mercury/actions/runs/39189330048) passed;
-this documentation update reuses that evidence without rerunning it.
+[PR #8](https://github.com/kssk3/Mercury/pull/8), followed by documentation in
+[PR #9](https://github.com/kssk3/Mercury/pull/9). Its existing automatic
+[main CI](https://github.com/kssk3/Mercury/actions/runs/39210422432) passed.
+Claude integration, explicit task execution and the JavaScript example below
+are subsequent local candidate features. Their documentation does not establish
+publication or successful live execution; consult attributable candidate evidence.
 
 ## Install and run
 
@@ -88,7 +92,8 @@ identify the actual check and result. For development commands, see
 For an existing native integration example, read the
 [disposable real Codex guide](codex-quickstart.md). It documents a separate,
 explicitly approved temporary-repository task, its prerequisites, budgets,
-and retained evidence. Arbitrary repositories still require caller integration.
+and retained evidence. Other repositories need an explicit run configuration
+or Python caller integration.
 
 The [python_study integration](python-study-example.md), delivered in PR #7,
 adds one fixed addition-CLI task on a separate copy of an access-restricted
@@ -106,18 +111,106 @@ before downstream persistence, and scope observation and final verification
 remain harness responsibilities. See the existing
 [contract tests](../tests/test_agent_contract.py) for the supported behavior.
 
-Codex remains the provided native backend. This common interface does not supply
-Claude or Gemini adapters, a general task-run CLI, or multi-agent orchestration.
+The original native backend is Codex; the additional
+[Claude Code adapter](../src/agent_harness/claude_adapter.py) uses the same common
+contract and executable-binding checks. Neither adapter supplies multi-agent
+orchestration or a Gemini integration.
 New backends still need their own trusted execution and configuration handling;
 the interface itself supplies no confinement or task-success authority.
+
+#### Connecting a backend
+
+Implement the structural `AgentAdapter` protocol; subclassing `CodexCLIAdapter`
+is not required. Keep native command/configuration handling in the adapter and
+compose the existing harness APIs in the caller. Do not copy the loop's scope,
+verification, or recovery decisions into the backend.
+
+| Owner | Inputs and responsibility | Evidence or result |
+| --- | --- | --- |
+| Caller | Obtain actual human approval; construct `TaskContract`, matching admission, protected inputs, mandatory `VerificationPolicy`, exact criterion mappings, context and budgets. Hold the repository lease and choose external state/output storage and a redactor. | An admitted operation with explicit limits; the admission object itself does not authenticate approval. |
+| Adapter `prepare(repository_root)` | Bind the trusted native executable and required preparation for this actual turn. The harness calls preparation after the before snapshot and persisted intent. | Preparation may succeed or raise; it must not claim a launch or verification result. |
+| Adapter `run(...)` | Consume the admitted contract/context, honor applicable input/output/time limits and the requested mode, and invoke the selected backend. Reject unsupported modes rather than silently weakening them. | `AgentTurnResult` containing actual argv, canonical repository root, process status, exit code, duration and bounded captures. |
+| Harness | Validate backend facts before downstream persistence, observe applicable scope/protected inputs, preserve attempt/recovery evidence, and run required and distinct final verification. | A loop outcome backed by observations and mapped verification results, not the agent's completion claim. |
+
+The turn order is: caller admission and prerequisites → harness before snapshot
+and saved intent → adapter preparation → native execution → result validation,
+observation and recorded evidence → required verification and final verification.
+Compatibility preflight and verification-only continuation do not prepare or
+launch a new agent. Preparation is part of the observed turn, so preparation
+changes cannot be hidden by taking the before snapshot afterward.
+
+| Backend outcome | Required interpretation |
+| --- | --- |
+| Preparation raises | Do not call `run` or invent a successful observation; retain the saved intent/recovery evidence for reconciliation. |
+| Process cannot start | Report `launch_error` with no exit code; do not count a completed native operation. |
+| Process exceeds its limit or exits unsuccessfully | Preserve bounded partial captures and report `timeout` or `nonzero_exit` truthfully. |
+| Process exits zero | Report `successful_exit`; this is process evidence, not technical PASS. |
+| Final output is absent, unsafe or unreadable | Keep the corresponding `final_output_status` and no fabricated final message. |
+| Result fields or capture byte counts are invalid | The harness rejects the result; do not persist unvalidated success metadata. |
+
+`CapturedText` uses UTF-8 with `surrogateescape`; `retained_bytes` describes the
+retained bytes, and `truncated` must describe actual truncation. Captures remain
+untrusted and unredacted until the caller's output policy is applied. Neither the
+protocol nor an adapter's mode name supplies filesystem confinement. Native
+tools can have different permission systems; each concrete adapter must state
+what it supports, what it refuses, and which native configuration remains active.
+
+Use the [common contract tests](../tests/test_agent_contract.py) as behavioral
+references for structural adapters, preparation failure, malformed results and
+verification ownership. The [Codex adapter](../src/agent_harness/adapter.py)
+illustrates executable binding and bounded native I/O, while the
+[simulator](../examples/quickstart.py) illustrates caller composition. These
+references do not establish compatibility with another CLI or authorize a live
+model call. A new backend needs its own bounded conformance checks before a
+separately scoped live integration example.
+
+#### Claude Code backend boundaries
+
+`ClaudeCLIAdapter(executable, max_budget_usd=0.25)` uses a caller-selected external
+Claude Code executable. Its noninteractive JSON result is translated into the
+common result contract; an error result, malformed JSON, truncated JSON or missing
+final content cannot become an available final message. Timeouts retain bounded
+partial output through the same process collector used by Codex.
+
+The adapter sets both available and preapproved tools to `Read,Edit,Write,Glob,Grep`
+for workspace-write mode, and `Read,Glob,Grep` for read-only mode. It denies
+permission prompts, supplies an empty strict MCP configuration, disables slash
+commands and session persistence, and does not enable permission bypass, shell,
+subagent or network tools. Mandatory `--safe-mode` disables user/project/local
+customizations, including hooks, plugins, CLAUDE.md and autoloaded extensions.
+Mandatory `--restricted` confines built-in file tools to working directories
+and loads only managed or explicitly supplied settings. Mercury supplies no
+settings file: authentication remains external, but model preferences in excluded
+user/project settings are not inherited. Managed policy hooks and the executable
+itself remain trusted. The adapter removes inherited `NODE_OPTIONS` before every
+Claude launch, including after preparation and on later turns, so Node preload
+options cannot execute before those CLI controls. Other applicable resolver
+checks and unrelated caller environment remain active.
+These are native tool policies, not an OS sandbox, and working-directory access
+is broader than the task's allowed/protected path subset. Unsupported CLIs fail
+closed; Mercury never retries without either required mode.
+No API key, login or settings change is performed by Mercury.
+
+The USD option is a native CLI budget, not a measured invoice or a cap on the
+number of internal model turns. `TurnBudgets` separately bounds the native
+process duration and retained bytes. Fake-executable contract tests establish
+the adapter boundary, not compatibility with every Claude version or provider.
+Before live use, confirm the installed CLI supports these flags and has the
+intended authentication. The implementation was prepared against Claude Code
+2.1.304 combined restricted/safe-mode help and the official
+[CLI reference](https://code.claude.com/docs/en/cli-reference); restricted mode
+requires at least 2.1.248. Help confirms flag support, not real-engine path
+confinement. Local Node startup regressions and fake-CLI argv tests are separate
+from real Claude execution evidence.
 
 ## Using a real repository
 
 The example's subclass replaces `CodexCLIAdapter.run` entirely. A real
 integration must supply its own trusted executable/environment and genuinely
 admitted task, verification policy, protection set, redactor, budgets, external
-state, and caller-held lease. The real adapter inherits native configuration,
-authentication, rules, and environment. No credential setup or live execution
+state, and caller-held lease. Codex inherits native configuration, authentication, rules and environment.
+Claude uses the restricted/safe-mode boundary described above, retaining external
+authentication and trusted managed policy rather than excluded settings. No credential setup or live execution
 is part of this quickstart.
 
 Allowed paths guide the agent; observations are point-in-time scope checks,
@@ -128,8 +221,8 @@ fsync/power-loss durability guarantee. Explicit verification continuation is
 available for supported checkpoints; automatic native-session resume is absent.
 
 The CLI offers `--help`, `--version`, `profile [path]`, the read-only
-`contract` and `plan` previews, and the `status` record summary below, with no
-task-run command. Runtime multi-agent orchestration and messenger control are
+`contract` and `plan` previews, the `status` record summary, and the explicitly
+approved `run` command below. Runtime multi-agent orchestration and messenger control are
 outside this preview.
 See [development checks](../CONTRIBUTING.md).
 
@@ -160,7 +253,8 @@ Preview only validates strings and prints the four-field contract. It does not
 inspect or modify a repository, create admission/state/lock/baseline records,
 or invoke Git, agents, models, network calls, or verification commands. A valid
 preview is neither human approval nor evidence that a criterion passed.
-Arbitrary-repository execution still requires Python caller integration.
+Execution requires separate explicit run configuration and approval, or Python
+caller integration.
 
 ### Preview a verification plan
 
@@ -201,7 +295,146 @@ repository, creates no admission/state/journal/lock/baseline/output records,
 and invokes no Git commands, verification commands, agents, models, or network
 calls. Paths and executables need not exist. The JSON provides no human
 approval, delivery evidence, technical PASS, authenticity, or executable-trust
-claim. Executing a task still requires the caller integration described above.
+claim. Executing a task requires the separate admission described below.
+
+### Execute an explicit task
+
+`run` composes the existing loop; it does not discover a task or choose tests.
+Use a clean Git repository with a full pinned HEAD, a trusted external backend,
+existing protected checker inputs, and canonical external configuration/state
+paths. Every caller for the same repository must share `state_root` to share
+its lease. All `run` invocations use the same 300-second lease horizon and renew
+every 30 seconds throughout setup and execution. Renewal stops and joins before
+release; an observed renewal failure prevents success and further native phases.
+An already-running native phase is not forcibly interrupted by renewal failure.
+If the renewal worker cannot stop within its bounded join, the result is UNKNOWN
+and the lease is left in place rather than released beneath that worker. The existing lock
+evaluates expiry using the acquiring caller's horizon; Python API callers sharing
+this state must use the same horizon and maintain their heartbeat for longer
+work. Different state roots do not coordinate. These are cooperative leases,
+not an OS lock held for the lifetime of an arbitrary native process.
+
+The following is a configuration template, not an executable task for Mercury.
+Replace paths and HEAD with your reviewed target. `check.mjs` must already exist
+and test the intended behavior; the goal and its command mapping must agree.
+
+```json
+{
+  "schema_version": 1,
+  "repository": "/absolute/path/to/repository",
+  "expected_head": "REPLACE_WITH_FULL_GIT_HEAD",
+  "state_root": "/absolute/path/to/external-state",
+  "backend": "claude",
+  "executable": "/absolute/path/to/claude",
+  "contract": {
+    "goal": "Fix add(a, b) in add.mjs",
+    "allowed_paths": ["add.mjs"],
+    "protected_paths": ["check.mjs"],
+    "completion_criteria": ["Addition cases pass"]
+  },
+  "verification": {
+    "commands": [["/absolute/path/to/node", "check.mjs"]],
+    "working_directory": ".",
+    "timeout_seconds": 5
+  },
+  "criterion_commands": {
+    "Addition cases pass": [["/absolute/path/to/node", "check.mjs"]]
+  },
+  "context_paths": ["add.mjs", "check.mjs"],
+  "budgets": {
+    "timeout_seconds": 90,
+    "input_bytes": 16384,
+    "stdout_bytes": 65536,
+    "stderr_bytes": 16384,
+    "final_bytes": 8192
+  },
+  "total_timeout_seconds": 120
+}
+```
+
+Save reviewed JSON outside both target repository and state root. Compute its
+raw-byte SHA-256 with a trusted local hashing tool, inspect the exact contents,
+then supply the digest and an approver label:
+
+```sh
+.venv/bin/local-harness run --config /absolute/path/to/run.json \
+  --approve-config-sha256 REVIEWED_64_CHARACTER_SHA256 --approver YOUR_NAME
+```
+
+The hash binds the entire configuration, including commands, paths and budgets;
+it is not identity authentication. Missing or mismatched approval is refused
+before state writes or native execution. The direct Python execution entry point
+reloads those approved bytes, compares every configuration field and uses the
+fresh snapshot, including its independent criterion mapping. Changing a loaded
+configuration requires newly approved bytes, rather than `dataclasses.replace`
+with the old digest. JSON has a 64 KiB limit; duplicate or
+unknown keys, symlink/hardlink configuration files, nonfinite limits and unsafe
+path overlap are rejected. Backends are `codex` and `claude`; arbitrary flags,
+shell command strings and model/auth overrides are not accepted.
+Verification children discard inherited `NODE_OPTIONS`, including preload flags;
+the existing resolver filters still constrain `NODE_PATH`. Unrelated caller
+environment remains available. This does not change native backend configuration.
+
+The wrapper rechecks HEAD and cleanliness under its repository lease. Both
+preflight checks reject tracked skip-worktree/assume-unchanged index flags rather
+than trusting a porcelain status that can hide modified checker contents. Each
+configuration digest gets a fresh `runs/<digest>` evidence directory; existing
+history is refused, including an empty directory. There is one native invocation
+and no automatic retry. The loop reserves baseline, development and distinct
+final verification; per-command/native limits are at most 120 seconds, total
+loop time at most 240 seconds. Git preflight and setup are separate bounded
+operations, so the loop limit is not an end-to-end wall-clock guarantee.
+
+Output is one JSON summary with status/reason, initial HEAD, configuration hash,
+state directory, attempts, command boundaries and criterion success. The
+initial HEAD is the first Git HEAD observed during preflight, or `null` if
+preflight stops before that observation; the expected HEAD remains an input.
+Verifier commands must invoke their trusted program directly; recognized shell
+and `env` dispatch, including resolved/same-file aliases, are unsupported.
+Python and Node verifiers require an existing script operand; repository scripts
+must be protected. Python accepts only `-I`, `-B`, `-E`, `-s`, `-S`, `-u`, `-O`,
+`-OO`, and `-q` before that script; Node accepts only `--no-warnings` and
+`--disable-proto=throw`. Either permits `--` before the script. Evaluation,
+module and stdin forms are refused. This bounded check does not classify
+arbitrary renamed/copied executables. Captured text is omitted from stored
+output by default; structured evidence remains.
+Exit 0 requires loop PASS and all mapped criteria. Invalid configuration or
+preflight returns 2; execution failure/unknown returns 1. Lease-release failure
+cannot return PASS. New wrapper records declare version-2 binding and remain
+UNKNOWN to `status` until the post-release wrapper result is saved. Historical
+version-1 binding and direct-loop records remain readable without that field.
+No automatic rollback, session resume, publication or merge
+is performed. Codex native configuration and Claude managed policy remain trusted;
+Claude uses mandatory safe mode, restricted working-directory file tools and
+managed/explicit settings only, and discards inherited `NODE_OPTIONS`. These limits do not provide OS confinement or prove that the chosen tests are sufficient.
+
+### JavaScript integration example
+
+[javascript_quickstart.py](../examples/javascript_quickstart.py) creates an owned
+fresh Git repository with a deliberately incorrect `add.mjs` and a protected
+`check.mjs`. It uses Node's built-in assertions for positive, negative and zero
+addition cases, without npm or dependencies. The Python example creates the
+same explicit configuration and invokes the `run` CLI above.
+
+Read the example first. With existing Claude authentication and trusted absolute
+executable paths, explicitly approve one native invocation:
+
+```sh
+.venv/bin/python examples/javascript_quickstart.py --approve-demo \
+  --node /absolute/path/to/node --executable /absolute/path/to/claude \
+  --evidence-dir /absolute/path/to/new-external-demo
+```
+
+The evidence directory must be new, outside existing repositories, and free of
+symlink aliases. The original repositories are not copied or modified. Only
+`add.mjs` may change; `check.mjs` is protected. Native execution has a 90-second
+limit, each Node check 5 seconds, and the loop 120 seconds with zero retries.
+Claude receives the adapter's USD 0.25 native budget option; this is not measured
+billing evidence. Authentication stays external; restricted mode excludes
+user/project settings, including their model preferences. The example
+retains fixture, configuration and evidence on success or failure and does not
+publish anything. Fake-executable tests and an actual native run are separate
+evidence; the presence of this example does not claim a live run passed.
 
 ### Summarize recorded execution
 

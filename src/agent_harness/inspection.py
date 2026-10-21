@@ -257,6 +257,23 @@ def _project(path: Path, current_raw: bytes, journal_raw: bytes) -> dict[str, ob
     _require(len(lines) <= 10000, "input_limit")
     events = [_decode(line) for line in lines]
     _require(len(events) >= 2, "incomplete_history")
+    binding: dict[str, object] | None = None
+    if events[0].get("event") == "run_binding":
+        binding = events[0]
+        _require(
+            set(binding)
+            == {"event", "schema_version", "initial_head", "config_sha256", "backend"}
+        )
+        _require(
+            type(binding["schema_version"]) is int
+            and binding["schema_version"] in (1, 2)
+        )
+        _digest(binding["initial_head"], (40, 64))
+        _digest(binding["config_sha256"])
+        _require(binding["backend"] in ("codex", "claude"))
+        events = events[1:]
+    _require(len(events) >= 2, "incomplete_history")
+    _require(not any(event.get("event") == "run_binding" for event in events))
     _require(events[0].get("event") == "loop_start")
     terminal = events[-1]
     _require(terminal.get("event") == "loop_outcome", "incomplete_history")
@@ -307,6 +324,8 @@ def _project(path: Path, current_raw: bytes, journal_raw: bytes) -> dict[str, ob
         type(summary["attempt_count"]) is int and summary["attempt_count"] == len(ids)
     )
     for intent in intents:
+        if binding is not None:
+            _require(_mapping(intent["before"])["head"] == binding["initial_head"])
         _require(intent["repository_id"] == events[0]["repository_id"])
         before = _mapping(intent["before"])
         _require(
@@ -409,6 +428,21 @@ def _project(path: Path, current_raw: bytes, journal_raw: bytes) -> dict[str, ob
             _require(
                 verification is not None and verification["overall_kind"] == "pass"
             )
+    if binding is not None and binding["schema_version"] == 2:
+        _require("run_result" in current, "incomplete_history")
+        wrapper = _mapping(current["run_result"])
+        _require(set(wrapper) == {"status", "reason"})
+        _require(type(wrapper["status"]) is str and wrapper["status"] in _STATUSES)
+        _text(wrapper["reason"])
+        _require(
+            wrapper == {"status": outcome["status"], "reason": outcome["reason"]}
+            or (
+                wrapper["status"] == "unknown"
+                and wrapper["reason"]
+                in {"lock_release_failed", "execution_failed", "interrupted"}
+            )
+        )
+        outcome.update(status=wrapper["status"], reason=wrapper["reason"])
     return {
         "schema_version": 1,
         "historical_only": True,

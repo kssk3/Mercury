@@ -471,6 +471,9 @@ class ControlledCommandRunner:
                 environment.pop(name, None)
             else:
                 environment[name] = value
+        # Node startup flags can preload mutable code independently of argv or
+        # NODE_PATH. Never admit them through the inherited verification environment.
+        environment.pop("NODE_OPTIONS", None)
         return tuple(
             self._run_command(
                 command,

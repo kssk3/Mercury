@@ -207,6 +207,59 @@ def test_status_accepts_current_full_journal_hash(tmp_path: Path) -> None:
     assert summarize_execution(tmp_path)["recorded_status"] == "pass"
 
 
+@pytest.mark.parametrize("status", ["pass", "fail", "blocked"])
+def test_status_accepts_valid_run_binding_prefix(tmp_path: Path, status: str) -> None:
+    state = write_history(tmp_path, status)
+    journal = tmp_path / "events.jsonl"
+    binding = {
+        "event": "run_binding",
+        "schema_version": 1,
+        "initial_head": "c" * 40,
+        "config_sha256": "f" * 64,
+        "backend": "codex",
+    }
+    raw = json.dumps(binding).encode() + b"\n" + journal.read_bytes()
+    journal.write_bytes(raw)
+    state["attempt_summary"]["journal"]["sha256"] = hashlib.sha256(raw).hexdigest()
+    store_state(tmp_path, state)
+    summary = summarize_execution(tmp_path)
+    assert summary["recorded_status"] == status
+    assert summary["diagnostics"] == []
+
+
+@pytest.mark.parametrize(
+    "change", ["event", "version", "digest", "head", "backend", "duplicate"]
+)
+def test_status_rejects_malformed_run_binding_prefix(
+    tmp_path: Path, change: str
+) -> None:
+    state = write_history(tmp_path)
+    journal = tmp_path / "events.jsonl"
+    binding: dict[str, object] = {
+        "event": "run_binding",
+        "schema_version": 1,
+        "initial_head": "c" * 40,
+        "config_sha256": "f" * 64,
+        "backend": "claude",
+    }
+    if change == "event":
+        binding["event"] = "arbitrary_prefix"
+    elif change == "version":
+        binding["schema_version"] = True
+    elif change == "digest":
+        binding["config_sha256"] = "not-a-digest"
+    elif change == "head":
+        binding["initial_head"] = "a" * 40
+    elif change == "backend":
+        binding["backend"] = "other"
+    prefix = json.dumps(binding).encode() + b"\n"
+    raw = prefix * (2 if change == "duplicate" else 1) + journal.read_bytes()
+    journal.write_bytes(raw)
+    state["attempt_summary"]["journal"]["sha256"] = hashlib.sha256(raw).hexdigest()
+    store_state(tmp_path, state)
+    assert summarize_execution(tmp_path)["recorded_status"] == "unknown"
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -547,3 +600,40 @@ def test_status_loop_protected_null_rejects_invalid_contexts(
     result = summarize_execution(tmp_path)
     assert result["recorded_status"] == "unknown"
     assert result["diagnostics"]
+
+
+@pytest.mark.parametrize(
+    "completion", ["missing", "invalid", "mismatch", "pass", "release-failed"]
+)
+def test_status_version_two_wrapper_requires_consistent_finalization(
+    tmp_path: Path, completion: str
+) -> None:
+    state = write_history(tmp_path)
+    journal = tmp_path / "events.jsonl"
+    binding = {
+        "event": "run_binding",
+        "schema_version": 2,
+        "initial_head": "c" * 40,
+        "config_sha256": "f" * 64,
+        "backend": "codex",
+    }
+    raw = json.dumps(binding).encode() + b"\n" + journal.read_bytes()
+    journal.write_bytes(raw)
+    state["attempt_summary"]["journal"]["sha256"] = hashlib.sha256(raw).hexdigest()
+    if completion != "missing":
+        state["run_result"] = {
+            "status": "pass",
+            "reason": state["loop_summary"]["reason"],
+        }
+        if completion == "invalid":
+            state["run_result"]["status"] = ["pass"]
+        elif completion == "mismatch":
+            state["run_result"]["reason"] = "invented-success"
+        elif completion == "release-failed":
+            state["run_result"] = {"status": "unknown", "reason": "lock_release_failed"}
+    store_state(tmp_path, state)
+    summary = summarize_execution(tmp_path)
+    assert summary["recorded_status"] == ("pass" if completion == "pass" else "unknown")
+    assert bool(summary["diagnostics"]) == (
+        completion in {"missing", "invalid", "mismatch"}
+    )
