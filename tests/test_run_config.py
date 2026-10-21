@@ -103,6 +103,39 @@ def test_valid_config_is_pure_and_binds_exact_bytes(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    "overlap", ["state-in-repository", "repository-in-state", "config-in-state"]
+)
+def test_config_rejects_case_alias_state_root(tmp_path: Path, overlap: str) -> None:
+    path, data = make_fixture(tmp_path)
+    protected = (
+        Path(data["repository"]) if overlap == "state-in-repository" else tmp_path
+    )
+    alias = protected.with_name(protected.name.swapcase())
+    same_directory = alias.exists() and alias.samefile(protected)
+    if not same_directory:
+        alias.mkdir()
+    state = alias / "new-state" if overlap == "state-in-repository" else alias
+    if overlap == "config-in-state":
+        external = tmp_path / "External"
+        external.mkdir()
+        path = external / "run.json"
+        state = external.with_name("external")
+        same_directory = state.exists() and state.samefile(external)
+        if not same_directory:
+            state.mkdir()
+    data["state_root"] = str(state)
+    digest = write_config(path, data)
+    if same_directory:
+        with pytest.raises(ValueError):
+            load_run_config(path, digest, "human")
+    else:
+        load_run_config(path, digest, "human")
+    if overlap == "state-in-repository":
+        assert not state.exists()
+    assert not (state / "repositories").exists()
+
+
+@pytest.mark.parametrize(
     "approval,approver",
     [("", "human"), ("0" * 64, "human"), (None, "human"), ("valid", "")],
 )

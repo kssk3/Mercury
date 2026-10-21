@@ -262,7 +262,6 @@ def execute_run(config: RunConfig) -> tuple[dict[str, object], int]:
             redactor=_omit_output,
             max_output_bytes=1024,
         )
-        renewal.check()
         criteria_passed = bool(result.criteria) and all(
             item.passed for item in result.criteria
         )
@@ -273,6 +272,7 @@ def execute_run(config: RunConfig) -> tuple[dict[str, object], int]:
             command_boundaries=result.usage.commands,
             criteria_passed=criteria_passed,
         )
+        renewal.check()
         code = 0 if result.status == "pass" and criteria_passed else 1
     except KeyboardInterrupt:
         outcome.update(status="unknown", reason="interrupted")

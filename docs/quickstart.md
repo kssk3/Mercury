@@ -178,10 +178,17 @@ permission prompts, supplies an empty strict MCP configuration, disables slash
 commands and session persistence, and does not enable permission bypass, shell,
 subagent or network tools. Mandatory `--safe-mode` disables user/project/local
 customizations, including hooks, plugins, CLAUDE.md and autoloaded extensions.
-Authentication, model selection, permissions and admin-managed policy remain
-active; managed policy hooks and the executable itself remain trusted. This is
-a native tool policy, not process confinement. Unsupported CLIs fail closed;
-Mercury never retries without safe mode.
+Mandatory `--restricted` confines built-in file tools to working directories
+and loads only managed or explicitly supplied settings. Mercury supplies no
+settings file: authentication remains external, but model preferences in excluded
+user/project settings are not inherited. Managed policy hooks and the executable
+itself remain trusted. The adapter removes inherited `NODE_OPTIONS` before every
+Claude launch, including after preparation and on later turns, so Node preload
+options cannot execute before those CLI controls. Other applicable resolver
+checks and unrelated caller environment remain active.
+These are native tool policies, not an OS sandbox, and working-directory access
+is broader than the task's allowed/protected path subset. Unsupported CLIs fail
+closed; Mercury never retries without either required mode.
 No API key, login or settings change is performed by Mercury.
 
 The USD option is a native CLI budget, not a measured invoice or a cap on the
@@ -190,7 +197,11 @@ process duration and retained bytes. Fake-executable contract tests establish
 the adapter boundary, not compatibility with every Claude version or provider.
 Before live use, confirm the installed CLI supports these flags and has the
 intended authentication. The implementation was prepared against Claude Code
-2.1.303 help and the official [CLI reference](https://code.claude.com/docs/en/cli-reference).
+2.1.304 combined restricted/safe-mode help and the official
+[CLI reference](https://code.claude.com/docs/en/cli-reference); restricted mode
+requires at least 2.1.248. Help confirms flag support, not real-engine path
+confinement. Local Node startup regressions and fake-CLI argv tests are separate
+from real Claude execution evidence.
 
 ## Using a real repository
 
@@ -198,8 +209,8 @@ The example's subclass replaces `CodexCLIAdapter.run` entirely. A real
 integration must supply its own trusted executable/environment and genuinely
 admitted task, verification policy, protection set, redactor, budgets, external
 state, and caller-held lease. Codex inherits native configuration, authentication, rules and environment.
-Claude uses the safe-mode boundary described above, retaining authentication,
-model selection and trusted managed policy. No credential setup or live execution
+Claude uses the restricted/safe-mode boundary described above, retaining external
+authentication and trusted managed policy rather than excluded settings. No credential setup or live execution
 is part of this quickstart.
 
 Allowed paths guide the agent; observations are point-in-time scope checks,
@@ -394,8 +405,8 @@ UNKNOWN to `status` until the post-release wrapper result is saved. Historical
 version-1 binding and direct-loop records remain readable without that field.
 No automatic rollback, session resume, publication or merge
 is performed. Codex native configuration and Claude managed policy remain trusted;
-Claude user/project customizations are disabled by mandatory safe mode. These
-limits do not provide OS confinement or prove that the chosen tests are sufficient.
+Claude uses mandatory safe mode, restricted working-directory file tools and
+managed/explicit settings only, and discards inherited `NODE_OPTIONS`. These limits do not provide OS confinement or prove that the chosen tests are sufficient.
 
 ### JavaScript integration example
 
@@ -419,7 +430,8 @@ symlink aliases. The original repositories are not copied or modified. Only
 `add.mjs` may change; `check.mjs` is protected. Native execution has a 90-second
 limit, each Node check 5 seconds, and the loop 120 seconds with zero retries.
 Claude receives the adapter's USD 0.25 native budget option; this is not measured
-billing evidence. Authentication/model selection are inherited. The example
+billing evidence. Authentication stays external; restricted mode excludes
+user/project settings, including their model preferences. The example
 retains fixture, configuration and evidence on success or failure and does not
 publish anything. Fake-executable tests and an actual native run are separate
 evidence; the presence of this example does not claim a live run passed.

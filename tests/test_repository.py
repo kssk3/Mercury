@@ -47,6 +47,42 @@ def test_resolver_rejects_a_state_root_inside_the_repository(tmp_path: Path) -> 
         resolve_repository_state_location(repository, repository / ".agent-harness")
 
 
+@pytest.mark.parametrize("boundary", ["repository", "metadata"])
+@pytest.mark.parametrize("consumer", ["explicit", "resolver"])
+def test_runtime_state_case_alias_boundary(
+    tmp_path: Path, boundary: str, consumer: str
+) -> None:
+    root = tmp_path / "Project"
+    if boundary == "metadata":
+        protected = tmp_path / "Metadata"
+        subprocess.run(
+            ["git", "init", "--quiet", "--separate-git-dir", str(protected), str(root)],
+            check=True,
+            timeout=10,
+        )
+    else:
+        protected = initialize_repository(root)
+    alias = protected.with_name(protected.name.lower())
+    same_directory = alias.exists() and alias.samefile(protected)
+    if not same_directory:
+        alias.mkdir()
+    state = alias / "new-state"
+
+    def validate() -> None:
+        if consumer == "explicit":
+            repository_module.validate_runtime_state_directory(state, root)
+        else:
+            resolve_repository_state_location(root, state)
+
+    if same_directory:
+        with pytest.raises(ValueError, match="outside"):
+            validate()
+    else:
+        # Distinct directories on a case-sensitive filesystem are safe.
+        validate()
+    assert not state.exists()
+
+
 def test_resolver_rejects_in_repository_state_root_redirected_outside(
     tmp_path: Path,
 ) -> None:

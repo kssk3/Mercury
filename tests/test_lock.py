@@ -841,6 +841,49 @@ def test_interrupted_committed_acquire_releases_own_lease(
     assert not lock.path.exists()
 
 
+def test_interrupted_mkdir_removes_only_new_empty_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock = RepositoryLock(tmp_path / "state", timeout_seconds=10)
+    original = Path.mkdir
+    transition_checks: list[bool] = []
+
+    def mkdir(
+        path: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False
+    ) -> None:
+        original(path, mode, parents, exist_ok)
+        if path == lock.path:
+            raise KeyboardInterrupt("mkdir committed before interruption")
+
+    original_rmdir = Path.rmdir
+
+    def rmdir(path: Path) -> None:
+        if path == lock.path:
+            contender = RepositoryLock(tmp_path / "state", timeout_seconds=10)
+            with pytest.raises(LockUnavailableError, match="transition is active"):
+                with contender._ownership_transition():
+                    pass
+            transition_checks.append(True)
+        original_rmdir(path)
+
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    monkeypatch.setattr(Path, "rmdir", rmdir)
+    with pytest.raises(KeyboardInterrupt, match="mkdir committed"):
+        lock.acquire()
+    assert not lock.path.exists()
+    assert transition_checks
+
+
+def test_preexisting_empty_lock_is_preserved(tmp_path: Path) -> None:
+    lock = RepositoryLock(tmp_path / "state", timeout_seconds=10)
+    lock.path.mkdir(parents=True)
+    before = lock.path.stat()
+    with pytest.raises(LockUnavailableError, match="metadata is invalid"):
+        lock.acquire()
+    assert lock.path.stat().st_ino == before.st_ino
+    assert list(lock.path.iterdir()) == []
+
+
 def test_failed_acquire_cleanup_preserves_replacement_owner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

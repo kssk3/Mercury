@@ -1,4 +1,4 @@
-"""One bounded Claude Code invocation with mandatory customization safe mode.
+"""One bounded Claude Code invocation with restricted tools and safe mode.
 
 Tool restrictions are CLI permissions, not an OS sandbox. Managed policy and
 the native executable remain trusted; this adapter does not redact output or
@@ -30,9 +30,11 @@ from agent_harness.repository import resolve_repository_root
 class ClaudeCLIAdapter(_NativeExecutableBinding):
     """Use caller-selected Claude with fixed tools and noninteractive denials.
 
-    Authentication, model selection and managed policy remain active. Safe mode
-    disables user/project customizations, including hooks; managed hooks remain
-    trusted. Unsupported CLIs fail without retrying in an unsafe mode.
+    Restricted mode confines built-in file tools to working directories and loads
+    only managed or explicitly supplied settings. Safe mode disables user/project
+    customizations, including hooks; managed policy remains trusted. Authentication
+    remains external; model preferences in excluded settings are not inherited.
+    Unsupported CLIs fail without retrying in an unsafe mode.
     No arbitrary flags, permission bypass, shell/subagent tools or MCP servers are
     admitted. Read-only mode omits Edit and Write; it does not confine a hostile
     native process or managed hooks. The harness still observes and verifies.
@@ -100,6 +102,7 @@ class ClaudeCLIAdapter(_NativeExecutableBinding):
             self._executable or self._requested_executable,
             "--print",
             "--safe-mode",
+            "--restricted",
             "--output-format",
             "json",
             "--no-session-persistence",
@@ -124,6 +127,13 @@ class ClaudeCLIAdapter(_NativeExecutableBinding):
         try:
             if self._selection_error is not None:
                 raise self._selection_error
+            environment = (
+                self._launch_environment.copy()
+                if self._launch_environment is not None
+                else os.environ.copy()
+            )
+            # Node processes startup options before the CLI can apply safe mode.
+            environment.pop("NODE_OPTIONS", None)
             process = subprocess.Popen(
                 argv,
                 cwd=root,
@@ -131,7 +141,7 @@ class ClaudeCLIAdapter(_NativeExecutableBinding):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 start_new_session=True,
-                env=self._launch_environment,
+                env=environment,
             )
         except OSError as error:
             stderr.add(str(error).encode("utf-8", errors="surrogateescape"))

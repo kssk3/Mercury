@@ -19,6 +19,7 @@ from agent_harness.contract import TaskContract
 from agent_harness.loop import bind_completion_criteria
 from agent_harness.policy import VerificationPolicy
 from agent_harness.repository import (
+    _is_within_directory,
     resolve_repository_root,
     resolve_repository_state_location,
     validate_runtime_state_directory,
@@ -244,12 +245,12 @@ def load_run_config(
         if re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", head) is None:
             raise ValueError
         state_root = _absolute(data["state_root"])
-        if repository.is_relative_to(state_root) or state_root.is_relative_to(
-            repository
+        if _is_within_directory(repository, state_root) or _is_within_directory(
+            state_root, repository
         ):
             raise ValueError
-        if config_path.is_relative_to(repository) or config_path.is_relative_to(
-            state_root
+        if _is_within_directory(config_path, repository) or _is_within_directory(
+            config_path, state_root
         ):
             raise ValueError
         resolve_repository_state_location(repository, state_root)

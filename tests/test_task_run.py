@@ -62,6 +62,34 @@ class FakeAgent:
         )
 
 
+def test_direct_api_rejects_case_alias_state_before_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, data = make_fixture(tmp_path)
+    config = load_run_config(path, write_config(path, data), "human")
+    repository = config.repository
+    alias = repository.with_name("Repository")
+    same_directory = alias.exists() and alias.samefile(repository)
+    if not same_directory:
+        alias.mkdir()
+    state = alias / "new-state"
+    data["state_root"] = str(state)
+    digest = write_config(path, data)
+    agent = FakeAgent()
+    monkeypatch.setattr("agent_harness.task_run._adapter", lambda config: agent)
+    outcome, code = execute_run(replace(config, state_root=state, config_sha256=digest))
+    if same_directory:
+        assert (code, outcome["status"], outcome["reason"]) == (
+            2,
+            "blocked",
+            "preflight_failed",
+        )
+        assert agent.preparations == 0
+        assert not state.exists()
+    else:
+        assert (code, outcome["status"]) == (0, "pass")
+
+
 @pytest.mark.parametrize(
     "change", ["goal", "budgets", "context", "limits", "mapping", "bytes"]
 )
@@ -256,10 +284,25 @@ def test_lost_renewal_never_reports_pass_or_releases_successor(
     lease = json.loads((renewals[0].lock.path / "lease.json").read_text())
     assert lease["owner_token"] == "successor"
     if phase == "native":
-        summary = summarize_execution(Path(str(outcome["state_dir"])))
+        state_dir = Path(str(outcome["state_dir"]))
+        summary = summarize_execution(state_dir)
         assert summary["recorded_status"] == "unknown"
         assert summary["recorded_reason"] == "execution_failed"
         assert summary["diagnostics"] == []
+        events = [
+            json.loads(line)
+            for line in (state_dir / "events.jsonl").read_text().splitlines()
+        ]
+        terminal = [event for event in events if event["event"] == "loop_outcome"]
+        assert len(terminal) == 1
+        observed = terminal[0]
+        assert observed["attempt_ids"]
+        assert observed["commands"] > 0
+        assert outcome["attempts"] == len(observed["attempt_ids"])
+        assert outcome["command_boundaries"] == observed["commands"]
+        current = json.loads((state_dir / "current.json").read_text())
+        assert current["loop_summary"] == observed
+        assert summary["attempt_ids"] == observed["attempt_ids"]
 
 
 @pytest.mark.parametrize("mode", ["pass", "fail", "timeout", "protected"])

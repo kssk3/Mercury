@@ -36,6 +36,24 @@ def _git_query(directory: Path, *arguments: str) -> subprocess.CompletedProcess[
         raise ValueError("could not inspect runtime state location") from error
 
 
+def _is_within_directory(path: Path, directory: Path) -> bool:
+    """Include existing ancestor aliases without folding distinct path names."""
+    if path.is_relative_to(directory):
+        return True
+    try:
+        protected = directory.stat()
+    except FileNotFoundError:
+        return False
+    for ancestor in (path, *path.parents):
+        try:
+            observed = ancestor.stat()
+        except FileNotFoundError:
+            continue
+        if os.path.samestat(observed, protected):
+            return True
+    return False
+
+
 def validate_runtime_state_directory(
     directory: Path | str,
     repository_root: Path | None = None,
@@ -52,7 +70,7 @@ def validate_runtime_state_directory(
     canonical = path.resolve()
     if repository_root is not None:
         root = repository_root.resolve()
-        if canonical.is_relative_to(root):
+        if _is_within_directory(canonical, root):
             raise ValueError("runtime state must be outside the repository")
         metadata_roots = list(admitted_metadata)
         live_roots: list[Path] = []
@@ -67,12 +85,14 @@ def validate_runtime_state_directory(
                 metadata = root / metadata
             metadata = metadata.resolve()
             # A live unsafe location always rejects, including partial queries.
-            if canonical.is_relative_to(metadata):
+            if _is_within_directory(canonical, metadata):
                 raise ValueError("runtime state must be outside Git metadata")
             live_roots.append(metadata)
         else:
             metadata_roots.extend(live_roots)
-        if any(canonical.is_relative_to(metadata) for metadata in metadata_roots):
+        if any(
+            _is_within_directory(canonical, metadata) for metadata in metadata_roots
+        ):
             raise ValueError("runtime state must be outside Git metadata")
         return tuple(dict.fromkeys(metadata_roots))
     existing = canonical

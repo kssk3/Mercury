@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -64,6 +65,7 @@ def test_fixed_tools_and_untrusted_stdin(
     data = json.loads(result.final_message.text)
     argv = data["argv"]
     assert "--print" in argv
+    assert {"--restricted", "--safe-mode"} <= set(argv)
     assert argv[argv.index("--output-format") + 1] == "json"
     assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
     assert argv[argv.index("--permission-prompts") + 1] == "none"
@@ -252,3 +254,98 @@ def test_unsupported_safe_mode_fails_without_unsafe_retry(
     assert result.process_status == "nonzero_exit"
     assert (repository / "launches").read_text().splitlines() == ["launch"]
     assert result.final_output_status != "available"
+
+
+@pytest.mark.parametrize("readonly", [False, True])
+@pytest.mark.parametrize("prepared", [False, True])
+def test_node_startup_options_removed_on_every_launch(
+    repository: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    readonly: bool,
+    prepared: bool,
+) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("local Node unavailable; Python child environment coverage remains")
+    executable = tmp_path / "fake-claude-node"
+    executable.write_text(
+        f"#!{node}\n"
+        "process.stdin.resume();\n"
+        "process.stdin.on('end', () => console.log(JSON.stringify({"
+        "type:'result',subtype:'success',is_error:false,"
+        "result:JSON.stringify({sentinel:process.env.MERCURY_CALLER_SENTINEL,"
+        "startup:process.env.NODE_OPTIONS ?? null})})));\n"
+    )
+    executable.chmod(0o700)
+    monkeypatch.setenv("NODE_OPTIONS", "--no-warnings")
+    adapter = ClaudeCLIAdapter(executable)
+    if prepared:
+        adapter.prepare(repository)
+    hook = repository / "allowed-hook.cjs"
+    for turn in range(2):
+        marker = repository / f"preload-ran-{turn}"
+        hook.write_text(
+            "require('node:fs').writeFileSync("
+            + json.dumps(str(marker))
+            + ", 'ran');\n"
+        )
+        monkeypatch.setenv("NODE_OPTIONS", f"--require={hook}")
+        monkeypatch.setenv("MERCURY_CALLER_SENTINEL", f"safe-{turn}")
+        result = invoke(repository, adapter, readonly=readonly)
+        assert not marker.exists(), "Node startup preload ran before fake Claude"
+        assert result.process_status == "successful_exit"
+        assert result.final_message is not None
+        assert json.loads(result.final_message.text) == {
+            "sentinel": f"safe-{turn}",
+            "startup": None,
+        }
+
+
+@pytest.mark.parametrize("readonly", [False, True])
+def test_unsupported_restricted_fails_without_unsafe_retry(
+    repository: Path,
+    tmp_path: Path,
+    readonly: bool,
+) -> None:
+    executable = fake(
+        tmp_path,
+        "import json, sys\nfrom pathlib import Path\n"
+        "with Path('launches').open('a') as log: log.write('launch\\n')\n"
+        "if '--restricted' in sys.argv:\n"
+        "    print('unsupported restricted mode', file=sys.stderr)\n"
+        "    raise SystemExit(2)\n"
+        "print(json.dumps({'type':'result','subtype':'success','is_error':False,'result':'unsafe'}))\n",
+    )
+    result = invoke(repository, ClaudeCLIAdapter(executable), readonly=readonly)
+    assert result.process_status == "nonzero_exit"
+    assert result.exit_code == 2
+    assert (repository / "launches").read_text().splitlines() == ["launch"]
+    assert result.final_output_status != "available"
+
+
+@pytest.mark.parametrize("readonly", [False, True])
+def test_python_child_environment_omits_node_options(
+    repository: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    readonly: bool,
+) -> None:
+    executable = fake(
+        tmp_path,
+        "import json, os\n"
+        "print(json.dumps({'type':'result','subtype':'success','is_error':False,"
+        "'result':json.dumps({'startup':os.environ.get('NODE_OPTIONS'),"
+        "'sentinel':os.environ.get('MERCURY_CALLER_SENTINEL')})}))\n",
+    )
+    adapter = ClaudeCLIAdapter(executable)
+    adapter.prepare(repository)
+    monkeypatch.setenv("NODE_OPTIONS", "--require=/untrusted/startup.cjs")
+    monkeypatch.setenv("MERCURY_CALLER_SENTINEL", "preserved")
+    result = invoke(repository, adapter, readonly=readonly)
+    assert result.process_status == "successful_exit"
+    assert result.final_message is not None
+    assert json.loads(result.final_message.text) == {
+        "startup": None,
+        "sentinel": "preserved",
+    }

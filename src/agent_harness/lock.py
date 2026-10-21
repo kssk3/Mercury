@@ -82,29 +82,32 @@ class RepositoryLock:
                 sampled_at = self._sample_now()
                 validate_runtime_state_directory(self.path)
                 while True:
+                    existed = self.path.exists()
                     try:
-                        self.path.mkdir()
-                    except FileExistsError:
-                        lease = self._read_lease()
-                        if not self._is_expired(lease, sampled_at):
-                            raise LockUnavailableError(
-                                "repository lock is active"
-                            ) from None
-                        self._reclaim_expired_lock()
-                    else:
-                        created = True
-                        lease = RepositoryLease(self._owner_token, sampled_at)
                         try:
+                            self.path.mkdir()
+                        except FileExistsError:
+                            lease = self._read_lease()
+                            if not self._is_expired(lease, sampled_at):
+                                raise LockUnavailableError(
+                                    "repository lock is active"
+                                ) from None
+                            self._reclaim_expired_lock()
+                        else:
+                            created = True
+                            lease = RepositoryLease(self._owner_token, sampled_at)
                             self._write_lease(lease)
-                        except BaseException:
-                            # Only the newly created empty directory is safe here.
-                            # Committed metadata needs the ownership check below.
+                            return lease
+                    except BaseException:
+                        # mkdir can create the directory before raising. Reconcile
+                        # only an absent-before, still-empty path while serialized.
+                        # Committed leases need the ownership check below.
+                        if not existed:
                             try:
                                 self.path.rmdir()
                             except OSError:
                                 pass
-                            raise
-                        return lease
+                        raise
         except BaseException:
             # A committed lease can outlive a failed write/transition return.
             # Cleanup must not replace the original failure or touch a successor.
