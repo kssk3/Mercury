@@ -71,8 +71,8 @@ def _capture_inventory(root: Path) -> bytes:
     """Capture both byte streams without parsing partial or over-budget output.
 
     The same deadline covers an exited leader whose descendants retain pipes.
-    Failures discard all output and kill the owned POSIX process group, including
-    when its leader has exited; detached descendants are outside this boundary.
+    Failures discard all output and kill the owned POSIX process group while its
+    leader remains unreaped; detached descendants are outside this boundary.
     """
     message = "could not inspect Git file inventory"
     deadline = time.monotonic() + _INVENTORY_TIMEOUT_SECONDS
@@ -144,33 +144,38 @@ def _capture_inventory(root: Path) -> bytes:
     except BaseException as error:
         failure = error
 
-    cleanup_failed = False
+    cleanup_errors: list[BaseException] = []
     cleanup_deadline = time.monotonic() + 1.0
-    if failure is not None:
+    # Cached returncode also reflects reaping performed inside an interrupted wait.
+    # Do not poll: an exited but unreaped leader still reserves the owned PGID.
+    if failure is not None and process.returncode is None:
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        except Exception:
-            cleanup_failed = True
+        except BaseException as error:
+            cleanup_errors.append(error)
         try:
             process.wait(timeout=max(0.0, cleanup_deadline - time.monotonic()))
-        except Exception:
-            cleanup_failed = True
+        except BaseException as error:
+            cleanup_errors.append(error)
     for pipe in (process.stdout, process.stderr):
         if pipe is not None:
             try:
                 pipe.close()
-            except Exception:
-                cleanup_failed = True
+            except BaseException as error:
+                cleanup_errors.append(error)
     if selector is not None:
         try:
             selector.close()
-        except Exception:
-            cleanup_failed = True
-    if cleanup_failed:
+        except BaseException as error:
+            cleanup_errors.append(error)
+    for pending_error in (failure, *cleanup_errors):
+        if pending_error is not None and not isinstance(pending_error, Exception):
+            raise pending_error
+    if cleanup_errors:
         message += ": cleanup failed"
-    if failure is not None or cleanup_failed:
+    if failure is not None or cleanup_errors:
         raise ValueError(message) from failure
     return bytes(output)
 

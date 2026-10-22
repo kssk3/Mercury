@@ -10,6 +10,9 @@ import stat
 from pathlib import Path, PurePosixPath
 from typing import cast
 
+from agent_harness.attempt import _capture, _observation
+from agent_harness.turn import compare_observations
+
 _CURRENT_CAP = 1024 * 1024
 _JOURNAL_CAP = 8 * 1024 * 1024
 _STATUSES = {"pass", "fail", "blocked", "stopped", "human", "unknown"}
@@ -413,6 +416,22 @@ def _details(
         scope = _detail_scope(decision)
         _require(scope == _detail_scope(entry["scope"]))
         _require(scope["delta"] == _detail_delta(observed["delta"]))
+        intents = [
+            event for event in relevant[:index] if event.get("event") == "turn_intent"
+        ]
+        _require(len(intents) == 1)
+        before = _observation(intents[0]["before"])
+        after = _observation(observed["after"])
+        _require(
+            before.repository_root == entry["repository_root"]
+            and before.repository_id == entry["repository_id"]
+        )
+        delta = compare_observations(before, after)
+        recorded = _mapping(scope["delta"])
+        for key in ("added", "modified", "deleted"):
+            _require(set(cast(list[str], recorded[key])) == set(getattr(delta, key)))
+        for key in ("head_changed", "index_changed", "status_changed"):
+            _require(recorded[key] == getattr(delta, key))
         result["scope"] = scope
     except (_Invalid, KeyError, TypeError, ValueError, StopIteration):
         diagnostics.append("scope_unavailable")
@@ -448,15 +467,26 @@ def _details(
         "elapsed_seconds": outcome["elapsed_seconds"],
         "elapsed_boundary": outcome["elapsed_boundary"],
     }
-    if outputs is None:
-        diagnostics.append("outputs_unavailable")
-    else:
+    try:
+        _require(outputs is not None)
+        channels = _mapping(outputs)
+        captures = _mapping(observed["process"])
+        for channel in ("stdout", "stderr", "final_message"):
+            capture, output = captures[channel], channels[channel]
+            _require((capture is None) == (output is None))
+            _require(channel == "final_message" or capture is not None)
+            if capture is not None:
+                captured, stored = _capture(capture), _mapping(output)
+                _require(stored["captured_bytes"] == captured["retained_bytes"])
+                _require(stored["capture_truncated"] == captured["truncated"])
         result["outputs"] = {
             "channels": outputs,
             "bodies_read": False,
             "retention": "unknown",
             "content_availability": "unknown",
         }
+    except (_Invalid, KeyError, TypeError, ValueError):
+        diagnostics.append("outputs_unavailable")
     result["diagnostics"] = diagnostics
     return result
 

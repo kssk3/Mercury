@@ -26,11 +26,45 @@ def save_history(directory: Path, state: dict[str, Any], events: list[Any]) -> N
 
 def history(directory: Path) -> tuple[dict[str, Any], list[Any]]:
     state = write_history(directory)
+    active = state["attempt_summary"]["active_attempt"]
+    active["outputs"] = {
+        channel: copy.deepcopy(output) for channel, output in active["outputs"].items()
+    }
     events = [
         json.loads(line)
         for line in (directory / "events.jsonl").read_text().splitlines()
     ]
+    repository_id = hashlib.sha256(os.fsencode("/recorded/repository")).hexdigest()
+
+    def normalize(value: Any) -> None:
+        if isinstance(value, dict):
+            if "repository_id" in value:
+                value["repository_id"] = repository_id
+            if "index_tree" in value:
+                del value["index_tree"]
+                value["index_sha256"] = "f" * 64
+                value["head_ref"] = "refs/heads/main"
+            for item in value.values():
+                normalize(item)
+        elif isinstance(value, list):
+            for item in value:
+                normalize(item)
+
+    normalize(state)
+    normalize(events)
+    save_history(directory, state, events)
     return state, events
+
+
+def fingerprint(path: str, digest: str = "a") -> dict[str, Any]:
+    return {
+        "path": path,
+        "kind": "regular",
+        "sha256": digest * 64,
+        "size_bytes": 1,
+        "executable": False,
+        "mode": 0o644,
+    }
 
 
 def details(directory: Path) -> dict[str, Any]:
@@ -39,10 +73,14 @@ def details(directory: Path) -> dict[str, Any]:
 
 def callback_history(directory: Path) -> tuple[dict[str, Any], list[Any]]:
     state, events = history(directory)
+    events[1]["before"]["files"] = [fingerprint("src/changed.py")]
+    events[2]["after"]["files"] = [fingerprint("src/changed.py")]
     observation = copy.deepcopy(events[2])
     observation["event"] = "callback_observation"
     observation["delta"]["modified"] = ["src/changed.py"]
     observation["delta"]["status_changed"] = True
+    observation["after"]["files"] = [fingerprint("src/changed.py", "b")]
+    observation["after"]["status"] = [{"path": "src/changed.py", "status": " M"}]
     scope = copy.deepcopy(events[3])
     scope["event"] = "callback_scope_decision"
     scope["delta"] = copy.deepcopy(observation["delta"])
@@ -215,7 +253,7 @@ def test_details_missing_final_callback_scope_is_unknown(tmp_path: Path) -> None
 def test_details_read_only_pair_without_output_or_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    write_history(tmp_path)
+    history(tmp_path)
     before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
     original_open = os.open
     opened: list[str] = []
@@ -308,7 +346,147 @@ def test_details_accept_disjoint_change_categories(tmp_path: Path) -> None:
     )
     events[3].update(copy.deepcopy(scope))
     events[2]["delta"] = copy.deepcopy(scope["delta"])
+    events[1]["before"]["files"] = [
+        fingerprint("src/modified.py"),
+        fingerprint("src/deleted.py"),
+    ]
+    events[2]["after"]["files"] = [
+        fingerprint("src/z-added.py"),
+        fingerprint("src/a-added.py"),
+        fingerprint("src/modified.py", "b"),
+    ]
+    events[2]["after"]["status"] = [
+        {"path": "src/z-added.py", "status": "??"},
+        {"path": "src/a-added.py", "status": "??"},
+        {"path": "src/modified.py", "status": " M"},
+        {"path": "src/deleted.py", "status": "D "},
+    ]
     save_history(tmp_path, state, events)
     result = details(tmp_path)
     assert result["scope"] == scope
     assert result["diagnostics"] == []
+
+
+@pytest.mark.parametrize(
+    ("channel", "field"),
+    [
+        (channel, field)
+        for channel in ("stdout", "stderr", "final_message")
+        for field in ("captured_bytes", "capture_truncated")
+    ],
+    ids=[
+        f"{channel}-{field}"
+        for channel in ("stdout", "stderr", "final_message")
+        for field in ("captured_bytes", "capture_truncated")
+    ],
+)
+def test_details_reject_capture_mismatch(
+    tmp_path: Path, channel: str, field: str
+) -> None:
+    state, events = history(tmp_path)
+    active = state["attempt_summary"]["active_attempt"]
+    value = (1 if channel == "stderr" else 99) if field == "captured_bytes" else True
+    active["outputs"][channel][field] = value
+    events[4][channel][field] = value
+    # Equal-looking booleans must not be accepted as retained byte integers.
+    if channel == "stderr" and field == "captured_bytes":
+        active["observation"]["process"][channel]["retained_bytes"] = True
+        events[2]["process"][channel]["retained_bytes"] = True
+    save_history(tmp_path, state, events)
+    result = summarize_execution(tmp_path, details=True)
+    assert result["recorded_status"] == "pass"
+    assert result["diagnostics"] == []
+    assert cast(dict[str, Any], result["details"])["outputs"] is None
+    assert (
+        "outputs_unavailable" in cast(dict[str, Any], result["details"])["diagnostics"]
+    )
+
+
+@pytest.mark.parametrize("mismatch", ["missing_capture", "missing_output"])
+def test_details_reject_final_capture_presence_mismatch(
+    tmp_path: Path, mismatch: str
+) -> None:
+    state, events = history(tmp_path)
+    active = state["attempt_summary"]["active_attempt"]
+    if mismatch == "missing_capture":
+        active["observation"]["process"]["final_message"] = None
+        events[2]["process"]["final_message"] = None
+    else:
+        active["outputs"]["final_message"] = None
+        events[4]["final_message"] = None
+        active["verification"]["output_identifiers"]["final_message"] = None
+        events[5]["output_identifiers"]["final_message"] = None
+    save_history(tmp_path, state, events)
+    result = details(tmp_path)
+    assert result["outputs"] is None
+    assert "outputs_unavailable" in result["diagnostics"]
+
+
+@pytest.mark.parametrize("capture", ["empty", "truncated"])
+def test_details_accept_consistent_capture(tmp_path: Path, capture: str) -> None:
+    state, events = history(tmp_path)
+    active = state["attempt_summary"]["active_attempt"]
+    retained = 0 if capture == "empty" else 12
+    for process in (active["observation"]["process"], events[2]["process"]):
+        for channel in ("stdout", "stderr", "final_message"):
+            process[channel].update(
+                retained_bytes=retained, truncated=capture == "truncated"
+            )
+    for outputs in (active["outputs"], events[4]):
+        for channel in ("stdout", "stderr", "final_message"):
+            outputs[channel].update(
+                captured_bytes=retained, capture_truncated=capture == "truncated"
+            )
+    save_history(tmp_path, state, events)
+    result = details(tmp_path)
+    assert result["outputs"]["channels"] == active["outputs"]
+    assert result["diagnostics"] == []
+
+
+@pytest.mark.parametrize(
+    "change", ["added", "modified", "deleted", "head", "index", "status"]
+)
+def test_details_reject_snapshot_delta_mismatch(tmp_path: Path, change: str) -> None:
+    state, events = history(tmp_path)
+    before, after = events[1]["before"], events[2]["after"]
+    if change == "added":
+        after["files"] = [fingerprint("src/changed.py")]
+    elif change in {"modified", "deleted", "status"}:
+        before["files"] = [fingerprint("src/changed.py")]
+        after["files"] = [fingerprint("src/changed.py")]
+        if change == "modified":
+            after["files"][0]["sha256"] = "b" * 64
+        elif change == "deleted":
+            after["files"] = []
+        else:
+            after["status"] = [{"path": "src/changed.py", "status": " M"}]
+    elif change == "head":
+        after["head_ref"] = "refs/heads/changed"
+    else:
+        after["index_sha256"] = "e" * 64
+    save_history(tmp_path, state, events)
+    result = summarize_execution(tmp_path, details=True)
+    assert result["recorded_status"] == "pass"
+    assert result["diagnostics"] == []
+    projection = cast(dict[str, Any], result["details"])
+    assert projection["scope"] is None
+    assert projection["diagnostics"] == ["scope_unavailable"]
+
+
+def test_details_reject_callback_snapshot_mismatch(tmp_path: Path) -> None:
+    state, events = callback_history(tmp_path)
+    # Initial turn remains consistent; only the final callback snapshot contradicts its delta.
+    events[4]["after"]["files"] = copy.deepcopy(events[1]["before"]["files"])
+    save_history(tmp_path, state, events)
+    result = details(tmp_path)
+    assert result["scope"] is None
+    assert "scope_unavailable" in result["diagnostics"]
+
+
+def test_details_reject_incomplete_snapshot(tmp_path: Path) -> None:
+    state, events = history(tmp_path)
+    del events[2]["after"]["files"]
+    save_history(tmp_path, state, events)
+    result = details(tmp_path)
+    assert result["scope"] is None
+    assert "scope_unavailable" in result["diagnostics"]

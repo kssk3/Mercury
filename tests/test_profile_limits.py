@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import os
+import selectors
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from test_profile import init
@@ -281,3 +283,181 @@ def test_cli_limit_failure(
     assert captured.err.count("\n") == 1
     assert "secret" not in captured.err
     assert "Traceback" not in captured.err
+
+
+@pytest.fixture
+def owned_inventory(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
+    """Intercept stale signals, retaining real finite processes and bounded cleanup."""
+    state: dict[str, Any] = {"process": None, "events": [], "wait_error": None}
+    original_popen = subprocess.Popen
+    original_killpg = os.killpg
+    original_wait: Any = None
+
+    def start(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+        nonlocal original_wait
+        process = original_popen(*args, **kwargs)
+        state["process"] = process
+        original_wait = process.wait
+
+        def wait(timeout: float | None = None) -> int:
+            state["events"].append("wait")
+            error = state["wait_error"]
+            if error is not None:
+                state["wait_error"] = None
+                if state.get("reap_before_error"):
+                    original_wait(timeout=timeout)
+                raise error
+            return int(original_wait(timeout=timeout))
+
+        monkeypatch.setattr(process, "wait", wait)
+        return process
+
+    def signal_owned(group: int, sig: int) -> None:
+        process = state["process"]
+        assert group == process.pid
+        if process.returncode is not None:
+            state["events"].append("signal_reaped")
+            return
+        state["events"].append("signal_owned")
+        if state.get("deny_signal"):
+            raise PermissionError("private cleanup error")
+        original_killpg(group, sig)
+
+    monkeypatch.setattr(subprocess, "Popen", start)
+    monkeypatch.setattr(os, "killpg", signal_owned)
+    try:
+        yield state
+    finally:
+        process = state["process"]
+        if process is not None and process.returncode is None:
+            try:
+                original_killpg(process.pid, 9)
+            except ProcessLookupError:
+                pass
+            original_wait(timeout=2)
+
+
+@pytest.mark.parametrize(
+    ("stage", "kind"),
+    [
+        (stage, kind)
+        for stage in ("select", "read", "wait")
+        for kind in ("keyboard", "system_exit")
+    ],
+    ids=[
+        f"{stage}-{kind}"
+        for stage in ("select", "read", "wait")
+        for kind in ("keyboard", "system_exit")
+    ],
+)
+def test_inventory_preserves_cancellation(
+    inventory: Callable[[str], Path],
+    owned_inventory: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    kind: str,
+) -> None:
+    root = inventory(
+        "os.write(1, b'a.py\\0')\n"
+        + ("os.close(1); os.close(2)\n" if stage == "wait" else "")
+        + "time.sleep(6.0)\n"
+    )
+    error = KeyboardInterrupt() if kind == "keyboard" else SystemExit(37)
+    original_read = os.read
+    original_selector = selectors.DefaultSelector
+
+    def interrupted(*args: Any, **kwargs: Any) -> Any:
+        raise error
+
+    def selector() -> Any:
+        result = original_selector()
+        monkeypatch.setattr(result, "select", interrupted)
+        return result
+
+    def read(fd: int, size: int) -> bytes:
+        process = owned_inventory["process"]
+        if process is not None and fd in (
+            process.stdout.fileno(),
+            process.stderr.fileno(),
+        ):
+            raise error
+        return original_read(fd, size)
+
+    if stage == "select":
+        monkeypatch.setattr(selectors, "DefaultSelector", selector)
+    elif stage == "read":
+        monkeypatch.setattr(os, "read", read)
+    else:
+        owned_inventory["wait_error"] = error
+    # Cleanup failure must not replace the original SystemExit value.
+    owned_inventory["deny_signal"] = stage == "select" and kind == "system_exit"
+    with pytest.raises(type(error)) as caught:
+        profile_module._capture_inventory(root)
+    assert caught.value is error
+    assert "signal_reaped" not in owned_inventory["events"]
+
+
+def test_inventory_nonzero_exit_does_not_signal_reaped_group(
+    inventory: Callable[[str], Path],
+    owned_inventory: dict[str, Any],
+) -> None:
+    root = inventory("sys.exit(7)\n")
+    with pytest.raises(ValueError, match="^could not inspect Git file inventory$"):
+        profile_module._capture_inventory(root)
+    assert owned_inventory["process"].returncode == 7
+    assert "signal_reaped" not in owned_inventory["events"]
+
+
+def test_inventory_wait_cancellation_does_not_signal_reaped_group(
+    inventory: Callable[[str], Path],
+    owned_inventory: dict[str, Any],
+) -> None:
+    root = inventory("pass\n")
+    error = KeyboardInterrupt()
+    owned_inventory.update(wait_error=error, reap_before_error=True)
+    try:
+        profile_module._capture_inventory(root)
+    except BaseException:
+        pass
+    assert owned_inventory["process"].returncode == 0
+    assert "signal_reaped" not in owned_inventory["events"]
+
+
+def test_inventory_failure_signals_owned_group_before_reap(
+    inventory: Callable[[str], Path],
+    owned_inventory: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = inventory("os.write(1, b'a.py\\0'); time.sleep(6.0)\n")
+    original_selector = selectors.DefaultSelector
+
+    def selector() -> Any:
+        result = original_selector()
+
+        def failed(timeout: float | None = None) -> Any:
+            raise OSError("private select error")
+
+        monkeypatch.setattr(result, "select", failed)
+        return result
+
+    monkeypatch.setattr(selectors, "DefaultSelector", selector)
+    with pytest.raises(ValueError, match="^could not inspect Git file inventory$"):
+        profile_module._capture_inventory(root)
+    assert owned_inventory["events"] == ["signal_owned", "wait"]
+    assert owned_inventory["process"].returncode is not None
+
+
+def test_inventory_eof_does_not_terminate_running_success(
+    inventory: Callable[[str], Path],
+    owned_inventory: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "finished-after-eof"
+    root = inventory(
+        "os.write(1, b'a.py\\0'); os.close(1); os.close(2)\n"
+        "time.sleep(0.15)\n"
+        f"open({str(marker)!r}, 'w').close()\n"
+    )
+    assert profile_module._capture_inventory(root) == b"a.py\0"
+    assert marker.exists()
+    assert owned_inventory["events"] == ["wait"]
