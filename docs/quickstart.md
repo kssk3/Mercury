@@ -6,15 +6,17 @@ The first example demonstrates API composition with a **simulated Codex
 adapter**. It performs no native-agent, model, or network invocation.
 
 Feature delivery was verified on 2026-10-21 at
-[main `4184f01d`](https://github.com/kssk3/Mercury/commit/4184f01dd9e5c5d24dd8476994f77e4011604de1),
+[main `ec834976`](https://github.com/kssk3/Mercury/commit/ec83497690b42bd3aea89bb8ed5e76736cf18da9),
 including the bounded user-repository example in
 [PR #7](https://github.com/kssk3/Mercury/pull/7) and the common agent contract in
 [PR #8](https://github.com/kssk3/Mercury/pull/8), followed by documentation in
 [PR #9](https://github.com/kssk3/Mercury/pull/9).
 [PR #10](https://github.com/kssk3/Mercury/pull/10) delivered the backend connection
 guide, Claude adapter, explicit task execution CLI and JavaScript example below.
+[PR #11](https://github.com/kssk3/Mercury/pull/11) delivered the read-only
+`run --preview` command and its [run configuration guide](run-preview.md).
 The owned work branches were deleted, and this revision's existing automatic
-[main CI](https://github.com/kssk3/Mercury/actions/runs/39527528702) passed.
+[main CI](https://github.com/kssk3/Mercury/actions/runs/39547958361) passed.
 This is a revision-specific delivery snapshot using existing check, review and
 merge evidence. It does not establish a fresh live model run of the current
 backends; historical live evidence applies to its recorded candidate.
@@ -354,9 +356,19 @@ and test the intended behavior; the goal and its command mapping must agree.
 }
 ```
 
-Save reviewed JSON outside both target repository and state root. Compute its
-raw-byte SHA-256 with a trusted local hashing tool, inspect the exact contents,
-then supply the digest and an approver label:
+Save JSON outside both target repository and state root. Use
+[the run configuration preview guide](run-preview.md) to inspect the validated
+settings and exact raw-byte SHA-256 before separately approving execution:
+
+```sh
+.venv/bin/local-harness run --preview --config /absolute/path/to/run.json
+```
+
+Unlike `plan`, this preview reads the actual configuration, existing paths and
+read-only Git root information. It grants no approval and runs no checker or
+agent. HEAD, cleanliness and native readiness remain execution checks.
+After reviewing the exact configuration and authorizing execution, supply its
+digest and an approver label; do not combine preview and approval flags:
 
 ```sh
 .venv/bin/local-harness run --config /absolute/path/to/run.json \
@@ -440,20 +452,18 @@ evidence; the presence of this example does not claim a live run passed.
 
 ### Summarize recorded execution
 
-The historical reader is available on
-[main `34c7439e`](https://github.com/kssk3/Mercury/commit/34c7439ed3ad8eb6cf3be7483f0cbea5f7df162e)
-through [PR #6](https://github.com/kssk3/Mercury/pull/6):
+The historical reader was delivered in [PR #6](https://github.com/kssk3/Mercury/pull/6):
 
 ```sh
 .venv/bin/local-harness status --state-dir /absolute/path/to/external-state
+.venv/bin/local-harness status --state-dir /absolute/path/to/external-state --details
 ```
 
-The required directory selects only `current.json` and `events.jsonl`. The reader
-opens regular single-link files without following symlink leaves or ancestors,
-and reads at most 1 MiB of current state and 8 MiB / 10,000 journal records. These
-limits apply to this reader, without changing runtime persistence behavior.
-It creates no directory, file or lock, reads no repository or referenced output
-file, and invokes no Git, agent, network, verification or recovery action.
+The directory selects only `current.json` and `events.jsonl`: regular single-link
+files, without symlink leaves/ancestors, capped at 1 MiB current state and
+8 MiB / 10,000 journal records. Runtime persistence behavior is unchanged.
+The reader creates no directory/file/lock, reads no repository/output file,
+and invokes no Git, agent, network, verification or recovery action.
 
 One JSON line has `schema_version: 1`, `historical_only: true`,
 `current_workspace_verified: false`, `recorded_status`, `recorded_reason`,
@@ -463,6 +473,14 @@ or null. `evidence` contains current/journal paths and byte SHA-256 digests plus
 output channel identifiers (digests), without stdout/stderr/native transcript
 bodies. It does not copy arbitrary state/event fields. UNKNOWN input returns
 null metadata and a fixed diagnostic, never malformed input text.
+
+`--details` adds `details.schema_version: 1` from the same pair: active-attempt process
+status/exit/duration, final observed paths and matching scope/protected decision,
+baseline/candidate command digests/exits/timeouts, protected-input states and classifications.
+Verification rows/counts cover only the active attempt. Loop boundaries are recorded totals;
+requested attempts count intents; launches stay null/unknown; elapsed ends before outcome persistence.
+Output identifiers/counts/truncation flags leave retention/content availability unknown; bodies are unread.
+Missing/invalid sections are null with fixed `details.diagnostics`, without affecting CLI exit or the basic outcome; invalid core history stays UNKNOWN.
 
 Supported histories use v1 `attempt_summary` with a journal path/hash and the
 existing unversioned `loop_outcome` fields. The current loop summary must match
@@ -477,6 +495,6 @@ is checked across the pair observation; adversarial ABA isolation is not promise
 Valid supported readable records return exit 0, including recorded fail, blocked,
 stopped, human, and unknown outcomes. Missing/malformed/unsupported/unsafe or
 changed inputs return exit 1 and one JSON line with `recorded_status: "unknown"`.
-Argument syntax errors, including missing `--state-dir`, retain argparse exit 2.
-A recorded pass does not verify the current workspace, prove output authenticity,
-obtain approval, permit a rerun, or authorize merge.
+Syntax errors, including missing `--state-dir`, retain argparse exit 2. A recorded
+pass proves no current workspace/output authenticity and grants no approval,
+rerun permission or merge authority.

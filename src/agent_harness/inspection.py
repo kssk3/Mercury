@@ -7,7 +7,7 @@ import json
 import math
 import os
 import stat
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import cast
 
 _CURRENT_CAP = 1024 * 1024
@@ -250,7 +250,220 @@ def _verification(value: object) -> dict[str, object] | None:
     }
 
 
-def _project(path: Path, current_raw: bytes, journal_raw: bytes) -> dict[str, object]:
+def _detail_process(value: object) -> dict[str, object]:
+    data = _mapping(value)
+    status, code, seconds = (
+        data["process_status"],
+        data["exit_code"],
+        data["duration_seconds"],
+    )
+    _require(type(status) is str)
+    _require(code is None or type(code) is int)
+    _require(
+        (status == "successful_exit" and code == 0)
+        or (status == "nonzero_exit" and code is not None and code != 0)
+        or status == "timeout"
+        or (status == "launch_error" and code is None)
+    )
+    _require(
+        type(seconds) in (int, float)
+        and math.isfinite(cast(float, seconds))
+        and cast(float, seconds) >= 0
+    )
+    return {"process_status": status, "exit_code": code, "duration_seconds": seconds}
+
+
+def _detail_paths(value: object) -> list[str]:
+    _require(isinstance(value, list))
+    paths: list[str] = []
+    for item in cast(list[object], value):
+        text = _text(item)
+        path = PurePosixPath(text)
+        _require(
+            bool(path.parts)
+            and not path.is_absolute()
+            and str(path) == text
+            and all(
+                part not in {".", ".."} and part.casefold() != ".git"
+                for part in path.parts
+            )
+        )
+        paths.append(text)
+    _require(len(paths) == len(set(paths)))
+    return paths
+
+
+def _detail_delta(value: object) -> dict[str, object]:
+    data = _mapping(value)
+    result: dict[str, object] = {
+        key: _detail_paths(data[key]) for key in ("added", "modified", "deleted")
+    }
+    paths = [
+        path
+        for key in ("added", "modified", "deleted")
+        for path in cast(list[str], result[key])
+    ]
+    _require(len(paths) == len(set(paths)))
+    for key in ("head_changed", "index_changed", "status_changed"):
+        _require(type(data[key]) is bool)
+        result[key] = data[key]
+    return result
+
+
+def _detail_scope(value: object) -> dict[str, object]:
+    data = _mapping(value)
+    delta = _detail_delta(data["delta"])
+    outside = _detail_paths(data["out_of_scope_paths"])
+    protected = _detail_paths(data["protected_paths"])
+    changed: set[str] = set().union(
+        *(cast(list[str], delta[key]) for key in ("added", "modified", "deleted"))
+    )
+    _require(not set(outside).intersection(protected))
+    _require(set(outside + protected).issubset(changed))
+    for key in ("proceed", "unexplained_status_change"):
+        _require(type(data[key]) is bool)
+    unexplained = bool(
+        delta["status_changed"]
+        and not (changed or delta["head_changed"] or delta["index_changed"])
+    )
+    _require(data["unexplained_status_change"] == unexplained)
+    _require(
+        data["proceed"]
+        == (
+            not (
+                outside
+                or protected
+                or delta["head_changed"]
+                or delta["index_changed"]
+                or unexplained
+            )
+        )
+    )
+    return {
+        "delta": delta,
+        "proceed": data["proceed"],
+        "out_of_scope_paths": outside,
+        "protected_paths": protected,
+        "unexplained_status_change": unexplained,
+    }
+
+
+def _empty_details() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "process": None,
+        "scope": None,
+        "verification": None,
+        "usage": None,
+        "outputs": None,
+        "diagnostics": ["core_history_unavailable"],
+    }
+
+
+def _details(
+    active: object,
+    relevant: list[dict[str, object]],
+    verification: dict[str, object] | None,
+    outputs: dict[str, object] | None,
+    outcome: dict[str, object],
+    attempt_count: int,
+) -> dict[str, object]:
+    result = _empty_details()
+    diagnostics: list[str] = []
+    observations = [
+        event
+        for event in relevant
+        if event.get("event")
+        in {
+            "turn_observation",
+            "callback_observation",
+            "turn_observation_failed",
+            "callback_observation_failed",
+        }
+    ]
+    observed = observations[-1] if observations else {}
+    try:
+        entry = _mapping(active)
+        process = _detail_process(observed["process"])
+        _require(process == _detail_process(_mapping(entry["observation"])["process"]))
+        result["process"] = process
+    except (_Invalid, KeyError, TypeError, ValueError, OverflowError):
+        diagnostics.append("process_unavailable")
+    try:
+        entry = _mapping(active)
+        kind = observed.get("event")
+        _require(kind in {"turn_observation", "callback_observation"})
+        index = next(i for i, event in enumerate(relevant) if event is observed)
+        decisions = [
+            event
+            for event in relevant[index + 1 :]
+            if event.get("event") in {"scope_decision", "callback_scope_decision"}
+        ]
+        _require(len(decisions) == 1)
+        decision = decisions[0]
+        _require(
+            decision["event"]
+            == (
+                "callback_scope_decision"
+                if kind == "callback_observation"
+                else "scope_decision"
+            )
+        )
+        _require(decision["repository_id"] == entry["repository_id"])
+        scope = _detail_scope(decision)
+        _require(scope == _detail_scope(entry["scope"]))
+        _require(scope["delta"] == _detail_delta(observed["delta"]))
+        result["scope"] = scope
+    except (_Invalid, KeyError, TypeError, ValueError, StopIteration):
+        diagnostics.append("scope_unavailable")
+    if verification is None:
+        diagnostics.append("verification_unavailable")
+    else:
+        result["verification"] = {
+            "coverage": "active_attempt_only",
+            "technical_kind": verification["technical_kind"],
+            "overall_kind": verification["overall_kind"],
+            **{
+                key: [
+                    {field: _mapping(row)[field] for field in fields}
+                    for row in cast(list[object], verification[key])
+                ]
+                for key, fields in (
+                    ("commands", ("command_sha256", "exit_code", "timed_out")),
+                    ("baseline_commands", ("command_sha256", "exit_code", "timed_out")),
+                    ("protected_inputs", ("path_sha256", "state")),
+                )
+            },
+        }
+    result["usage"] = {
+        "loop_command_boundaries": outcome["commands"],
+        "command_boundary_semantics": "recorded_loop_total",
+        "requested_attempt_count": attempt_count,
+        "requested_attempt_semantics": "recorded_turn_intents",
+        "native_launch_count": None,
+        "native_launch_count_status": "unknown",
+        "active_attempt_verification_command_count": None
+        if verification is None
+        else len(cast(list[object], verification["commands"])),
+        "elapsed_seconds": outcome["elapsed_seconds"],
+        "elapsed_boundary": outcome["elapsed_boundary"],
+    }
+    if outputs is None:
+        diagnostics.append("outputs_unavailable")
+    else:
+        result["outputs"] = {
+            "channels": outputs,
+            "bodies_read": False,
+            "retention": "unknown",
+            "content_availability": "unknown",
+        }
+    result["diagnostics"] = diagnostics
+    return result
+
+
+def _project(
+    path: Path, current_raw: bytes, journal_raw: bytes, *, details: bool = False
+) -> dict[str, object]:
     current = _decode(current_raw)
     _require(journal_raw.endswith(b"\n"), "incomplete_history")
     lines = journal_raw.splitlines(keepends=True)
@@ -345,6 +558,7 @@ def _project(path: Path, current_raw: bytes, journal_raw: bytes) -> dict[str, ob
     verification: dict[str, object] | None = None
     outputs: dict[str, object] | None = None
     revision: object = None
+    relevant: list[dict[str, object]] = []
     if not ids:
         _require(active is None and outcome["status"] != "pass")
     else:
@@ -443,7 +657,7 @@ def _project(path: Path, current_raw: bytes, journal_raw: bytes) -> dict[str, ob
             )
         )
         outcome.update(status=wrapper["status"], reason=wrapper["reason"])
-    return {
+    result: dict[str, object] = {
         "schema_version": 1,
         "historical_only": True,
         "current_workspace_verified": False,
@@ -476,9 +690,16 @@ def _project(path: Path, current_raw: bytes, journal_raw: bytes) -> dict[str, ob
         },
         "diagnostics": [],
     }
+    if details:
+        result["details"] = _details(
+            active, relevant, verification, outputs, outcome, len(ids)
+        )
+    return result
 
 
-def summarize_execution(state_directory: Path | str) -> dict[str, object]:
+def summarize_execution(
+    state_directory: Path | str, *, details: bool = False
+) -> dict[str, object]:
     """Return only historical metadata; any unreadable/inconsistent view is UNKNOWN.
 
     This checks supported terminal bindings, not every event's runtime semantics,
@@ -486,14 +707,14 @@ def summarize_execution(state_directory: Path | str) -> dict[str, object]:
     """
     try:
         path, current, journal = _read_pair(state_directory)
-        return _project(path, current, journal)
+        return _project(path, current, journal, details=details)
     except _Invalid as error:
         diagnostic = str(error)
     except FileNotFoundError:
         diagnostic = "missing_input"
     except (OSError, ValueError, TypeError, KeyError, OverflowError, RecursionError):
         diagnostic = "unreadable_or_invalid_history"
-    return {
+    result: dict[str, object] = {
         "schema_version": 1,
         "historical_only": True,
         "current_workspace_verified": False,
@@ -505,3 +726,6 @@ def summarize_execution(state_directory: Path | str) -> dict[str, object]:
         "evidence": None,
         "diagnostics": [diagnostic],
     }
+    if details:
+        result["details"] = _empty_details()
+    return result

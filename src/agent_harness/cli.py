@@ -73,6 +73,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "status", help="summarize historical execution records"
     )
     status_command.add_argument("--state-dir", required=True, metavar="PATH")
+    status_command.add_argument("--details", action="store_true")
     run_command = commands.add_parser(
         "run", help="preview settings or execute one hash-approved task"
     )
@@ -157,7 +158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command == "status":
         from agent_harness.inspection import summarize_execution
 
-        summary = summarize_execution(arguments.state_dir)
+        summary = summarize_execution(arguments.state_dir, details=arguments.details)
         print(json.dumps(summary, separators=(",", ":"), sort_keys=True))
         return 1 if summary["diagnostics"] else 0
 
