@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
-from typing import Any, cast
 
 import pytest
 
@@ -228,19 +228,12 @@ def test_profile_reports_git_inventory_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repository = init(tmp_path / "repository")
-    actual_run = subprocess.run
-
-    def failed_inventory(
-        arguments: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[bytes]:
-        if "ls-files" in arguments:
-            return subprocess.CompletedProcess(arguments, 128, b"", b"failed")
-        return cast(
-            subprocess.CompletedProcess[bytes],
-            actual_run(arguments, **cast(dict[str, Any], kwargs)),
-        )
-
-    monkeypatch.setattr(subprocess, "run", failed_inventory)
+    failed_git = tmp_path / "failed-git"
+    failed_git.write_text(
+        f"#!{sys.executable}\nraise SystemExit(128)\n", encoding="utf-8"
+    )
+    failed_git.chmod(0o755)
+    monkeypatch.setattr(profile_module, "git_executable", lambda: str(failed_git))
 
     with pytest.raises(ValueError, match="Git"):
         profile_module.build_repository_profile(repository)

@@ -17,9 +17,11 @@ Mercury는 사람이 정한 작업·파일 범위·검사 명령에 따라 코�
 
 Mercury는 버전 0.1.0의 단일 에이전트 API·CLI 개발자 프리뷰입니다.
 기능 반영과 검증을 확인한 기준은 **2026-10-21**의
-[main 4184f01d](https://github.com/kssk3/Mercury/commit/4184f01dd9e5c5d24dd8476994f77e4011604de1)입니다.
+[main ec834976](https://github.com/kssk3/Mercury/commit/ec83497690b42bd3aea89bb8ed5e76736cf18da9)입니다.
 [PR #10](https://github.com/kssk3/Mercury/pull/10)으로 Claude 백엔드·명시적 작업 실행
-CLI·JavaScript 예제가 main에 반영됐습니다. 아래 현황은 해당 리비전의 스냅샷이며,
+CLI·JavaScript 예제가, [PR #11](https://github.com/kssk3/Mercury/pull/11)로
+읽기 전용 실행 설정 미리보기와 연결 안내가 main에 반영됐습니다.
+아래 현황은 해당 리비전의 스냅샷이며,
 기능 반영과 기존 자동 CI 성공이 현재 백엔드의 새 실제 모델 실행 성공을 뜻하지는 않습니다.
 
 | 기능 | 현재 상태 | 안내 |
@@ -34,10 +36,11 @@ CLI·JavaScript 예제가 main에 반영됐습니다. 아래 현황은 해당 �
 | 공통 에이전트 계약 1단계 | [PR #8](https://github.com/kssk3/Mercury/pull/8) 반영 완료. `AgentAdapter`·`AgentTurnResult`로 준비·실행·결과 경계를 분리 | [공통 계약](src/agent_harness/agent.py) |
 | 추가 Claude Code 백엔드 | PR #10 반영 완료. 기존 실행 파일 검증·입출력 제한을 재사용하는 어댑터. 모의 계약 검사와 실제 모델 실행 근거는 구분 | [백엔드 책임·제한](docs/quickstart.md#claude-code-backend-boundaries) |
 | 명시적 작업 실행 CLI | PR #10 반영 완료. 깨끗한 Git 저장소·고정 HEAD·보호 검사·외부 상태를 명시한 JSON과 원문 SHA-256 승인을 요구. 한 번 실행하며 자동 재시도하지 않음 | [작업 실행](docs/quickstart.md#execute-an-explicit-task) |
+| 읽기 전용 실행 설정 미리보기 | PR #11 반영 완료. `run --preview`로 실제 설정과 원문 SHA-256을 확인. 승인·검사·에이전트 실행은 수행하지 않음 | [실행 설정 미리보기](docs/run-preview.md) |
 | JavaScript 통합 예제 | PR #10 반영 완료. Node 내장 검사와 별도 일회용 저장소를 사용. 실행·검사 언어를 분리하며 npm 설치 불필요 | [JavaScript 예제](docs/quickstart.md#javascript-integration-example) |
 
-PR #3부터 PR #10까지 Merge됐고 소유한 작업 브랜치도 삭제됐습니다.
-위 main 리비전의 기존 자동 [CI 실행](https://github.com/kssk3/Mercury/actions/runs/39527528702)은
+PR #3부터 PR #11까지 Merge됐고 소유한 작업 브랜치도 삭제됐습니다.
+위 main 리비전의 기존 자동 [CI 실행](https://github.com/kssk3/Mercury/actions/runs/39547958361)은
 성공했습니다. 이 현황은 기존 통과 검사·리뷰와 실제 Merge·CI 완료 기록을 재사용하며,
 현황 정정을 위해 모델 작업이나 CI를 다시 실행하지 않았습니다.
 
@@ -249,7 +252,8 @@ PASS가 성립하지 않습니다. 선택한 검사의 통과가 모든 동작�
 ## 진행 범위와 후속 작업
 
 PR #10에서 백엔드 연결 안내 → Claude 백엔드 → 명시적 작업 실행 CLI →
-JavaScript 통합 예제의 네 범위가 main에 반영됐습니다. 기존 검사·독립 리뷰와
+JavaScript 통합 예제의 네 범위가, PR #11에서 실행 설정 미리보기와 연결 안내가
+main에 반영됐습니다. 기존 검사·독립 리뷰와
 해당 main의 자동 CI 성공 근거를 재사용하며, 과거 실제 모델 실행 근거는 당시
 후보에만 적용합니다. 기능 설명만으로 새 실제 실행의 성공을 추정하지 않습니다.
 
@@ -259,8 +263,9 @@ JavaScript 통합 예제의 네 범위가 main에 반영됐습니다. 기존 검
 | 2 | Claude Code 어댑터 | 공통 계약과 기존 실행 파일·입출력 제한 재사용 |
 | 3 | 명시적 작업 실행 CLI | 승인한 계약·검사·어댑터를 기존 루프에 연결 |
 | 4 | JavaScript 통합 예제 | Python 하네스가 다른 언어의 고정 검사도 운영할 수 있음을 확인 |
+| 5 | 읽기 전용 실행 설정 미리보기 | 실제 설정과 해시를 확인한 뒤 별도로 실행을 승인하도록 안내 |
 
-모델·스킬 비교와 추가 미리보기·런타임 리뷰 통합은 후속 탐색 방향입니다. 비교에는
+모델·스킬 비교와 런타임 리뷰 통합은 후속 탐색 방향입니다. 비교에는
 같은 baseline·검사·예산의 고정 작업과 결과·실패·비용 근거가 필요합니다. 구조화된
 리뷰 후보·지적은 증거와 위치에 연결해야 합니다. 자동 네이티브 세션 복구·런타임 다중
 에이전트 제어는 계속 미지원이며 이번 작업 범위에 포함하지 않습니다.
