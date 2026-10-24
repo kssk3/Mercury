@@ -8,7 +8,10 @@ from pathlib import Path
 import pytest
 
 from agent_harness.contract import TaskContract
+from agent_harness.journal import EventJournal
+from agent_harness.loop import LoopResult
 from agent_harness.policy import VerificationPolicy
+from agent_harness.state import CurrentStateStore
 
 
 def contract(criteria: tuple[str, ...] = ("unit behavior", "lint")) -> TaskContract:
@@ -891,3 +894,68 @@ def test_loop_invalid_stored_evidence_never_passes(
         event.get("overall_kind") == "pass" or event.get("status") == "pass"
         for event in journal.read()
     )
+
+
+def _review_bound_loop(
+    tmp_path: Path, *, mutate: bool = False
+) -> tuple[Path, EventJournal, CurrentStateStore, LoopResult]:
+    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.admission import record_admission
+    from agent_harness.context import ContextPacket
+    from agent_harness.loop import run_loop
+    from agent_harness.retry import RetryLimits
+
+    root = _repository(tmp_path)
+    executable = _native_fixture(
+        tmp_path, root, tmp_path / "native-launches", "pass", 0
+    )
+    action = "Path('value').write_text('mutated') if value == 'new' else None; "
+    command = (
+        sys.executable,
+        "-c",
+        "from pathlib import Path; value=Path('value').read_text(); "
+        + (action if mutate else "")
+        + "assert value == 'new'",
+    )
+    task = TaskContract("change value", ("value",), (), ("new value",))
+    journal = EventJournal(tmp_path / "state")
+    store = CurrentStateStore(tmp_path / "state")
+    result = run_loop(
+        CodexCLIAdapter(executable),
+        task,
+        record_admission(task, approver="human", approved_at="2026-10-24T00:00:00Z"),
+        ContextPacket(str(root), 4096, ()),
+        policy=VerificationPolicy((command,), ".", 2),
+        criterion_commands={"new value": (command,)},
+        journal=journal,
+        state_store=store,
+        budgets=TurnBudgets(2, 16000, 128, 128, 128),
+        limits=RetryLimits(0, 2, 7, 50),
+        redactor=lambda text: text,
+        max_output_bytes=128,
+    )
+    return root, journal, store, result
+
+
+def test_loop_records_review_binding_for_final_candidate(tmp_path: Path) -> None:
+    from agent_harness.review_evidence import candidate_sha256, read_review_binding
+    from agent_harness.turn import RepositoryObservation
+
+    root, journal, _, result = _review_bound_loop(tmp_path)
+    assert result.status == "pass"
+    terminal = next(
+        event for event in journal.read() if event["event"] == "attempt_verification"
+    )
+    assert "review_binding" in terminal
+    binding = read_review_binding(terminal, terminal["review_binding"])
+    assert binding.attempt_id == result.attempt_ids[-1]
+    assert binding.candidate_sha256 == candidate_sha256(
+        RepositoryObservation.capture(root)
+    )
+
+
+def test_loop_review_binding_rejects_verification_mutation(tmp_path: Path) -> None:
+    _, journal, _, result = _review_bound_loop(tmp_path, mutate=True)
+    assert result.status == "blocked"
+    assert result.reason == "verification_workspace_changed"
+    assert not any("review_binding" in event for event in journal.read())

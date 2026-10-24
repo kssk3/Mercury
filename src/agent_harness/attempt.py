@@ -14,6 +14,7 @@ from agent_harness.adapter import TurnBudgets
 from agent_harness.evidence import EvidenceReport
 from agent_harness.journal import EventJournal
 from agent_harness.repository import read_persistence_bytes, resolve_repository_root
+from agent_harness.review_evidence import build_review_evidence, read_review_binding
 from agent_harness.runner import CommandResult
 from agent_harness.scope import _digest, _valid_path, _validate_observation
 from agent_harness.state import CurrentStateStore
@@ -261,12 +262,18 @@ class AttemptJournal:
         return tuple(attempts.values())
 
     def record_verification(
-        self, attempt_id: str, report: EvidenceReport, *, refresh: bool = False
+        self,
+        attempt_id: str,
+        report: EvidenceReport,
+        *,
+        refresh: bool = False,
+        final_observation: RepositoryObservation | None = None,
+        verification_sha256: str | None = None,
     ) -> dict[str, object]:
         """Append before optional refresh; supplied evidence is not authenticated.
 
-        Identity binds the report root/revision to observed after HEAD, without
-        proving a current dirty-worktree or completion-criterion match.
+        A final observation binds recorded content; it does not authenticate
+        caller-supplied evidence or verify the current mutable workspace.
         """
         if not isinstance(report, EvidenceReport) or type(refresh) is not bool:
             raise AttemptJournalError("invalid_verification", False)
@@ -293,7 +300,7 @@ class AttemptJournal:
         try:
             event: dict[str, object] = {
                 "event": "attempt_verification",
-                "schema_version": 1,
+                "schema_version": 1 if final_observation is None else 2,
                 "attempt_id": attempt_id,
                 "repository_root": str(self.root),
                 "repository_id": entry["repository_id"],
@@ -325,6 +332,14 @@ class AttemptJournal:
                 ],
                 "output_identifiers": _output_identifiers(entry["outputs"]),
             }
+            if final_observation is not None:
+                if verification_sha256 is None:
+                    raise ValueError("missing_verification_identity")
+                event["review_binding"] = build_review_evidence(
+                    event, final_observation, verification_sha256
+                )
+            elif verification_sha256 is not None:
+                raise ValueError("missing_final_observation")
             _verification(event, entry)
         except (TypeError, ValueError, AttributeError, UnicodeError):
             raise AttemptJournalError("invalid_verification", False) from None
@@ -588,7 +603,7 @@ def _output_identifiers(value: object) -> dict[str, object] | None:
 def _verification(
     event: dict[str, object], entry: dict[str, object]
 ) -> dict[str, object]:
-    _require(type(event["schema_version"]) is int and event["schema_version"] == 1)
+    _require(type(event["schema_version"]) is int and event["schema_version"] in {1, 2})
     for key in (
         "attempt_id",
         "repository_root",
@@ -629,7 +644,7 @@ def _verification(
         and all(_digest(item) for item in cast(list[object], reasons))
     )
     _require(event["output_identifiers"] == _output_identifiers(entry["outputs"]))
-    return {
+    projected = {
         **{
             key: event[key]
             for key in (
@@ -652,3 +667,9 @@ def _verification(
         "protected_inputs": protected,
         "output_identifiers": _output_identifiers(entry["outputs"]),
     }
+    if event["schema_version"] == 2:
+        read_review_binding(projected, event["review_binding"])
+        projected["review_binding"] = event["review_binding"]
+    else:
+        _require("review_binding" not in event)
+    return projected
