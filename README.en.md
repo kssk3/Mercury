@@ -10,8 +10,14 @@ Mercury is a local Python tool that observes code changes and collects check
 results for a task, file scope, and commands chosen by a person. It provides
 evidence for that person's review. You can run an offline simulator or an
 explicitly approved [real Codex example in a disposable repository](docs/codex-quickstart.md).
-Connecting an arbitrary user repository still requires developer-written Python
-caller integration.
+For another repository, use an explicit hash-approved
+[run configuration](docs/quickstart.md#execute-an-explicit-task) or compose the
+Python APIs. Mercury does not discover the task or choose meaningful checks.
+
+The product snapshot is
+[main f6343844](https://github.com/kssk3/Mercury/commit/f63438440f77c3eca177399bc5c7d0bcbd985a5d).
+See the [roadmap](docs/project/ROADMAP.md) for delivery states and the
+[architecture map](docs/project/ARCHITECTURE.md) for current module ownership.
 
 ## What problem does it help with?
 
@@ -68,7 +74,7 @@ You need macOS, Git, and Python 3.12 or newer. The commands below use the
 Downloading the repository and installing the package may need internet access;
 running the simulator itself is offline.
 
-### 1. Get the preview branch
+### 1. Get main
 
 Run this from an empty working location. It explicitly selects the branch
 containing the example.
@@ -186,7 +192,8 @@ Preview only validates strings and prints the four-field contract. It does not
 inspect or modify a repository, create admission/state/lock/baseline records,
 or invoke Git, agents, models, network calls, or verification commands. A valid
 preview is neither human approval nor evidence that a criterion passed.
-Arbitrary-repository execution still requires Python caller integration.
+Execution requires separate explicit approval through the
+[run configuration](docs/quickstart.md#execute-an-explicit-task) or a Python caller.
 
 
 ## Limits to understand
@@ -204,15 +211,12 @@ multi-agent orchestration, and messenger control are not currently supported.
 
 ## Directions to explore
 
-These are proposed directions, with no promise of implementation, approved work,
-or release dates. Each needs its own scope; integrations also need decisions on
-providers and execution environments.
-
-- Easier first-use entry points and real-repository integration examples
-- Model/skill comparisons on fixed tasks with the same baseline, checks, and
-  budgets, recording outcomes, failures, and costs
-- Structured review-candidate/finding artifacts that link evidence and locations
-- Optional read-only review and preview/runtime verification integrations
+The [roadmap](docs/project/ROADMAP.md#proposed-next-product-outcomes) owns the
+current proposed sequence and distinguishes delivered, local and held work.
+The next product proposal links actual execution/candidate/evidence to the
+existing pure review-result contract. It is not implemented runtime enforcement.
+Comparisons and additional integrations remain separately scoped proposals,
+without approved work, execution allowance or release dates.
 
 ## Contributing and license
 

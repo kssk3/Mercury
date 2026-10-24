@@ -16,10 +16,12 @@ Mercury는 사람이 정한 작업·파일 범위·검사 명령에 따라 코�
 ## 현재 프로젝트 상태
 
 Mercury는 버전 0.1.0의 단일 에이전트 API·CLI 개발자 프리뷰입니다.
-기능 반영과 검증을 확인한 기준은 **2026-10-21**의
-[main 4184f01d](https://github.com/kssk3/Mercury/commit/4184f01dd9e5c5d24dd8476994f77e4011604de1)입니다.
+기능 반영과 검증을 확인한 기준은 **2026-10-23**의
+[main f6343844](https://github.com/kssk3/Mercury/commit/f63438440f77c3eca177399bc5c7d0bcbd985a5d)입니다.
 [PR #10](https://github.com/kssk3/Mercury/pull/10)으로 Claude 백엔드·명시적 작업 실행
-CLI·JavaScript 예제가 main에 반영됐습니다. 아래 현황은 해당 리비전의 스냅샷이며,
+CLI·JavaScript 예제가 반영됐고, [PR #11](https://github.com/kssk3/Mercury/pull/11)의
+읽기 전용 실행 설정 미리보기와 [PR #13](https://github.com/kssk3/Mercury/pull/13)의
+리뷰 결과 계약도 main에 반영됐습니다. 아래 현황은 해당 리비전의 스냅샷이며,
 기능 반영과 기존 자동 CI 성공이 현재 백엔드의 새 실제 모델 실행 성공을 뜻하지는 않습니다.
 
 | 기능 | 현재 상태 | 안내 |
@@ -34,10 +36,13 @@ CLI·JavaScript 예제가 main에 반영됐습니다. 아래 현황은 해당 �
 | 공통 에이전트 계약 1단계 | [PR #8](https://github.com/kssk3/Mercury/pull/8) 반영 완료. `AgentAdapter`·`AgentTurnResult`로 준비·실행·결과 경계를 분리 | [공통 계약](src/agent_harness/agent.py) |
 | 추가 Claude Code 백엔드 | PR #10 반영 완료. 기존 실행 파일 검증·입출력 제한을 재사용하는 어댑터. 모의 계약 검사와 실제 모델 실행 근거는 구분 | [백엔드 책임·제한](docs/quickstart.md#claude-code-backend-boundaries) |
 | 명시적 작업 실행 CLI | PR #10 반영 완료. 깨끗한 Git 저장소·고정 HEAD·보호 검사·외부 상태를 명시한 JSON과 원문 SHA-256 승인을 요구. 한 번 실행하며 자동 재시도하지 않음 | [작업 실행](docs/quickstart.md#execute-an-explicit-task) |
+| 읽기 전용 실행 설정 미리보기 | PR #11 반영 완료. `run --preview`로 설정·해시·예산을 확인하며 상태 생성·검사·에이전트 실행은 하지 않음 | [실행 전 미리보기](docs/run-preview.md) |
 | JavaScript 통합 예제 | PR #10 반영 완료. Node 내장 검사와 별도 일회용 저장소를 사용. 실행·검사 언어를 분리하며 npm 설치 불필요 | [JavaScript 예제](docs/quickstart.md#javascript-integration-example) |
+| 리뷰 결과 계약 | PR #13 반영 완료. 같은 작업·후보·검증 근거에 대한 리뷰 기록을 검증하고 기술 결과와 리뷰 결과를 분리하는 Python API. 이 API의 실행 루프·CLI·GitHub 자동 연결은 아직 없음 | [리뷰 결과 계약](docs/review-contract.md) |
 
-PR #3부터 PR #10까지 Merge됐고 소유한 작업 브랜치도 삭제됐습니다.
-위 main 리비전의 기존 자동 [CI 실행](https://github.com/kssk3/Mercury/actions/runs/39527528702)은
+PR #3부터 PR #11까지와 PR #13은 Merge됐고 해당 소유 작업 브랜치도 삭제됐습니다.
+[PR #12](https://github.com/kssk3/Mercury/pull/12)는 보류 상태로, 위 완료 범위에 포함되지 않습니다.
+위 main 리비전의 기존 자동 [CI 실행](https://github.com/kssk3/Mercury/actions/runs/39924711186)은
 성공했습니다. 이 현황은 기존 통과 검사·리뷰와 실제 Merge·CI 완료 기록을 재사용하며,
 현황 정정을 위해 모델 작업이나 CI를 다시 실행하지 않았습니다.
 
@@ -247,6 +252,10 @@ PASS가 성립하지 않습니다. 선택한 검사의 통과가 모든 동작�
 자동 네이티브 세션 복구·런타임 다중 에이전트 제어·메신저 제어는 현재 지원하지 않습니다.
 
 ## 진행 범위와 후속 작업
+
+완료·로컬·보류·예정 상태와 다음 제품 목표는 [로드맵](docs/project/ROADMAP.md),
+현재 모듈의 책임과 실행·저장·조회 경계는 [아키텍처](docs/project/ARCHITECTURE.md)에
+정리했습니다. 두 문서는 기능 현황과 구조를 설명하며 추가 실행·게시 권한을 부여하지 않습니다.
 
 PR #10에서 백엔드 연결 안내 → Claude 백엔드 → 명시적 작업 실행 CLI →
 JavaScript 통합 예제의 네 범위가 main에 반영됐습니다. 기존 검사·독립 리뷰와
