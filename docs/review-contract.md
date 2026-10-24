@@ -2,9 +2,11 @@
 
 `agent_harness.review` provides frozen review records and the pure
 `assess_review(report, expected, receipt)` function. It is a Python API foundation.
-It is not integrated into the run loop, CLI or GitHub and does not automatically
-enforce a review gate. The existing [project workflow](project/WORKFLOW.md)
-continues to govern the actual development lifecycle.
+The loop records candidate/evidence identities through
+`agent_harness.review_evidence`; historical inspection can present that binding.
+Receipt assessment is not automatically enforced by the loop, CLI or GitHub.
+The existing [project workflow](project/WORKFLOW.md) continues to govern the
+actual development lifecycle.
 
 ## Trusted caller responsibilities
 
@@ -26,6 +28,54 @@ The module validates record shape and compares identities. It does not compute
 digests, read report/evidence/approval references, authenticate claims or execute
 their contents. It performs no filesystem resolution, preparation, process,
 model or network calls, retries, persistence or finding-management workflow.
+
+## Execution-produced binding
+
+The bounded loop reuses the repository observations immediately before and after
+its final verification phase. If they differ, it retains the existing blocked
+outcome and does not record a final binding. A version-2 attempt verification
+event stores a version-1 review-evidence record alongside the existing safe
+command/protected-input/output metadata. Direct callers that omit final
+observation inputs retain the legacy version-1 event contract.
+
+The review-evidence record contains the observed candidate, the existing loop
+verification identity, and a serialized `ReviewBinding`. Candidate SHA-256 covers
+canonical sorted observed paths, file kinds, content hashes and permissions,
+HEAD, index identity, status and symbolic HEAD identity. It includes tracked and
+observed nonignored untracked content, including deletions; it does not expand
+observation to all ignored files or Git internals. The contract hash remains the
+hash of the admitted `TaskContract.to_json()` bytes.
+
+Evidence SHA-256 covers that candidate identity and safe attempt verification
+metadata: baseline/final command identities and process results, protected-input
+facts, output identifiers and the loop verification identity. The latter binds
+the existing admitted policy, executable selections, criterion mapping and loop
+inputs. Raw command output is not added to these records. The deterministic
+JSON encoding uses sorted keys, compact separators and an explicit version;
+neither its resulting digest nor a later receipt is an input to its own hash.
+
+`read_review_binding(verification, record)` recomputes and compares the stored
+identities without resolving the current repository or opening output/report
+references. Supply its returned binding, the trusted matching `EvidenceReport`
+and an actual receipt to the unchanged `assess_review` API. Equality checks are
+not authentication: a party able to replace every record can forge consistent
+hashes. Direct producers still own actual final-phase provenance and admission.
+
+Inspection exposes only a recorded binding after a consistent terminal PASS,
+including the CLI wrapper's required post-release finalization. Legacy histories
+retain their original technical outcome and report review binding unavailable;
+missing or inconsistent version-2 binding records remain UNKNOWN. A wrapper
+release/finalization failure withholds the binding rather than promoting UNKNOWN
+to PASS. A successfully stored intermediate event alone is not a completed run.
+
+Verification-only continuation records a binding only after its actual final
+phase; it does not prepare or invoke an adapter again. Interrupted histories and
+recovery evidence keep their existing handling. Historical binding output never
+claims current workspace verification. A new admitted snapshot, attempt,
+contract or verification evidence requires its own matching binding. Review
+independence, report authenticity, finding dispositions and human approval remain
+the caller responsibilities above. No reviewer launch or execution/merge
+authority is added.
 
 ## Records and validation
 

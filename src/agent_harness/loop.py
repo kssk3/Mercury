@@ -764,7 +764,8 @@ def _run_loop(
                         decide_technical_outcome(profile),
                         checks(),
                     )
-                    if verification_before != RepositoryObservation.capture(root):
+                    verification_after = RepositoryObservation.capture(root)
+                    if verification_before != verification_after:
                         return finish("blocked", "verification_workspace_changed")
                     if monotonic() - started > limits.max_seconds:
                         return finish("stopped", "time_budget")
@@ -773,7 +774,15 @@ def _run_loop(
                         or phase == "final"
                     ):
                         guard_persistence()
-                        attempts.record_verification(active_id, report, refresh=True)
+                        attempts.record_verification(
+                            active_id,
+                            report,
+                            refresh=True,
+                            final_observation=verification_after
+                            if phase == "final"
+                            else None,
+                            verification_sha256=binding if phase == "final" else None,
+                        )
                         if monotonic() - started > limits.max_seconds:
                             return finish("stopped", "time_budget")
                         state = advance(

@@ -1218,3 +1218,54 @@ def test_refresh_rejects_replaced_raw_history(
     assert not raised.value.journal_recorded
     assert store.path.read_bytes() == original_state
     assert target.read_bytes() == b'{"event":"legacy"}\n'
+
+
+def test_attempt_review_binding_round_trip(tmp_path: Path) -> None:
+    from test_loop import _review_bound_loop
+
+    from agent_harness.review_evidence import read_review_binding
+
+    root, journal, store, result = _review_bound_loop(tmp_path)
+    assert result.status == "pass"
+    entries = api(root, journal, store).read()
+    verification = entries[-1]["verification"]
+    binding = read_review_binding(verification, verification["review_binding"])
+    assert binding.attempt_id == result.attempt_ids[-1]
+    assert (
+        cast(Any, store.read())["attempt_summary"]["active_attempt"]["verification"]
+        == verification
+    )
+
+
+def test_attempt_review_binding_rejects_inconsistent_record(tmp_path: Path) -> None:
+    from test_loop import _review_bound_loop
+
+    from agent_harness.attempt import AttemptJournalError
+
+    root, journal, store, result = _review_bound_loop(tmp_path)
+    assert result.status == "pass"
+    events = journal.read()
+    verification = next(e for e in events if e["event"] == "attempt_verification")
+    recorded = cast(dict[str, Any], verification["review_binding"])
+    recorded["binding"]["candidate_sha256"] = "f" * 64
+    journal.path.write_text("".join(json.dumps(event) + "\n" for event in events))
+    before = journal.path.read_bytes(), store.path.read_bytes()
+    with pytest.raises(AttemptJournalError):
+        api(root, journal, store).read()
+    assert before == (journal.path.read_bytes(), store.path.read_bytes())
+
+
+def test_attempt_legacy_verification_has_no_review_binding(
+    repository: Path, tmp_path: Path, complete_events: list[dict[str, Any]]
+) -> None:
+    journal = EventJournal(tmp_path / "state")
+    store = CurrentStateStore(tmp_path / "state")
+    write_events(journal, complete_events)
+    attempts = api(repository, journal, store)
+    event = attempts.record_verification(
+        complete_events[0]["attempt_id"],
+        report(repository, RepositoryObservation.capture(repository).head),
+        refresh=True,
+    )
+    assert event["schema_version"] == 1
+    assert "review_binding" not in attempts.read()[-1]["verification"]

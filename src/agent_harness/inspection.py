@@ -7,8 +7,11 @@ import json
 import math
 import os
 import stat
+from dataclasses import asdict
 from pathlib import Path
 from typing import cast
+
+from agent_harness.review_evidence import read_review_binding
 
 _CURRENT_CAP = 1024 * 1024
 _JOURNAL_CAP = 8 * 1024 * 1024
@@ -196,7 +199,7 @@ def _verification(value: object) -> dict[str, object] | None:
     if value is None:
         return None
     data = _mapping(value)
-    _require(type(data["schema_version"]) is int and data["schema_version"] == 1)
+    _require(type(data["schema_version"]) is int and data["schema_version"] in {1, 2})
     _require(data["event"] == "attempt_verification")
     for key in _IDENTITY:
         _text(data[key])
@@ -232,7 +235,7 @@ def _verification(value: object) -> dict[str, object] | None:
         data["overall_kind"]
         == ("fail" if protected_changed else data["technical_kind"])
     )
-    return {
+    projected = {
         key: data[key]
         for key in (
             *_IDENTITY,
@@ -248,6 +251,12 @@ def _verification(value: object) -> dict[str, object] | None:
             "output_identifiers",
         )
     }
+    if data["schema_version"] == 2:
+        read_review_binding(projected, data["review_binding"])
+        projected["review_binding"] = data["review_binding"]
+    else:
+        _require("review_binding" not in data)
+    return projected
 
 
 def _project(path: Path, current_raw: bytes, journal_raw: bytes) -> dict[str, object]:
@@ -443,6 +452,15 @@ def _project(path: Path, current_raw: bytes, journal_raw: bytes) -> dict[str, ob
             )
         )
         outcome.update(status=wrapper["status"], reason=wrapper["reason"])
+    review_binding = None
+    if (
+        outcome["status"] == "pass"
+        and verification is not None
+        and verification["schema_version"] == 2
+    ):
+        review_binding = asdict(
+            read_review_binding(verification, verification["review_binding"])
+        )
     return {
         "schema_version": 1,
         "historical_only": True,
@@ -451,6 +469,10 @@ def _project(path: Path, current_raw: bytes, journal_raw: bytes) -> dict[str, ob
         "recorded_reason": outcome["reason"],
         "attempt_ids": ids,
         "target_revision": revision,
+        "review_binding": review_binding,
+        "review_binding_status": "recorded"
+        if review_binding is not None
+        else "unavailable",
         "verification": None
         if verification is None
         else {
@@ -501,6 +523,8 @@ def summarize_execution(state_directory: Path | str) -> dict[str, object]:
         "recorded_reason": None,
         "attempt_ids": [],
         "target_revision": None,
+        "review_binding": None,
+        "review_binding_status": "unavailable",
         "verification": None,
         "evidence": None,
         "diagnostics": [diagnostic],

@@ -223,6 +223,23 @@ def build_completed_loop(
     )
 
 
+def regenerate_fixture_review_bindings(events: list[dict[str, object]]) -> None:
+    """Construct fixture-owned facts; never repair reader/negative-test inputs."""
+    from agent_harness.attempt import _observation
+    from agent_harness.review_evidence import build_review_evidence
+
+    for event in events:
+        if event.get("event") != "attempt_verification":
+            continue
+        if event["schema_version"] == 2:
+            record = cast(dict[str, object], event["review_binding"])
+            event["review_binding"] = build_review_evidence(
+                event,
+                _observation(record["candidate"]),
+                cast(str, record["verification_sha256"]),
+            )
+
+
 @pytest.fixture(scope="module")
 def loop_seeds() -> dict[object, tuple[Path, bytes, bytes, str]]:
     # Only serialized records are reused; mutable repositories belong to each test.
@@ -236,6 +253,8 @@ def completed_loop(
     request: pytest.FixtureRequest,
     loop_seeds: dict[object, tuple[Path, bytes, bytes, str]],
 ) -> tuple[Path, EventJournal, CurrentStateStore, str]:
+    from agent_harness.review_evidence import read_review_binding
+
     mode = getattr(request, "param", False)
     real_producer_tests = {
         "test_actual_h6_pass_prefix_is_completed_read_only",
@@ -274,7 +293,15 @@ def completed_loop(
             .replace(old_id, new_id)
         )
 
+    for line in raw_events.splitlines():
+        source = json.loads(line)
+        if (
+            source.get("event") == "attempt_verification"
+            and source["schema_version"] == 2
+        ):
+            read_review_binding(source, source["review_binding"])
     events = [rebind(line) for line in raw_events.splitlines()]
+    regenerate_fixture_review_bindings(events)
     journal, store = (
         EventJournal(tmp_path / "external"),
         CurrentStateStore(tmp_path / "external"),
@@ -929,7 +956,7 @@ def test_startup_protected_history_without_live_proof_is_interrupted(
         target = protected
     target.write_text("original")
     (root / ".git/info/exclude").write_text("protected\n")
-    # Valid legacy verification records retain only historical protected path hashes.
+    # Extend fixture-owned facts; later invalid mutations remain reader inputs.
     events = journal.read()
     for event in events:
         if event.get("event") == "attempt_verification":
@@ -939,6 +966,7 @@ def test_startup_protected_history_without_live_proof_is_interrupted(
                     "state": "unchanged",
                 }
             ]
+    regenerate_fixture_review_bindings(events)
     rewrite_runtime_events(completed_loop, events)
     if change == "content":
         target.write_text("changed")
@@ -975,3 +1003,42 @@ def test_startup_rejects_hardlinked_persistence(
     assert decision.status == "unknown"
     assert decision.diagnostics == ("inputs_unreadable_or_invalid",)
     assert target.read_bytes() == contents == leaf.read_bytes()
+
+
+def test_cloned_fixture_regenerates_review_binding_without_changing_seed(
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    request: pytest.FixtureRequest,
+) -> None:
+    from agent_harness.review_evidence import read_review_binding
+
+    seeds: dict[object, tuple[Path, bytes, bytes, str]] = {}
+    fixture = cast(Any, completed_loop).__wrapped__(
+        tmp_path, tmp_path_factory, request, seeds
+    )
+    root, journal, _, _ = fixture
+    seed_root, raw_events, raw_state, _ = seeds[False]
+    source_journal = seed_root.parent / "external" / "events.jsonl"
+    source_state = source_journal.with_name("current.json")
+    before = source_journal.read_bytes(), source_state.read_bytes()
+    assert before == (raw_events, raw_state)
+    assert inspect_loop(fixture).status == "completed"
+    verification = next(
+        event for event in journal.read() if event["event"] == "attempt_verification"
+    )
+    binding = read_review_binding(verification, verification["review_binding"])
+    assert binding.repository_root == str(root)
+    seed_verification = next(
+        event
+        for event in (json.loads(line) for line in raw_events.splitlines())
+        if event["event"] == "attempt_verification"
+    )
+    seed_binding = read_review_binding(
+        seed_verification, seed_verification["review_binding"]
+    )
+    assert binding.candidate_sha256 != seed_binding.candidate_sha256
+    record = cast(dict[str, Any], verification["review_binding"])
+    record["candidate"]["files"][0]["sha256"] = "f" * 64
+    with pytest.raises(ValueError, match="review_binding_mismatch"):
+        read_review_binding(verification, record)
+    assert before == (source_journal.read_bytes(), source_state.read_bytes())
