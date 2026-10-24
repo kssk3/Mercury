@@ -5,19 +5,31 @@ Licensed under the [MIT License](../LICENSE).
 The first example demonstrates API composition with a **simulated Codex
 adapter**. It performs no native-agent, model, or network invocation.
 
-Feature delivery was verified on 2026-10-21 at
-[main `4184f01d`](https://github.com/kssk3/Mercury/commit/4184f01dd9e5c5d24dd8476994f77e4011604de1),
+Feature delivery was verified on 2026-10-23 at
+[main `f6343844`](https://github.com/kssk3/Mercury/commit/f63438440f77c3eca177399bc5c7d0bcbd985a5d),
 including the bounded user-repository example in
 [PR #7](https://github.com/kssk3/Mercury/pull/7) and the common agent contract in
 [PR #8](https://github.com/kssk3/Mercury/pull/8), followed by documentation in
 [PR #9](https://github.com/kssk3/Mercury/pull/9).
 [PR #10](https://github.com/kssk3/Mercury/pull/10) delivered the backend connection
 guide, Claude adapter, explicit task execution CLI and JavaScript example below.
-The owned work branches were deleted, and this revision's existing automatic
-[main CI](https://github.com/kssk3/Mercury/actions/runs/39527528702) passed.
+[PR #11](https://github.com/kssk3/Mercury/pull/11) added the read-only
+[`run --preview` guide](run-preview.md) for inspecting settings before approval.
+[PR #13](https://github.com/kssk3/Mercury/pull/13) added the
+[review receipt contract](review-contract.md): frozen records and a pure Python
+assessment API that keeps technical verification and review clearance separate.
+That API is not integrated into the run loop, CLI or GitHub enforcement.
+[PR #12](https://github.com/kssk3/Mercury/pull/12) remains on hold and is not part
+of this delivery snapshot. Owned branches for the completed PRs were deleted,
+and this revision's existing automatic
+[main CI](https://github.com/kssk3/Mercury/actions/runs/39924711186) passed.
 This is a revision-specific delivery snapshot using existing check, review and
 merge evidence. It does not establish a fresh live model run of the current
 backends; historical live evidence applies to its recorded candidate.
+
+See the [roadmap](project/ROADMAP.md) for delivered/local/held/planned outcomes and
+the [architecture map](project/ARCHITECTURE.md) for module and evidence-consumer
+ownership. [WORKFLOW](project/WORKFLOW.md) remains the sole lifecycle authority.
 
 ## Install and run
 
