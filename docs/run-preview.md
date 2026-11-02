@@ -11,7 +11,8 @@ The command prints one JSON object. It includes the configuration's absolute
 path and SHA256 of the exact bytes read, repository, configured `expected_head`,
 backend, executable, state root, contract, verifier commands and working
 directory, criterion mapping, context paths, byte/time budgets, total timeout,
-and fixed one-turn/no-retry limits. It always reports `approval_required: true`
+and effective turn/retry/command limits. Configurations without `retry` retain
+one turn and zero retries. It always reports `approval_required: true`
 and `execution_performed: false`. `expected_head` is the requested baseline, not
 an observation of the current HEAD. No success or authentication claim is made.
 
@@ -46,6 +47,48 @@ repository files, executable targets and external settings remain mutable. Path
 checks and snapshots are point-in-time observations, not an OS sandbox or
 protection against concurrent changes. The Claude adapter's configured USD 0.25
 CLI cap is not measured billing or a guaranteed invoice maximum.
+
+## Explicit bounded retries
+
+Retries are opt-in within the existing schema version 1. Omit `retry` to preserve
+one turn, zero retries and the existing preview shape. To authorize at most one
+retry, add this exact object to the configuration before preview and approval:
+
+```json
+"retry": {"max_retries": 1, "max_same_failure": 2}
+```
+
+Both fields are required integers: `max_retries` is 0 through 3 and
+`max_same_failure` is 1 through `max_retries + 1`. Booleans, fractions, extra
+fields and other values are rejected. A repetition limit of 1 deliberately stops
+at the first failure; use 2 to permit a retry after the first matching failure.
+The opt-in preview includes `max_same_failure` alongside effective `max_retries`,
+`max_turns` and `max_commands`; per-turn budgets and total timeout remain visible.
+Changing these bytes invalidates the old approval digest. No new CLI flag is
+needed, and an allowed retry count is a ceiling, not a guarantee of another turn.
+
+For `T = max_retries + 1` and `C` verification commands, command reservation is
+`T + (2*T + 1)*C`: one original baseline plus development and distinct final
+checks for each admitted turn, and one native boundary per turn. This is a
+conservative upper bound; failed development checks can skip final checks.
+Required aggregate seconds are
+`T*(native_timeout + 2) + (2*T + 1)*C*(checker_timeout + 2) + 5`.
+Insufficient total budget is rejected before launch. The existing 120-second
+native and 240-second total caps remain; retries never expand them implicitly.
+For example, one retry, one checker, a 30-second native timeout, a 2-second
+checker timeout and a 90-second total allowance fit the required 89 seconds.
+The 90-second native timeout in the one-shot example below does not fit one
+retry within its existing 120-second total; reduce per-turn timeouts or choose
+an explicitly reviewed total within the cap.
+
+Execution reuses the existing loop, admission, config revalidation, original
+baseline, checker argv, protected inputs, scope observation and saved history.
+Only policy-permitted observed failures receive bounded
+[retry feedback](retry-feedback.md) on the next turn. Pre-existing or unknown
+failures, unsafe scope/protected-input changes, uncertain outcomes, repeated
+failures and exhausted budgets still stop or escalate. Passing requires both
+development verification and a separate final verification. Preview remains
+read-only, and execution still requires separate authorization of exact bytes.
 
 ## A small JavaScript repository onboarding recipe
 

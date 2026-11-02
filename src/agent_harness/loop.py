@@ -6,12 +6,12 @@ import hashlib
 import json
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import cast
 
 from agent_harness.admission import AdmissionRecord
 from agent_harness.agent import AgentAdapter, AgentTurnResult, TurnBudgets
-from agent_harness.attempt import AttemptJournal, _observation
+from agent_harness.attempt import AttemptJournal, _command_digest, _observation
 from agent_harness.baseline import VerificationBaseline
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract
@@ -48,7 +48,7 @@ from agent_harness.native_output import (
 from agent_harness.output import OutputStore, StoredOutput
 from agent_harness.policy import VerificationPolicy
 from agent_harness.repository import read_persistence_bytes
-from agent_harness.retry import RetryLimits, RetryUsage
+from agent_harness.retry import RetryFeedback, RetryLimits, RetryUsage
 from agent_harness.runner import (
     CommandResult,
     ControlledCommandRunner,
@@ -161,7 +161,10 @@ def run_loop(
     checkpoint_verification: bool = False,
     wall_clock: Callable[[], float] = time.time,
 ) -> LoopResult:
-    """Run a fresh task; optional checkpoints enable explicit continuation."""
+    """Run a fresh task; permitted retries receive bounded observed failure facts.
+
+    Optional checkpoints enable explicit verification-only continuation.
+    """
     return _run_loop(
         adapter,
         contract,
@@ -297,6 +300,8 @@ def _run_loop(
         policy = VerificationPolicy(
             policy.commands, policy.working_directory, policy.timeout_seconds
         )
+        if context.retry_feedback is not None:
+            return finish("blocked", "invalid_input")
         context = ContextPacket(
             context.repository_root, context.budget_bytes, context.sources
         )
@@ -348,7 +353,7 @@ def _run_loop(
                 [
                     asdict(contract),
                     asdict(admission),
-                    asdict(context),
+                    json.loads(context.to_json()),
                     asdict(policy),
                     asdict(verification_executables),
                     [asdict(item) for item in bindings],
@@ -645,6 +650,7 @@ def _run_loop(
                 restore_results(resumed["baseline"], policy.commands)
             )
             guard_protected()
+        turn_context = context
         while True:
             guard_persistence()
             if resumed is None:
@@ -669,7 +675,7 @@ def _run_loop(
                     adapter,
                     contract,
                     admission,
-                    context,
+                    turn_context,
                     journal=journal,
                     budgets=budgets,
                     redactor=redactor,
@@ -807,6 +813,38 @@ def _run_loop(
             escalation = assess_failure()
             if checkpoint_verification or escalation.action != "retry":
                 return finish("human", escalation.reason)
+            # Only a permitted retry receives facts from its actual predecessor.
+            # Keep the original sources, baseline, checks and aggregate budgets.
+            assessment = history[-1]
+            failed_commands = {
+                finding.command_sha256
+                for finding in assessment.findings
+                if finding.command_sha256 is not None
+            }
+            try:
+                turn_context = replace(
+                    context,
+                    retry_feedback=RetryFeedback(
+                        assessment,
+                        tuple(
+                            command
+                            for command in policy.commands
+                            if _command_digest(command) in failed_commands
+                        ),
+                    ),
+                )
+                # Refuse oversized feedback before another saved intent/preparation.
+                _validate_turn(
+                    adapter,
+                    contract,
+                    admission,
+                    turn_context,
+                    journal,
+                    budgets,
+                    "workspace-write",
+                )
+            except (TypeError, ValueError):
+                return finish("blocked", "retry_feedback_unavailable")
         assert report is not None
         passed = state is ExecutionState.PASSED
         criteria = tuple(

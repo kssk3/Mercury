@@ -78,6 +78,7 @@ class _ParsedRunConfig:
     context_paths: tuple[str, ...]
     budgets: TurnBudgets
     limits: RetryLimits
+    retry_configured: bool
 
 
 def _object(value: object, keys: set[str]) -> dict[str, object]:
@@ -241,12 +242,11 @@ def _parse_run_config(
         digest = hashlib.sha256(raw).hexdigest()
         if approval is not None and digest != approval:
             raise ValueError
-        data = _object(
-            json.loads(
-                raw.decode("utf-8"), object_pairs_hook=_pairs, parse_constant=_constant
-            ),
-            _KEYS,
+        decoded = json.loads(
+            raw.decode("utf-8"), object_pairs_hook=_pairs, parse_constant=_constant
         )
+        retry_configured = isinstance(decoded, dict) and "retry" in decoded
+        data = _object(decoded, _KEYS | ({"retry"} if retry_configured else set()))
         if type(data["schema_version"]) is not int or data["schema_version"] != 1:
             raise ValueError
         repository = _absolute(data["repository"])
@@ -333,12 +333,26 @@ def _parse_run_config(
                 )
             ),
         )
+        max_retries = 0
+        max_same_failure = 1
+        if retry_configured:
+            retry = _object(data["retry"], {"max_retries", "max_same_failure"})
+            retries = retry["max_retries"]
+            repetition = retry["max_same_failure"]
+            if type(retries) is not int or not 0 <= retries <= 3:
+                raise ValueError
+            if type(repetition) is not int or not 1 <= repetition <= retries + 1:
+                raise ValueError
+            max_retries = retries
+            max_same_failure = repetition
+        turns = max_retries + 1
         total = _number(data["total_timeout_seconds"], 240)
-        # Match loop phase reservations and leave explicit preflight slack.
+        # One original baseline plus development/final checks for every turn.
+        # Reserve all admitted turns conservatively, retaining preflight slack.
+        checker_phases = 2 * turns + 1
         required = (
-            budgets.timeout_seconds
-            + 2
-            + 3 * len(policy.commands) * (policy.timeout_seconds + 2)
+            turns * (budgets.timeout_seconds + 2)
+            + checker_phases * len(policy.commands) * (policy.timeout_seconds + 2)
             + 5
         )
         if total < required:
@@ -356,7 +370,13 @@ def _parse_run_config(
             data["criterion_commands"],
             context_paths,
             budgets,
-            RetryLimits(0, 1, 1 + 3 * len(policy.commands), total),
+            RetryLimits(
+                max_retries,
+                max_same_failure,
+                turns + checker_phases * len(policy.commands),
+                total,
+            ),
+            retry_configured,
         )
     except (ValueError, OSError, TypeError, KeyError, OverflowError, RecursionError):
         raise ValueError("invalid_run_config") from None
@@ -414,8 +434,13 @@ def preview_run_config(path: Path | str) -> dict[str, object]:
         "total_timeout_seconds": parsed.limits.max_seconds,
         "limits": {
             "max_retries": parsed.limits.max_retries,
-            "max_turns": 1,
+            "max_turns": parsed.limits.max_retries + 1,
             "max_commands": parsed.limits.max_commands,
+            **(
+                {"max_same_failure": parsed.limits.max_same_failure}
+                if parsed.retry_configured
+                else {}
+            ),
         },
         "approval_required": True,
         "execution_performed": False,
