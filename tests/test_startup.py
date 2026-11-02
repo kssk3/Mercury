@@ -1042,3 +1042,39 @@ def test_cloned_fixture_regenerates_review_binding_without_changing_seed(
     with pytest.raises(ValueError, match="review_binding_mismatch"):
         read_review_binding(verification, record)
     assert before == (source_journal.read_bytes(), source_state.read_bytes())
+
+
+@pytest.mark.parametrize("representation", ["compact", "legacy_full", "tampered"])
+def test_startup_reconciles_bound_projection_without_rewriting(
+    tmp_path: Path, representation: str
+) -> None:
+    from test_loop import _review_bound_loop
+
+    from agent_harness.attempt import AttemptJournal
+    from agent_harness.startup import reconcile_startup
+
+    root, journal, store, result = _review_bound_loop(tmp_path)
+    assert result.status == "pass"
+    entries = AttemptJournal(root, journal=journal, state_store=store).read()
+    current = cast(dict[str, Any], store.read())
+    summary = current["attempt_summary"]
+    assert summary["schema_version"] == 2
+    if representation == "legacy_full":
+        summary["schema_version"] = 1
+        summary["active_attempt"] = entries[-1]
+    elif representation == "tampered":
+        summary["active_attempt"]["verification"]["review_binding"]["attempt_id"] = (
+            "wrong"
+        )
+    store.write(current)
+    before = journal.path.read_bytes(), store.path.read_bytes()
+    decision = reconcile_startup(
+        root,
+        journal=journal,
+        state_store=store,
+        expected_contract_sha256=str(entries[-1]["contract_sha256"]),
+    )
+    assert decision.status == (
+        "unknown" if representation == "tampered" else "completed"
+    )
+    assert before == (journal.path.read_bytes(), store.path.read_bytes())

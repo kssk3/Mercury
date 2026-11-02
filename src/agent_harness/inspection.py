@@ -11,6 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import cast
 
+from agent_harness.attempt import _current_attempt
 from agent_harness.review_evidence import read_review_binding
 
 _CURRENT_CAP = 1024 * 1024
@@ -315,7 +316,9 @@ def _project(path: Path, current_raw: bytes, journal_raw: bytes) -> dict[str, ob
     )
     _require(outcome["elapsed_boundary"] == "before_outcome_persistence")
     summary = _mapping(current["attempt_summary"])
-    _require(type(summary["schema_version"]) is int and summary["schema_version"] == 1)
+    _require(
+        type(summary["schema_version"]) is int and summary["schema_version"] in {1, 2}
+    )
     journal = _mapping(summary["journal"])
     _require(journal["path"] == str(path / "events.jsonl"))
     digest = _digest(journal["sha256"])
@@ -355,7 +358,11 @@ def _project(path: Path, current_raw: bytes, journal_raw: bytes) -> dict[str, ob
     outputs: dict[str, object] | None = None
     revision: object = None
     if not ids:
-        _require(active is None and outcome["status"] != "pass")
+        _require(
+            active is None
+            and outcome["status"] != "pass"
+            and summary["schema_version"] == 1
+        )
     else:
         entry = _mapping(active)
         intent = intents[-1]
@@ -417,8 +424,22 @@ def _project(path: Path, current_raw: bytes, journal_raw: bytes) -> dict[str, ob
             event for event in relevant if event.get("event") == "attempt_verification"
         ]
         _require(len(verified) <= 1)
-        verification = _verification(entry["verification"])
-        _require(verification == (_verification(verified[0]) if verified else None))
+        recorded_verification = _verification(verified[0]) if verified else None
+        if summary["schema_version"] == 2:
+            _require(
+                recorded_verification is not None
+                and recorded_verification["schema_version"] == 2
+            )
+            _require(
+                entry["verification"]
+                == _current_attempt({"verification": recorded_verification})[
+                    "verification"
+                ]
+            )
+            verification = recorded_verification
+        else:
+            verification = _verification(entry["verification"])
+            _require(verification == recorded_verification)
         if verification is not None:
             _require(all(verification[key] == entry[key] for key in _IDENTITY))
             _require(verification["target_revision"] == revision)

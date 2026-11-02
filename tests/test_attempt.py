@@ -1231,9 +1231,14 @@ def test_attempt_review_binding_round_trip(tmp_path: Path) -> None:
     verification = entries[-1]["verification"]
     binding = read_review_binding(verification, verification["review_binding"])
     assert binding.attempt_id == result.attempt_ids[-1]
+    current = cast(Any, store.read())["attempt_summary"]
+    assert current["schema_version"] == 2
+    assert current["active_attempt"]["verification"]["review_binding"] == asdict(
+        binding
+    )
+    assert "candidate" in verification["review_binding"]
     assert (
-        cast(Any, store.read())["attempt_summary"]["active_attempt"]["verification"]
-        == verification
+        "candidate" not in current["active_attempt"]["verification"]["review_binding"]
     )
 
 

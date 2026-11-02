@@ -381,15 +381,7 @@ class AttemptJournal:
         try:
             attempts = self.read()
             raw = read_persistence_bytes(self.journal.path) or b""
-            summary: dict[str, object] = {
-                "schema_version": 1,
-                "attempt_count": len(attempts),
-                "journal": {
-                    "path": str(self.journal.path),
-                    "sha256": hashlib.sha256(raw).hexdigest(),
-                },
-                "active_attempt": attempts[-1] if attempts else None,
-            }
+            summary = _attempt_summary(attempts, self.journal.path, raw)
             state = self.state_store.read() or {}
             state["attempt_summary"] = summary
             self._validate_persistence()
@@ -399,6 +391,35 @@ class AttemptJournal:
                 "summary_write_failed", journal_recorded
             ) from None
         return summary
+
+
+def _current_attempt(entry: dict[str, object]) -> dict[str, object]:
+    """Compact an already validated entry; the journal retains the full candidate."""
+    verification = entry["verification"]
+    if verification is None or _mapping(verification)["schema_version"] != 2:
+        return entry
+    verified = _mapping(verification)
+    recorded = _mapping(verified["review_binding"])
+    return {
+        **entry,
+        "verification": {**verified, "review_binding": recorded["binding"]},
+    }
+
+
+def _attempt_summary(
+    entries: tuple[dict[str, object], ...], journal_path: Path, raw: bytes
+) -> dict[str, object]:
+    active = entries[-1] if entries else None
+    projected = _current_attempt(active) if active is not None else None
+    return {
+        "schema_version": 2 if projected is not active else 1,
+        "attempt_count": len(entries),
+        "journal": {
+            "path": str(journal_path),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+        },
+        "active_attempt": projected,
+    }
 
 
 class AttemptJournalError(RuntimeError):

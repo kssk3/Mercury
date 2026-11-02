@@ -11,7 +11,12 @@ from typing import cast
 
 from agent_harness.admission import AdmissionRecord
 from agent_harness.agent import AgentAdapter, AgentTurnResult, TurnBudgets
-from agent_harness.attempt import AttemptJournal, _command_digest, _observation
+from agent_harness.attempt import (
+    AttemptJournal,
+    _attempt_summary,
+    _command_digest,
+    _observation,
+)
 from agent_harness.baseline import VerificationBaseline
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract
@@ -398,17 +403,9 @@ def _run_loop(
                     for e in events
                 )
                 or current.get("attempt_summary")
-                != {
-                    "schema_version": 1,
-                    "attempt_count": 1,
-                    "journal": {
-                        "path": str(journal.path),
-                        "sha256": hashlib.sha256(
-                            read_persistence_bytes(journal.path) or b""
-                        ).hexdigest(),
-                    },
-                    "active_attempt": entries[0],
-                }
+                != _attempt_summary(
+                    entries, journal.path, read_persistence_bytes(journal.path) or b""
+                )
             ):
                 raise ValueError
             if entries[0]["attempt_id"] != resumed["attempt_id"]:

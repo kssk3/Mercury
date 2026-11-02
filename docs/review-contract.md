@@ -68,6 +68,16 @@ missing or inconsistent version-2 binding records remain UNKNOWN. A wrapper
 release/finalization failure withholds the binding rather than promoting UNKNOWN
 to PASS. A successfully stored intermediate event alone is not a completed run.
 
+Current attempt summaries use version 2 when projecting a bound verification:
+they retain its compact binding while the full candidate observation stays in the
+existing journal. Historical inspection checks the bounded journal, its digest
+and the exact current projection before returning the recomputed binding. Startup
+reconciliation compares the same projection; canonical attempt reads still return
+full evidence. Existing bounded version-1 full projections remain supported.
+The current-state limit remains 1 MiB and the journal limit remains 8 MiB.
+Already-oversized historical current files remain unreadable with `input_limit`;
+inspection does not migrate or rewrite them or open external candidate references.
+
 Verification-only continuation records a binding only after its actual final
 phase; it does not prepare or invoke an adapter again. Interrupted histories and
 recovery evidence keep their existing handling. Historical binding output never
