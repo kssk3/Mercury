@@ -18,6 +18,7 @@ from test_task_run import FakeAgent
 from agent_harness.agent import AgentTurnResult
 from agent_harness.cli import main
 from agent_harness.context import ContextPacket
+from agent_harness.diagnostics import DiagnosticsObserver
 from agent_harness.inspection import summarize_execution
 from agent_harness.journal import EventJournal
 from agent_harness.loop import run_loop
@@ -42,7 +43,9 @@ class CorrectionAgent(FakeAgent):
             (root / "unexpected.txt").write_text("outside admitted scope")
         if self.mode == "uncertain":
             raise RuntimeError("unobserved native result")
-        return result
+        return replace(
+            result, diagnostics=DiagnosticsObserver(0.0, 0.0).finish(1.0, 1.0)
+        )
 
 
 def retry_fixture(tmp_path: Path, mode: str) -> tuple[Path, dict[str, Any], bytes]:
@@ -154,6 +157,13 @@ def test_approved_cli_retry_preserves_policy_and_historical_consumers(
     assert summary["recorded_reason"] == reason
     events = EventJournal(state_dir).read()
     assert events[0]["config_sha256"] == digest
+    observations = [e for e in events if e["event"] == "turn_observation"]
+    if mode != "uncertain":
+        assert len(observations) == turns
+        for observation in observations:
+            diagnostic = observation["diagnostics"]
+            assert isinstance(diagnostic, dict)
+            assert diagnostic["clock"]["status"] == "consistent"
     assert agent.contexts[0].retry_feedback is None
     if mode != "correct":
         return

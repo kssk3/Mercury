@@ -790,3 +790,52 @@ def test_later_redactor_invalidating_earlier_leaf_fails_closed(
     assert not any(event["event"] == "native_output_stored" for event in journal.read())
     assert outside.read_bytes() == b"[removed] out\n"
     assert any(path.name != target.name for path in target.parent.iterdir())
+
+
+@pytest.mark.parametrize(
+    "status", ["successful_exit", "nonzero_exit", "timeout", "launch_error"]
+)
+def test_sanitized_diagnostics_persist_before_raw_output_omission(
+    repository: Path, tmp_path: Path, status: str
+) -> None:
+    import json
+    from dataclasses import asdict
+
+    body = 'print(\'{"type":"item.started","item":{"type":"command_execution","command":"SENTINEL-SECRET"}}\', flush=True)\n'
+    if status == "nonzero_exit":
+        body += "sys.exit(7)\n"
+    elif status == "timeout":
+        body += "import time\ntime.sleep(30)\n"
+    executable = (
+        tmp_path / "missing" if status == "launch_error" else fake(tmp_path, body)
+    )
+    journal = EventJournal(tmp_path / "state")
+    result = invoke(
+        repository,
+        executable,
+        journal,
+        redactor=lambda text: "[captured output omitted]",
+        budgets=TurnBudgets(3, 16000, 128, 128, 128),
+    )
+    observed = result.scoped_turn.observed_turn.adapter_result
+    assert observed.process_status == status
+    assert observed.diagnostics is not None
+    observation = next(
+        event for event in journal.read() if event["event"] == "turn_observation"
+    )
+    assert observation["diagnostics"] == json.loads(
+        json.dumps(asdict(observed.diagnostics))
+    )
+    process = observation["process"]
+    assert isinstance(process, dict)
+    assert set(process) == {
+        "process_status",
+        "exit_code",
+        "duration_seconds",
+        "stdout",
+        "stderr",
+        "final_message",
+        "final_output_status",
+    }
+    assert "SENTINEL-SECRET" not in journal.path.read_text()
+    assert result.stdout.path.read_text() == "[captured output omitted]"

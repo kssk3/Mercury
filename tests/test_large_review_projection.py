@@ -11,6 +11,7 @@ import pytest
 import test_attempt
 
 from agent_harness.attempt import AttemptJournal
+from agent_harness.diagnostics import DiagnosticsObserver
 from agent_harness.inspection import summarize_execution
 from agent_harness.journal import EventJournal
 from agent_harness.state import CurrentStateStore
@@ -25,7 +26,7 @@ repository_seed = test_attempt.repository_seed
 
 
 def _produce(
-    root: Path, directory: Path, count: int
+    root: Path, directory: Path, count: int, *, diagnostics: bool = False
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     observation = replace(
         RepositoryObservation.capture(root),
@@ -74,11 +75,17 @@ def _produce(
             },
         }
     )
+    metadata = {}
+    if diagnostics:
+        observer = DiagnosticsObserver(0.0, 0.0)
+        observer.output("stdout", b'{"type":"turn.started"}\n' * 64, 0.1)
+        metadata = {"diagnostics": asdict(observer.finish(1.0, 1.0))}
     journal.append(
         {
             "event": "turn_observation",
             "attempt_id": identity["attempt_id"],
             "after": asdict(observation),
+            **metadata,
             "process": process,
             "delta": delta,
         }
@@ -286,3 +293,22 @@ def test_compact_projection_withholds_binding_for_nonpass_outcome(
     assert loaded["recorded_status"] == status
     assert loaded["review_binding"] is None
     assert loaded["review_binding_status"] == "unavailable"
+
+
+def test_large_projection_with_maximum_diagnostics_stays_compact(
+    repository: Path, tmp_path: Path
+) -> None:
+    directory = tmp_path / "diagnostic-large"
+    summary, facts = _produce(repository, directory, 8000, diagnostics=True)
+    assert summary["recorded_status"] == "pass"
+    assert summary["review_binding"] == facts["expected_binding"]
+    assert facts["current_bytes"] <= 1024 * 1024
+    assert facts["journal_bytes"] < 8 * 1024 * 1024
+    observation = next(
+        e for e in EventJournal(directory).read() if e["event"] == "turn_observation"
+    )
+    diagnostic = observation["diagnostics"]
+    assert isinstance(diagnostic, dict)
+    assert len(diagnostic["events"]) == 32
+    assert diagnostic["events_truncated"] is True
+    assert "diagnostics" not in CurrentStateStore(directory).path.read_text()
