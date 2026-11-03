@@ -389,6 +389,11 @@ def run_observed_turn(
                 "event": "turn_observation",
                 "attempt_id": attempt_id,
                 "process": _process_metadata(result),
+                **(
+                    {"diagnostics": asdict(result.diagnostics)}
+                    if result.diagnostics is not None
+                    else {}
+                ),
                 "after": asdict(after),
                 "delta": asdict(delta),
             },
@@ -630,6 +635,8 @@ def _failure(
     }
     if result is not None:
         event["process"] = _process_metadata(result)
+        if result.diagnostics is not None:
+            event["diagnostics"] = asdict(result.diagnostics)
     try:
         _append(journal, root, event)
     except Exception:

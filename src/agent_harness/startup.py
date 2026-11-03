@@ -9,7 +9,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
-from agent_harness.attempt import AttemptJournal, _mapping, _observation, _require
+from agent_harness.attempt import (
+    AttemptJournal,
+    _attempt_summary,
+    _mapping,
+    _observation,
+    _require,
+)
 from agent_harness.failure import FailureAssessment, classify_attempt_failure
 from agent_harness.journal import EventJournal
 from agent_harness.repository import (
@@ -197,7 +203,8 @@ def _summary_state(
         return "summary_missing"
     summary = _mapping(current["attempt_summary"])
     _require(
-        type(summary.get("schema_version")) is int and summary["schema_version"] == 1
+        type(summary.get("schema_version")) is int
+        and summary["schema_version"] in {1, 2}
     )
     metadata = _mapping(summary.get("journal"))
     _require(
@@ -216,9 +223,14 @@ def _summary_state(
             type(summary.get("attempt_count")) is int
             and summary["attempt_count"] == len(projected)
         )
-        _require(
-            summary.get("active_attempt") == (projected[-1] if projected else None)
-        )
+        if summary["schema_version"] == 2:
+            expected = _attempt_summary(projected, attempts.journal.path, prefix)
+            _require(expected["schema_version"] == 2)
+            _require(summary.get("active_attempt") == expected["active_attempt"])
+        else:
+            _require(
+                summary.get("active_attempt") == (projected[-1] if projected else None)
+            )
         return "summary_current" if count == valid_latest else "summary_stale"
     raise ValueError("contradictory_summary")
 

@@ -637,3 +637,56 @@ def test_status_version_two_wrapper_requires_consistent_finalization(
     assert bool(summary["diagnostics"]) == (
         completion in {"missing", "invalid", "mismatch"}
     )
+
+
+def test_inspection_returns_recorded_review_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from test_loop import _review_bound_loop
+
+    root, journal, _, result = _review_bound_loop(tmp_path)
+    assert result.status == "pass"
+    verification = next(
+        event for event in journal.read() if event["event"] == "attempt_verification"
+    )
+    (root / "value").write_text("later unverified change")
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        pytest.fail("historical binding reader attempted execution")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    summary = summarize_execution(journal.path.parent)
+    assert summary["recorded_status"] == "pass"
+    assert summary["review_binding_status"] == "recorded"
+    recorded = cast(dict[str, Any], verification["review_binding"])
+    assert summary["review_binding"] == recorded["binding"]
+    assert summary["current_workspace_verified"] is False
+
+
+def test_inspection_legacy_review_binding_is_unavailable(tmp_path: Path) -> None:
+    write_history(tmp_path)
+    summary = summarize_execution(tmp_path)
+    assert summary["recorded_status"] == "pass"
+    assert summary["review_binding"] is None
+    assert summary["review_binding_status"] == "unavailable"
+
+
+def test_inspection_incomplete_review_binding_is_unknown(tmp_path: Path) -> None:
+    from test_loop import _review_bound_loop
+
+    _, journal, store, result = _review_bound_loop(tmp_path)
+    assert result.status == "pass"
+    events = journal.read()
+    verification = next(e for e in events if e["event"] == "attempt_verification")
+    del verification["review_binding"]
+    prefix = b"".join(json.dumps(event).encode() + b"\n" for event in events[:-1])
+    journal.path.write_bytes(prefix + json.dumps(events[-1]).encode() + b"\n")
+    current = store.read()
+    assert current is not None
+    attempt = cast(dict[str, Any], current["attempt_summary"])
+    del attempt["active_attempt"]["verification"]["review_binding"]
+    attempt["journal"]["sha256"] = hashlib.sha256(prefix).hexdigest()
+    store.write(current)
+    summary = summarize_execution(journal.path.parent)
+    assert summary["recorded_status"] == "unknown"
+    assert summary["review_binding"] is None

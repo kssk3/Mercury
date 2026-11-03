@@ -73,6 +73,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "status", help="summarize historical execution records"
     )
     status_command.add_argument("--state-dir", required=True, metavar="PATH")
+    status_command.add_argument("--explain", action="store_true")
+    status_command.add_argument("--format", choices=("json", "html"), default="json")
+    status_command.add_argument("--config", metavar="PATH")
+    status_command.add_argument("--expected-revision", metavar="SHA")
+    status_command.add_argument("--expected-candidate-sha256", metavar="SHA256")
     run_command = commands.add_parser(
         "run", help="preview settings or execute one hash-approved task"
     )
@@ -157,8 +162,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command == "status":
         from agent_harness.inspection import summarize_execution
 
-        summary = summarize_execution(arguments.state_dir)
-        print(json.dumps(summary, separators=(",", ":"), sort_keys=True))
+        if arguments.format == "html" and not arguments.explain:
+            parser.error("HTML status requires --explain")
+        if arguments.explain:
+            from agent_harness.explanation import explain_execution
+
+            summary = explain_execution(
+                arguments.state_dir,
+                config_path=arguments.config,
+                expected_revision=arguments.expected_revision,
+                expected_candidate_sha256=arguments.expected_candidate_sha256,
+            )
+        else:
+            if any(
+                value is not None
+                for value in (
+                    arguments.config,
+                    arguments.expected_revision,
+                    arguments.expected_candidate_sha256,
+                )
+            ):
+                parser.error("status comparison/configuration requires --explain")
+            summary = summarize_execution(arguments.state_dir)
+        if arguments.format == "html":
+            from agent_harness.html_report import render_execution_html
+
+            print(render_execution_html(summary))
+        else:
+            print(json.dumps(summary, separators=(",", ":"), sort_keys=True))
         return 1 if summary["diagnostics"] else 0
 
     if arguments.command == "profile":

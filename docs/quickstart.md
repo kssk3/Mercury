@@ -88,6 +88,8 @@ Use this map when composing a caller around the existing APIs. The
 [simulator composition](../examples/quickstart.py) shows how the inputs fit
 into one run; the implementation and tests below describe each boundary.
 The caller remains responsible for choosing meaningful tasks and checks.
+See [bounded retry feedback](retry-feedback.md) for failure facts supplied to
+permitted Python API retries and an offline correction example.
 
 | Boundary | Existing responsibility | Implementation and contract tests |
 | --- | --- | --- |

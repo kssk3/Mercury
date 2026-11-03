@@ -169,8 +169,8 @@ def ready_timeout_process(
         script += "os.write(1, b'before timeout')\n"
     script += (
         f"os.write({ready_write}, b'R')\nos.close({ready_write})\n"
-        "sys.stdin.buffer.read()\n"
-        "time.sleep(2)\n"
+        + ("" if mode == "blocked_stdin" else "sys.stdin.buffer.read()\n")
+        + "time.sleep(2)\n"
         f"pathlib.Path({str(marker)!r}).touch()\n"
         "time.sleep(30)\n"
     )
@@ -816,3 +816,90 @@ def test_native_hardlink_mutation_is_refused_on_retry(
     assert retry.process_status == "launch_error" and retry.exit_code is None
     assert "changed" in retry.stderr.text
     assert not marker.exists()
+
+
+def test_codex_diagnostics_record_observed_stages_without_native_payload(
+    repository: Path, tmp_path: Path
+) -> None:
+    from dataclasses import asdict
+
+    from agent_harness.adapter import CodexTurnResult
+
+    body = (
+        "import os,sys\nsys.stdin.buffer.read()\n"
+        'os.write(1, b\'{"type":"item.started","item":{"type":"command_execution","command":"SECRET"}}\\n\')\n'
+        "os.write(2, b'SECRET stderr')\n"
+    )
+    result = invoke(repository, fake(tmp_path, body))
+    assert isinstance(result, CodexTurnResult)
+    diagnostics = getattr(result, "diagnostics", None)
+    assert diagnostics is not None
+    milestones = diagnostics.milestones
+    for name in (
+        "launch_started",
+        "process_started",
+        "stdin_complete",
+        "stdout_first",
+        "stdout_last",
+        "stderr_first",
+        "stderr_last",
+        "stdout_eof",
+        "stderr_eof",
+        "process_exit",
+    ):
+        assert getattr(milestones, name) is not None
+    assert milestones.stdin_incomplete is None
+    assert milestones.timeout is None
+    assert diagnostics.events[0].item_kind == "command_execution"
+    assert "SECRET" not in json.dumps(asdict(diagnostics))
+    assert diagnostics.clock.status == "consistent"
+    assert (
+        result.stdout.truncated
+    )  # Event observation is independent of raw capture cap.
+
+
+def test_ready_timeout_keeps_stages_and_incomplete_stdin_observation(
+    tmp_path: Path,
+) -> None:
+    from agent_harness import adapter
+    from agent_harness.diagnostics import DiagnosticsObserver
+
+    with ready_timeout_process(tmp_path, "blocked_stdin") as process:
+        started = time.monotonic()
+        observer = DiagnosticsObserver(started, time.time())
+        observer.mark("process_started", 0.0)
+        timed_out = adapter._communicate_bounded(
+            process,
+            b"x" * 300000,
+            adapter._Capture(10),
+            adapter._Capture(10),
+            started,
+            1.0,
+            observer,
+        )
+        result = observer.finish(time.monotonic() - started, time.time())
+        assert timed_out
+        assert result.milestones.stdin_complete is None
+        assert result.milestones.stdin_incomplete is not None
+        assert result.milestones.timeout is not None
+        assert result.milestones.cleanup_started is not None
+        assert result.milestones.cleanup_finished is not None
+        assert result.milestones.process_exit is not None
+        assert result.milestones.stdout_first is not None
+        assert result.milestones.stdout_eof is not None
+
+
+def test_launch_error_keeps_unknown_execution_stages(
+    repository: Path, tmp_path: Path
+) -> None:
+    from agent_harness.adapter import CodexTurnResult
+
+    result = invoke(repository, tmp_path / "missing")
+    assert isinstance(result, CodexTurnResult)
+    assert result.diagnostics is not None
+    milestones = result.diagnostics.milestones
+    assert milestones.launch_started == 0.0
+    assert milestones.process_started is None
+    assert milestones.stdin_complete is None
+    assert milestones.process_exit is None
+    assert milestones.stdout_eof is None

@@ -24,6 +24,7 @@ from agent_harness.agent import CapturedText as CapturedText
 from agent_harness.agent import TurnBudgets as TurnBudgets
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract
+from agent_harness.diagnostics import DiagnosticsObserver
 from agent_harness.policy import VerificationPolicy
 from agent_harness.repository import resolve_repository_root
 from agent_harness.runner import (
@@ -224,6 +225,7 @@ class CodexCLIAdapter(_NativeExecutableBinding):
                 "-",
             )
             started = time.monotonic()
+            observer = DiagnosticsObserver(started, time.time())
             stdout = _Capture(budgets.stdout_bytes)
             stderr = _Capture(budgets.stderr_bytes)
             try:
@@ -239,20 +241,29 @@ class CodexCLIAdapter(_NativeExecutableBinding):
                     env=self._launch_environment,
                 )
             except OSError as error:
+                elapsed = time.monotonic() - started
                 stderr.add(str(error).encode("utf-8", errors="surrogateescape"))
                 return CodexTurnResult(
                     argv,
                     str(root),
                     "launch_error",
                     None,
-                    time.monotonic() - started,
+                    elapsed,
                     stdout.result(),
                     stderr.result(),
                     None,
                     "missing",
+                    observer.finish(elapsed, time.time()),
                 )
+            observer.mark("process_started", time.monotonic() - started)
             timed_out = _communicate_bounded(
-                process, prompt, stdout, stderr, started, budgets.timeout_seconds
+                process,
+                prompt,
+                stdout,
+                stderr,
+                started,
+                budgets.timeout_seconds,
+                observer,
             )
             final_message, final_status = _read_final(final, budgets.final_bytes)
             status: Literal["timeout", "nonzero_exit", "successful_exit"] = (
@@ -262,16 +273,18 @@ class CodexCLIAdapter(_NativeExecutableBinding):
                 if process.returncode == 0
                 else "nonzero_exit"
             )
+            elapsed = time.monotonic() - started
             return CodexTurnResult(
                 argv,
                 str(root),
                 status,
                 process.returncode,
-                time.monotonic() - started,
+                elapsed,
                 stdout.result(),
                 stderr.result(),
                 final_message,
                 final_status,
+                observer.finish(elapsed, time.time()),
             )
 
 
@@ -290,12 +303,14 @@ def _communicate_bounded(
     stderr: _Capture,
     started: float,
     timeout: float,
+    observer: DiagnosticsObserver | None = None,
 ) -> bool:
     assert process.stdin is not None
     assert process.stdout is not None
     assert process.stderr is not None
     streams = (process.stdin, process.stdout, process.stderr)
     sent = 0
+    stdin_complete = False
     timed_out = False
     cleanup_started: float | None = None
     with selectors.DefaultSelector() as selector:
@@ -310,6 +325,8 @@ def _communicate_bounded(
         try:
             while selector.get_map() or process.poll() is None:
                 now = time.monotonic()
+                if observer is not None and process.poll() is not None:
+                    observer.mark("process_exit", now - started)
                 remaining = (
                     timeout - (now - started)
                     if cleanup_started is None
@@ -319,6 +336,9 @@ def _communicate_bounded(
                     if cleanup_started is not None:
                         break
                     timed_out = True
+                    if observer is not None:
+                        observer.mark("timeout", now - started)
+                        observer.mark("cleanup_started", now - started)
                     _kill_group(process)
                     cleanup_started = now
                     if not process.stdin.closed:
@@ -330,11 +350,19 @@ def _communicate_bounded(
                     if ready_stream is process.stdin:
                         try:
                             sent += os.write(key.fd, prompt[sent : sent + 65536])
+                            stdin_complete = sent == len(prompt)
                         except BrokenPipeError:
                             sent = len(prompt)
                         except BlockingIOError:
                             continue
                         if sent == len(prompt):
+                            if observer is not None:
+                                observer.mark(
+                                    "stdin_complete"
+                                    if stdin_complete
+                                    else "stdin_incomplete",
+                                    time.monotonic() - started,
+                                )
                             selector.unregister(key.fd)
                             process.stdin.close()
                     else:
@@ -342,6 +370,16 @@ def _communicate_bounded(
                             chunk = os.read(key.fd, 65536)
                         except BlockingIOError:
                             continue
+                        channel = (
+                            "stdout" if ready_stream is process.stdout else "stderr"
+                        )
+                        if observer is not None:
+                            if chunk:
+                                observer.output(
+                                    channel, chunk, time.monotonic() - started
+                                )
+                            else:
+                                observer.eof(channel, time.monotonic() - started)
                         if not chunk:
                             selector.unregister(key.fd)
                             if ready_stream is process.stdout:
@@ -356,8 +394,13 @@ def _communicate_bounded(
                 process.wait(timeout=1)
             except subprocess.TimeoutExpired:
                 timed_out = True
+                if observer is not None:
+                    observer.mark("timeout", time.monotonic() - started)
+                    observer.mark("cleanup_started", time.monotonic() - started)
                 _kill_group(process)
         except BaseException:
+            if observer is not None:
+                observer.mark("cleanup_started", time.monotonic() - started)
             _kill_group(process)
             try:
                 process.wait(timeout=1)
@@ -365,6 +408,14 @@ def _communicate_bounded(
                 pass
             raise
         finally:
+            if observer is not None:
+                elapsed = time.monotonic() - started
+                if not stdin_complete:
+                    observer.mark("stdin_incomplete", elapsed)
+                if process.poll() is not None:
+                    observer.mark("process_exit", elapsed)
+                if timed_out:
+                    observer.mark("cleanup_finished", elapsed)
             for stream in streams:
                 stream.close()
     return timed_out

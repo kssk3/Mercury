@@ -10,6 +10,7 @@ from typing import Literal, Protocol
 from agent_harness.admission import AdmissionRecord
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract
+from agent_harness.diagnostics import ExecutionDiagnostics, validate_diagnostics
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,7 @@ class AgentTurnResult:
     stderr: CapturedText
     final_message: CapturedText | None
     final_output_status: Literal["available", "missing", "unsafe", "unreadable"]
+    diagnostics: ExecutionDiagnostics | None = None
 
 
 class AgentAdapter(Protocol):
@@ -143,4 +145,6 @@ def _validate_result(
             == capture.retained_bytes
         ):
             raise ValueError("invalid_agent_result")
+    if result.diagnostics is not None:
+        validate_diagnostics(result.diagnostics)
     return result
