@@ -73,7 +73,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "status", help="summarize historical execution records"
     )
     status_command.add_argument("--state-dir", required=True, metavar="PATH")
-    status_command.add_argument("--explain", action="store_true")
+    status_mode = status_command.add_mutually_exclusive_group()
+    status_mode.add_argument("--explain", action="store_true")
+    status_mode.add_argument("--details", action="store_true")
     status_command.add_argument("--format", choices=("json", "html"), default="json")
     status_command.add_argument("--config", metavar="PATH")
     status_command.add_argument("--expected-revision", metavar="SHA")
@@ -183,7 +185,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             ):
                 parser.error("status comparison/configuration requires --explain")
-            summary = summarize_execution(arguments.state_dir)
+            summary = summarize_execution(
+                arguments.state_dir, details=arguments.details
+            )
         if arguments.format == "html":
             from agent_harness.html_report import render_execution_html
 

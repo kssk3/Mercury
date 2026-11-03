@@ -283,3 +283,6 @@ JavaScript 통합 예제의 네 범위가 main에 반영됐습니다. 기존 검
 
 개발 검사와 피드백은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.
 [MIT License](LICENSE)로 배포합니다. Copyright (c) 2026 Mercury (kssk3).
+
+Read [status details](docs/status-details.md) for optional historical metadata with
+`local-harness status --state-dir PATH --details` and Git inventory limits.
