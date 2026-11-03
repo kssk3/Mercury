@@ -536,6 +536,10 @@ def summarize_execution(state_directory: Path | str) -> dict[str, object]:
         diagnostic = "missing_input"
     except (OSError, ValueError, TypeError, KeyError, OverflowError, RecursionError):
         diagnostic = "unreadable_or_invalid_history"
+    return _unknown(diagnostic)
+
+
+def _unknown(diagnostic: str) -> dict[str, object]:
     return {
         "schema_version": 1,
         "historical_only": True,

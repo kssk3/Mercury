@@ -219,6 +219,11 @@ Python API 외에도 `run`은 제한된 v1 JSON 설정을 받습니다. 명령 �
 
 ### 실행 기록 요약
 
+For an additive explanation of criteria, candidate identity, evidence gaps and
+manual next gates, see [validation visibility](docs/validation-visibility.md).
+A self-contained Korean mobile report is available with explicit
+`status --explain --format html`; it uses the same snapshot and writes only stdout.
+
 이미 저장된 기록만 읽으려면 상태 디렉터리를 명시합니다.
 
 ```sh
