@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Mapping
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -675,6 +675,10 @@ def test_after_observation_failure_keeps_intent_and_returned_process_metadata(
         "turn_observation_failed",
     ]
     assert events[-1]["classification"] == "after_observation_failed"
+    assert error.adapter_result.diagnostics is not None
+    assert events[-1]["diagnostics"] == json.loads(
+        json.dumps(asdict(error.adapter_result.diagnostics))
+    )
     assert as_mapping(events[-1]["process"])["process_status"] == "successful_exit"
     assert "after" not in events[-1]
     assert "SECRET STDOUT" not in EventJournal(state).path.read_text()
@@ -1327,6 +1331,8 @@ def test_adapter_cancellation_preserves_original_object_after_failure_record_att
         assert events[1]["event"] == "turn_observation_failed"
         assert events[1]["attempt_id"] == events[0]["attempt_id"]
         assert events[1]["classification"] == "adapter_raised"
+        assert "diagnostics" not in events[1]
+        assert "process" not in events[1]
 
 
 @pytest.mark.parametrize(

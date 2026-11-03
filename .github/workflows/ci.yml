@@ -90,13 +90,13 @@ jobs:
           fi
       - name: Ruff lint
         if: ${{ steps.changes.outputs.verification == 'full' }}
-        run: uv run --no-sync ruff check src tests scripts/ci_changes.py examples/quickstart.py examples/codex_quickstart.py examples/javascript_quickstart.py
+        run: uv run --no-sync ruff check src tests scripts/ci_changes.py scripts/verified_runtime.py examples/quickstart.py examples/codex_quickstart.py examples/javascript_quickstart.py
       - name: Ruff format
         if: ${{ steps.changes.outputs.verification == 'full' }}
-        run: uv run --no-sync ruff format --check src tests scripts/ci_changes.py examples/quickstart.py examples/codex_quickstart.py examples/javascript_quickstart.py
+        run: uv run --no-sync ruff format --check src tests scripts/ci_changes.py scripts/verified_runtime.py examples/quickstart.py examples/codex_quickstart.py examples/javascript_quickstart.py
       - name: Mypy
         if: ${{ steps.changes.outputs.verification == 'full' }}
-        run: uv run --no-sync mypy src tests scripts/ci_changes.py examples/quickstart.py examples/codex_quickstart.py examples/javascript_quickstart.py
+        run: uv run --no-sync mypy src tests scripts/ci_changes.py scripts/verified_runtime.py examples/quickstart.py examples/codex_quickstart.py examples/javascript_quickstart.py
 
   tests-linux:
     name: tests-linux
@@ -118,7 +118,7 @@ jobs:
       - name: Install locked development dependencies
         run: uv sync --locked --dev
       - name: Pytest
-        run: uv run --no-sync pytest
+        run: uv run --no-sync pytest -v -rs
       - name: Offline approved quickstart
         if: ${{ needs.static-checks.outputs.verification == 'full' }}
         run: uv run --no-sync python examples/quickstart.py --approve-demo

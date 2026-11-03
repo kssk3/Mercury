@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePath
 
 from agent_harness.repository import resolve_repository_root
+from agent_harness.retry import RetryFeedback
 
 
 def _relative_path(value: str) -> None:
@@ -64,6 +65,7 @@ class ContextPacket:
     repository_root: str
     budget_bytes: int
     sources: tuple[ContextSource, ...]
+    retry_feedback: RetryFeedback | None = None
 
     def __post_init__(self) -> None:
         root = self.repository_root
@@ -91,12 +93,20 @@ class ContextPacket:
         if len({source.source_path for source in sources}) != len(sources):
             raise ValueError("duplicate source paths")
         object.__setattr__(self, "sources", sources)
+        if self.retry_feedback is not None:
+            if type(self.retry_feedback) is not RetryFeedback:
+                raise ValueError("invalid_retry_feedback")
+            self.retry_feedback.__post_init__()
         if self.size_bytes > self.budget_bytes:
             raise ValueError("context packet exceeds budget")
 
     def to_json(self) -> str:
+        data = asdict(self)
+        # Preserve historical input bytes and checkpoint bindings without feedback.
+        if self.retry_feedback is None:
+            del data["retry_feedback"]
         return json.dumps(
-            asdict(self), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            data, sort_keys=True, separators=(",", ":"), ensure_ascii=False
         )
 
     @property

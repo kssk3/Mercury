@@ -5,6 +5,9 @@ reviewing this repository. It is the project lifecycle authority.
 Use [CONTRIBUTING.md](CONTRIBUTING.md) for development checks.
 Keep work within the requested scope and preserve unrelated changes.
 
+Use [ROADMAP.md](docs/project/ROADMAP.md) for delivery states and proposed outcomes,
+and [ARCHITECTURE.md](docs/project/ARCHITECTURE.md) for current module responsibilities.
+
 ## Code Review Rules
 
 Apply each rule only to changes within its stated scope, including directly

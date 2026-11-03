@@ -7,10 +7,12 @@ import json
 import math
 import os
 import stat
+from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 from typing import cast
 
-from agent_harness.attempt import _capture, _observation
+from agent_harness.attempt import _capture, _current_attempt, _observation
+from agent_harness.review_evidence import read_review_binding
 from agent_harness.turn import compare_observations
 
 _CURRENT_CAP = 1024 * 1024
@@ -199,7 +201,7 @@ def _verification(value: object) -> dict[str, object] | None:
     if value is None:
         return None
     data = _mapping(value)
-    _require(type(data["schema_version"]) is int and data["schema_version"] == 1)
+    _require(type(data["schema_version"]) is int and data["schema_version"] in {1, 2})
     _require(data["event"] == "attempt_verification")
     for key in _IDENTITY:
         _text(data[key])
@@ -235,7 +237,7 @@ def _verification(value: object) -> dict[str, object] | None:
         data["overall_kind"]
         == ("fail" if protected_changed else data["technical_kind"])
     )
-    return {
+    projected = {
         key: data[key]
         for key in (
             *_IDENTITY,
@@ -251,6 +253,12 @@ def _verification(value: object) -> dict[str, object] | None:
             "output_identifiers",
         )
     }
+    if data["schema_version"] == 2:
+        read_review_binding(projected, data["review_binding"])
+        projected["review_binding"] = data["review_binding"]
+    else:
+        _require("review_binding" not in data)
+    return projected
 
 
 def _detail_process(value: object) -> dict[str, object]:
@@ -549,7 +557,9 @@ def _project(
     )
     _require(outcome["elapsed_boundary"] == "before_outcome_persistence")
     summary = _mapping(current["attempt_summary"])
-    _require(type(summary["schema_version"]) is int and summary["schema_version"] == 1)
+    _require(
+        type(summary["schema_version"]) is int and summary["schema_version"] in {1, 2}
+    )
     journal = _mapping(summary["journal"])
     _require(journal["path"] == str(path / "events.jsonl"))
     digest = _digest(journal["sha256"])
@@ -590,7 +600,11 @@ def _project(
     revision: object = None
     relevant: list[dict[str, object]] = []
     if not ids:
-        _require(active is None and outcome["status"] != "pass")
+        _require(
+            active is None
+            and outcome["status"] != "pass"
+            and summary["schema_version"] == 1
+        )
     else:
         entry = _mapping(active)
         intent = intents[-1]
@@ -652,8 +666,22 @@ def _project(
             event for event in relevant if event.get("event") == "attempt_verification"
         ]
         _require(len(verified) <= 1)
-        verification = _verification(entry["verification"])
-        _require(verification == (_verification(verified[0]) if verified else None))
+        recorded_verification = _verification(verified[0]) if verified else None
+        if summary["schema_version"] == 2:
+            _require(
+                recorded_verification is not None
+                and recorded_verification["schema_version"] == 2
+            )
+            _require(
+                entry["verification"]
+                == _current_attempt({"verification": recorded_verification})[
+                    "verification"
+                ]
+            )
+            verification = recorded_verification
+        else:
+            verification = _verification(entry["verification"])
+            _require(verification == recorded_verification)
         if verification is not None:
             _require(all(verification[key] == entry[key] for key in _IDENTITY))
             _require(verification["target_revision"] == revision)
@@ -687,6 +715,15 @@ def _project(
             )
         )
         outcome.update(status=wrapper["status"], reason=wrapper["reason"])
+    review_binding = None
+    if (
+        outcome["status"] == "pass"
+        and verification is not None
+        and verification["schema_version"] == 2
+    ):
+        review_binding = asdict(
+            read_review_binding(verification, verification["review_binding"])
+        )
     result: dict[str, object] = {
         "schema_version": 1,
         "historical_only": True,
@@ -695,6 +732,10 @@ def _project(
         "recorded_reason": outcome["reason"],
         "attempt_ids": ids,
         "target_revision": revision,
+        "review_binding": review_binding,
+        "review_binding_status": "recorded"
+        if review_binding is not None
+        else "unavailable",
         "verification": None
         if verification is None
         else {
@@ -720,6 +761,7 @@ def _project(
         },
         "diagnostics": [],
     }
+
     if details:
         result["details"] = _details(
             active, relevant, verification, outputs, outcome, len(ids)
@@ -744,7 +786,14 @@ def summarize_execution(
         diagnostic = "missing_input"
     except (OSError, ValueError, TypeError, KeyError, OverflowError, RecursionError):
         diagnostic = "unreadable_or_invalid_history"
-    result: dict[str, object] = {
+    result = _unknown(diagnostic)
+    if details:
+        result["details"] = _empty_details()
+    return result
+
+
+def _unknown(diagnostic: str) -> dict[str, object]:
+    return {
         "schema_version": 1,
         "historical_only": True,
         "current_workspace_verified": False,
@@ -752,10 +801,9 @@ def summarize_execution(
         "recorded_reason": None,
         "attempt_ids": [],
         "target_revision": None,
+        "review_binding": None,
+        "review_binding_status": "unavailable",
         "verification": None,
         "evidence": None,
         "diagnostics": [diagnostic],
     }
-    if details:
-        result["details"] = _empty_details()
-    return result

@@ -287,3 +287,72 @@ def test_interpreter_requires_existing_script_operand(
     with pytest.raises(ValueError, match="invalid_run_config"):
         load_run_config(path, write_config(path, data), "human")
     assert not Path(data["state_root"]).exists()
+
+
+@pytest.mark.parametrize("retries", [0, 1, 2, 3])
+def test_explicit_retry_limits_reserve_all_turns(tmp_path: Path, retries: int) -> None:
+    path, data = make_fixture(tmp_path)
+    data["retry"] = {"max_retries": retries, "max_same_failure": retries + 1}
+    data["total_timeout_seconds"] = 80
+    config = load_run_config(path, write_config(path, data), "human")
+    turns = retries + 1
+    assert config.limits.max_retries == retries
+    assert config.limits.max_same_failure == turns
+    assert config.limits.max_commands == turns + (2 * turns + 1)
+    assert config.limits.max_seconds == 80
+    assert not config.state_root.exists()
+
+
+@pytest.mark.parametrize(
+    "retry",
+    [
+        None,
+        [],
+        {},
+        {"max_retries": 1},
+        {"max_retries": 1, "max_same_failure": 2, "max_turns": 2},
+        *(
+            {"max_retries": value, "max_same_failure": 1}
+            for value in (True, -1, 1.0, 4, float("inf"), float("nan"), 10**100)
+        ),
+        *(
+            {"max_retries": 1, "max_same_failure": value}
+            for value in (True, 0, -1, 1.0, 3, float("inf"), float("nan"))
+        ),
+    ],
+)
+def test_retry_requires_exact_bounded_integer_fields(
+    tmp_path: Path, retry: object
+) -> None:
+    path, data = make_fixture(tmp_path)
+    data["retry"] = retry
+    data["total_timeout_seconds"] = 80
+    with pytest.raises(ValueError, match="invalid_run_config"):
+        load_run_config(path, write_config(path, data), "human")
+    assert not Path(data["state_root"]).exists()
+
+
+@pytest.mark.parametrize("commands", [1, 2])
+def test_retry_aggregate_budget_is_checked_before_execution(
+    tmp_path: Path, commands: int
+) -> None:
+    path, data = make_fixture(tmp_path)
+    data["retry"] = {"max_retries": 1, "max_same_failure": 2}
+    data["verification"]["commands"] *= commands
+    required = 2 * (2 + 2) + 5 * commands * (2 + 2) + 5
+    data["total_timeout_seconds"] = required - 0.01
+    with pytest.raises(ValueError, match="invalid_run_config"):
+        load_run_config(path, write_config(path, data), "human")
+    data["total_timeout_seconds"] = required
+    config = load_run_config(path, write_config(path, data), "human")
+    assert config.limits.max_commands == 2 + 5 * commands
+    assert not config.state_root.exists()
+
+
+def test_retry_settings_are_bound_to_exact_approved_bytes(tmp_path: Path) -> None:
+    path, data = make_fixture(tmp_path)
+    approved = write_config(path, data)
+    data["retry"] = {"max_retries": 1, "max_same_failure": 2}
+    write_config(path, data)
+    with pytest.raises(ValueError, match="invalid_run_config"):
+        load_run_config(path, approved, "human")

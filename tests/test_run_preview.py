@@ -124,3 +124,33 @@ def test_preview_does_not_claim_baseline_or_native_preflight(
     assert preview["approval_required"] is True
     assert "status" not in preview
     assert not Path(data["state_root"]).exists()
+
+
+def test_opt_in_preview_reports_effective_limits_without_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path, data = make_fixture(tmp_path)
+    data["retry"] = {"max_retries": 1, "max_same_failure": 2}
+    digest = write_config(path, data)
+
+    def forbidden(*args: object, **kwargs: object) -> NoReturn:
+        pytest.fail("retry preview dispatched execution")
+
+    monkeypatch.setattr("agent_harness.task_run.execute_run", forbidden)
+    monkeypatch.setattr("agent_harness.task_run._adapter", forbidden)
+    monkeypatch.setattr("agent_harness.runner.ControlledCommandRunner.run", forbidden)
+    assert main(["run", "--preview", "--config", str(path)]) == 0
+    captured = capsys.readouterr()
+    preview = json.loads(captured.out)
+    assert captured.err == ""
+    assert preview["config_sha256"] == digest
+    assert preview["limits"] == {
+        "max_retries": 1,
+        "max_same_failure": 2,
+        "max_turns": 2,
+        "max_commands": 7,
+    }
+    assert preview["total_timeout_seconds"] == 40
+    assert preview["budgets"] == data["budgets"]
+    assert preview["execution_performed"] is False
+    assert not Path(data["state_root"]).exists()

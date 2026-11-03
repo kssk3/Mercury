@@ -344,6 +344,13 @@ def test_development_checkpoint_continues_only_final(
     assert launches.read_text() == "xxx"
     assert native.read_text() == "x"
     assert (store.read() or {})["caller"] == "preserved"
+    from agent_harness.inspection import summarize_execution
+
+    current = cast(dict[str, object], (store.read() or {})["attempt_summary"])
+    assert current["schema_version"] == 2
+    historical = summarize_execution(journal.path.parent)
+    assert historical["recorded_status"] == "pass"
+    assert historical["review_binding_status"] == "recorded"
     assert (
         loop.continue_verification(
             *args,

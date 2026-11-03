@@ -62,6 +62,34 @@ class RetryDecision:
     repeated_failures: int
 
 
+@dataclass(frozen=True)
+class RetryFeedback:
+    """Observed failure facts and admitted checker argv, never repair authority.
+
+    No raw output or model diagnosis is included. The containing context packet
+    bounds serialization; the loop alone decides whether another turn is allowed.
+    """
+
+    assessment: FailureAssessment
+    commands: tuple[tuple[str, ...], ...]
+
+    def __post_init__(self) -> None:
+        _history((self.assessment,))
+        if not self.assessment.findings or (
+            type(self.commands) is not tuple
+            or any(
+                type(command) is not tuple
+                or not command
+                or any(
+                    not isinstance(part, str) or not part or "\x00" in part
+                    for part in command
+                )
+                for command in self.commands
+            )
+        ):
+            raise ValueError("invalid_retry_feedback")
+
+
 _REASONS = {
     "unknown": {
         "missing_observation",

@@ -40,9 +40,21 @@ def seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, bytes, bytes, 
 
 @pytest.fixture
 def evidence(tmp_path: Path, seed: tuple[Path, bytes, bytes, str]) -> tuple[Any, ...]:
-    from test_startup import rewrite_runtime_events
+    from test_startup import (
+        regenerate_fixture_review_bindings,
+        rewrite_runtime_events,
+    )
+
+    from agent_harness.review_evidence import read_review_binding
 
     original, raw, state, digest = seed
+    for line in raw.splitlines():
+        source = json.loads(line)
+        if (
+            source.get("event") == "attempt_verification"
+            and source["schema_version"] == 2
+        ):
+            read_review_binding(source, source["review_binding"])
     root = (tmp_path / "repo").resolve()
     shutil.copytree(original, root)
     old_id = hashlib.sha256(os.fsencode(original)).hexdigest()
@@ -59,9 +71,11 @@ def evidence(tmp_path: Path, seed: tuple[Path, bytes, bytes, str]) -> tuple[Any,
         EventJournal(tmp_path / "external"),
         CurrentStateStore(tmp_path / "external"),
     )
+    events = [rebind(line) for line in raw.splitlines()]
+    regenerate_fixture_review_bindings(events)
     store.write(rebind(state))
     fixture = root, journal, store, digest
-    rewrite_runtime_events(fixture, [rebind(line) for line in raw.splitlines()])
+    rewrite_runtime_events(fixture, events)
     return fixture
 
 
@@ -274,3 +288,36 @@ def test_unavailable_evidence_keeps_repository_and_selector_binding(
     assert all(not (root / "unsafe").exists() for root in roots)
     assert not (roots[0] / "other").exists()
     assert str(tmp_path) not in repr(reports)
+
+
+def test_evidence_clone_regenerates_binding_without_mutating_seed(
+    evidence: tuple[Any, ...], seed: tuple[Path, bytes, bytes, str]
+) -> None:
+    from agent_harness.review_evidence import read_review_binding
+
+    original, raw_events, raw_state, _ = seed
+    source_journal = original.parent / "external" / "events.jsonl"
+    source_state = source_journal.with_name("current.json")
+    before = source_journal.read_bytes(), source_state.read_bytes()
+    assert before == (raw_events, raw_state)
+    root, journal, _, _ = evidence
+    assert report(evidence).evidence.status == "completed"
+    verification = next(
+        event for event in journal.read() if event["event"] == "attempt_verification"
+    )
+    binding = read_review_binding(verification, verification["review_binding"])
+    assert binding.repository_root == str(root)
+    seed_verification = next(
+        event
+        for event in (json.loads(line) for line in raw_events.splitlines())
+        if event["event"] == "attempt_verification"
+    )
+    original_binding = read_review_binding(
+        seed_verification, seed_verification["review_binding"]
+    )
+    assert binding.candidate_sha256 != original_binding.candidate_sha256
+    record: dict[str, Any] = verification["review_binding"]
+    record["candidate"]["files"][0]["sha256"] = "f" * 64
+    with pytest.raises(ValueError, match="review_binding_mismatch"):
+        read_review_binding(verification, record)
+    assert before == (source_journal.read_bytes(), source_state.read_bytes())
