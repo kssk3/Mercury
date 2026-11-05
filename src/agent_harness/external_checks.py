@@ -36,6 +36,18 @@ _LIMIT = 4 * 1024 * 1024
 _COUNTS = ("tests", "failures", "errors", "skipped")
 
 
+def _absolute(path: Path | str) -> Path:
+    selected = Path(path)
+    # Lexical normalization of link/.. can select a different protected target.
+    if ".." in selected.parts:
+        for component in (*reversed(selected.parents), selected):
+            if component.is_symlink():
+                raise ValueError(
+                    "external check path combines symlinks and parent traversal"
+                )
+    return Path(os.path.abspath(selected))
+
+
 def _bytes(value: object) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -301,9 +313,12 @@ def collect_external_check(
         "criterion": _text(criterion),
         "caller_command_display": _text(safe_command_display),
     }
-    root = resolve_repository_root(repository)
-    destination = Path(os.path.abspath(bundle))
-    protected = tuple(Path(os.path.abspath(path)) for path in protected_paths)
+    selected_repository = _absolute(Path(repository).expanduser())
+    if selected_repository.is_symlink():
+        raise ValueError("external check repository must not be a terminal symlink")
+    destination = _absolute(bundle)
+    protected = tuple(_absolute(path) for path in protected_paths)
+    root = resolve_repository_root(selected_repository)
     validate_runtime_state_directory(destination, root)
     if any(
         _is_within_directory(destination.resolve(), path.resolve())

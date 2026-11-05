@@ -332,3 +332,180 @@ def test_checker_replacing_bundle_with_symlink_cannot_redirect_terminal_writes(
         collect(tmp_path, script)
     assert not (target / "process.json").exists()
     assert (archived / "intent.json").exists()
+
+
+def _collector_boundary_policy(
+    bundle: Path, marker: Path, protected_file: Path | None = None
+) -> VerificationPolicy:
+    xml = '<testsuite tests="1"><testcase name="boundary"/></testsuite>'
+    code = (
+        "from pathlib import Path; "
+        f"Path({str(marker)!r}).write_text(str(Path.cwd())); "
+        f"Path({str(bundle / 'result.xml')!r}).write_text({xml!r}); "
+    )
+    if protected_file is not None:
+        code += f"Path({str(protected_file)!r}).write_text('changed'); "
+    return VerificationPolicy(((sys.executable, "-c", code),), ".", 2)
+
+
+@pytest.mark.parametrize("inside_protected", [False, True])
+def test_collector_boundary_rejects_ambiguous_protected_path(
+    tmp_path: Path, inside_protected: bool
+) -> None:
+    """Reject before launch, not a PASS for a different normalized location."""
+    from agent_harness.external_checks import collect_external_check
+
+    tmp_path = tmp_path.resolve()
+    root = repository(tmp_path)
+    deep = tmp_path / "real" / "deep"
+    deep.mkdir(parents=True)
+    alias = tmp_path / "alias"
+    alias.symlink_to(deep, target_is_directory=True)
+    protected = tmp_path / "real" / "protected"
+    protected.mkdir()
+    guard = protected / "guard"
+    guard.write_text("original")
+    destination = (protected if inside_protected else tmp_path) / "bundle"
+    marker = tmp_path / "launched"
+    result: dict[str, Any] | None = None
+    rejected = False
+    try:
+        result = collect_external_check(
+            root,
+            _collector_boundary_policy(destination, marker, guard),
+            destination,
+            actor="operator",
+            check_label="boundary",
+            criterion="protect actual selected location",
+            safe_command_display="synthetic checker",
+            protected_paths=(alias / ".." / "protected",),
+        )
+    except ValueError:
+        rejected = True
+    assert rejected, {
+        "outcome": result["outcome"] if result else None,
+        "protected_state": result["protected_state"] if result else None,
+        "guard": guard.read_text(),
+        "bundle_created": destination.exists(),
+    }
+    assert guard.read_text() == "original"
+    assert not marker.exists()
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("prebound", [False, True])
+def test_collector_boundary_rejects_terminal_repository_alias(
+    tmp_path: Path, prebound: bool
+) -> None:
+    """Never bind or execute in the alias parent instead of its target."""
+    from agent_harness.external_checks import collect_external_check
+    from agent_harness.runner import bind_verification_executables
+
+    tmp_path = tmp_path.resolve()
+    parent = repository(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    target = repository(other)
+    alias = parent / "alias"
+    alias.symlink_to(target, target_is_directory=True)
+    destination = tmp_path / "bundle"
+    marker = tmp_path / "launched"
+    policy = _collector_boundary_policy(destination, marker)
+    selections = bind_verification_executables(policy, parent) if prebound else None
+    result: dict[str, Any] | None = None
+    rejected = False
+    try:
+        result = collect_external_check(
+            alias,
+            policy,
+            destination,
+            actor="operator",
+            check_label="boundary",
+            criterion="preserve repository selection",
+            safe_command_display="synthetic checker",
+            selections=selections,
+        )
+    except ValueError:
+        rejected = True
+    assert rejected, {
+        "outcome": result["outcome"] if result else None,
+        "executed_cwd": marker.read_text() if marker.exists() else None,
+        "selected_target": str(target),
+    }
+    assert not marker.exists()
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("boundary", ["repository", "bundle"])
+def test_collector_boundary_rejects_symlink_parent_traversal(
+    tmp_path: Path, boundary: str
+) -> None:
+    """All collector path inputs reject ambiguous traversal before side effects."""
+    from agent_harness.external_checks import collect_external_check
+
+    tmp_path = tmp_path.resolve()
+    root = repository(tmp_path)
+    deep = root / "deep"
+    deep.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(deep, target_is_directory=True)
+    destination = tmp_path / "bundle"
+    marker = tmp_path / "launched"
+    selected_root = alias / ".." if boundary == "repository" else root
+    selected_bundle = alias / ".." / "bundle" if boundary == "bundle" else destination
+    rejected = False
+    try:
+        collect_external_check(
+            selected_root,
+            _collector_boundary_policy(destination, marker),
+            selected_bundle,
+            actor="operator",
+            check_label="boundary",
+            criterion="reject ambiguous traversal",
+            safe_command_display="synthetic checker",
+        )
+    except ValueError:
+        rejected = True
+    assert rejected, {
+        "boundary": boundary,
+        "command_launched": marker.exists(),
+        "bundle_created": destination.exists(),
+    }
+    assert not marker.exists()
+    assert not destination.exists()
+    assert not (root / "bundle").exists()
+
+
+def test_collector_boundary_accepts_unambiguous_parent_traversal(
+    tmp_path: Path,
+) -> None:
+    """Ordinary parent traversal keeps valid collection and repository identity."""
+    from agent_harness.external_checks import collect_external_check
+
+    tmp_path = tmp_path.resolve()
+    root = repository(tmp_path)
+    nested = root / "nested"
+    nested.mkdir()
+    output_parent = tmp_path / "output-parent"
+    output_parent.mkdir()
+    protected = tmp_path / "protected"
+    (protected / "child").mkdir(parents=True)
+    guard = protected / "guard"
+    guard.write_text("original")
+    destination = tmp_path / "bundle"
+    marker = tmp_path / "launched"
+    result = collect_external_check(
+        nested / "..",
+        _collector_boundary_policy(destination, marker),
+        output_parent / ".." / "bundle",
+        actor="operator",
+        check_label="boundary",
+        criterion="ordinary traversal compatibility",
+        safe_command_display="synthetic checker",
+        protected_paths=(protected / "child" / "..",),
+    )
+    assert result["outcome"] == "PASS"
+    assert result["protected_state"] == "unchanged"
+    assert marker.read_text() == str(root)
+    assert guard.read_text() == "original"
+    assert (destination / "receipt.json").is_file()

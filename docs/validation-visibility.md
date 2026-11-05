@@ -184,6 +184,11 @@ receipt = collect_external_check(
 
 The parent must exist; the bundle must be fresh, exclusive, outside the repository,
 its actual Git metadata and explicit protected paths, with no symlink ancestors.
+The collector rejects a terminal repository symlink and any repository, bundle
+or protected path combining symlink components with parent traversal before
+normalization, executable binding or bundle creation. Ordinary unambiguous parent
+traversal remains supported. These point-in-time guards do not confine concurrent
+filesystem changes.
 The check owns `result.xml`, which must not exist before launch. There is no new
 execution CLI. The caller owns authorization, command arguments, privacy review of
 the display string, checker environment and declared protected paths. The existing
