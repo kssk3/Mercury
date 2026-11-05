@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -264,12 +265,121 @@ def _comparison(expected: str | None, saved: object, lengths: tuple[int, ...]) -
     )
 
 
+def _provenance(
+    summary: dict[str, object],
+    events: list[dict[str, object]],
+    attempts: list[dict[str, object]],
+    config: dict[str, object],
+    comparison: dict[str, object],
+) -> dict[str, object]:
+    """Project only validated captured facts; absent receipts remain unavailable."""
+    valid = not summary["diagnostics"]
+    evidence = _mapping(summary["evidence"]) if valid else {}
+    cards: list[dict[str, object]] = []
+    for key in ("current", "journal", "config"):
+        source = config if key == "config" and valid else evidence.get(key)
+        receipt = _mapping(source) if source is not None else {}
+        cards.append(
+            {
+                "id": key,
+                "origin": "operator_supplied_config"
+                if key == "config"
+                else "harness_journal",
+                "path": receipt.get("path"),
+                "sha256": receipt.get("sha256"),
+                "state": "captured" if receipt.get("sha256") else "unavailable",
+                "digest_kind": "captured_bytes",
+                "binding_state": config["state"] if key == "config" else None,
+            }
+        )
+    cards.append(
+        {
+            "id": "outputs",
+            "origin": "harness_journal",
+            "state": "recorded_metadata" if evidence.get("outputs") else "unavailable",
+            "digest_kind": "recorded_identifier_payload_not_read",
+            "identifiers": evidence.get("outputs"),
+        }
+    )
+    targets: list[dict[str, object]] = []
+    for attempt in attempts if valid else []:
+        binding = attempt["candidate_binding"]
+        targets.append(
+            {
+                **{
+                    key: attempt[key]
+                    for key in (
+                        "attempt_id",
+                        "repository_root",
+                        "repository_id",
+                        "before_head",
+                        "target_revision",
+                        "contract_sha256",
+                        "context_sha256",
+                        "commands",
+                        "native_process",
+                        "checker_result",
+                        "journal_event_indices",
+                    )
+                },
+                "candidate_sha256": None
+                if binding is None
+                else _mapping(binding)["candidate_sha256"],
+                "comparison": comparison
+                if attempt is attempts[-1]
+                else {
+                    "context_only": True,
+                    "revision": "not_requested",
+                    "candidate_sha256": "not_requested",
+                },
+                "current_workspace_verified": False,
+            }
+        )
+    process_available = any(
+        _mapping(target["native_process"])["process_status"] != "unknown"
+        for target in targets
+    )
+    checks_available = any(target["checker_result"] is not None for target in targets)
+    return {
+        "schema_version": 1,
+        "record_availability": {
+            "saved_execution": "recorded_metadata"
+            if process_available
+            else "unavailable",
+            "saved_checks": "recorded_metadata" if checks_available else "unavailable",
+        },
+        "ownership": {
+            "saved_execution": "harness_journal",
+            "saved_checks": "harness_checker",
+            "external_operator_checks": "not_ingested",
+            "independent_reviews": "not_ingested",
+        },
+        "execution": {
+            "configured_backend": events[0]["backend"]
+            if valid and events and events[0].get("event") == "run_binding"
+            else None,
+            "native_launch_count": None,
+            "model_identity": None,
+            "started_at": None,
+            "ended_at": None,
+            "environment_identity": None,
+            "tool_use": "unavailable",
+            "receipt_state": "saved_process_metadata_only"
+            if process_available
+            else "unavailable",
+        },
+        "targets": targets,
+        "evidence": cards,
+    }
+
+
 def explain_execution(
     state_directory: Path | str,
     *,
     config_path: Path | str | None = None,
     expected_revision: str | None = None,
     expected_candidate_sha256: str | None = None,
+    external_checks: Sequence[Path | str] = (),
 ) -> dict[str, object]:
     """Compose saved facts from one byte pair; expected values are caller context.
 
@@ -277,6 +387,8 @@ def explain_execution(
     assessment is read or invoked. Config inspection uses only pure validators.
     """
     events: list[dict[str, object]] = []
+    if isinstance(external_checks, str):
+        external_checks = (external_checks,)
     attempts: list[dict[str, object]] = []
     try:
         path, current, journal = _read_pair(state_directory)
@@ -337,7 +449,7 @@ def explain_execution(
     next_action = (
         "inspect_and_reconcile_saved_evidence" if blockers else "independent_review"
     )
-    return {
+    result: dict[str, object] = {
         **summary,
         "explanation": {
             "schema_version": 1,
@@ -349,6 +461,7 @@ def explain_execution(
             "next": {"actor": "caller", "action": next_action},
             "comparison": comparison,
             "config": config,
+            "provenance": _provenance(summary, events, attempts, config, comparison),
             "criteria": criteria,
             "attempts": attempts if not summary["diagnostics"] else [],
             "review": {"state": "implemented_but_unwired", "api": "assess_review"},
@@ -368,3 +481,67 @@ def explain_execution(
             ],
         },
     }
+    if external_checks:
+        from agent_harness.external_checks import read_external_check
+
+        external: list[dict[str, object]] = []
+        for receipt_path in external_checks[:32]:
+            try:
+                row = read_external_check(receipt_path)
+                observed = row["after"]["observation"]
+                historical = None if binding is None else _mapping(binding)
+                applicability = "unavailable"
+                if historical is not None:
+                    applicability = (
+                        "match"
+                        if (
+                            row["subject_state"] == "unchanged"
+                            and row["protected_state"] == "unchanged"
+                            and observed["repository_root"]
+                            == historical["repository_root"]
+                            and observed["head"] == summary["target_revision"]
+                            and row["after"]["candidate_sha256"]
+                            == historical["candidate_sha256"]
+                        )
+                        else "mismatch"
+                    )
+                external.append(
+                    {
+                        **row,
+                        "state": "captured",
+                        "historical_applicability": applicability,
+                    }
+                )
+            except (
+                OSError,
+                ValueError,
+                TypeError,
+                KeyError,
+                OverflowError,
+                RecursionError,
+            ):
+                external.append(
+                    {
+                        "origin": "external_command_receipt",
+                        "state": "unavailable",
+                        "outcome": "UNKNOWN",
+                        "historical_applicability": "unavailable",
+                        "reason": "invalid_or_incomplete_external_receipt",
+                    }
+                )
+        if len(external_checks) > 32:
+            external.append(
+                {
+                    "origin": "external_command_receipt",
+                    "state": "unavailable",
+                    "outcome": "UNKNOWN",
+                    "reason": "external_receipt_limit",
+                }
+            )
+        explanation = cast(dict[str, object], result["explanation"])
+        explanation["external_checks"] = external
+        provenance = _mapping(explanation["provenance"])
+        _mapping(provenance["ownership"])["external_operator_checks"] = (
+            "external_command_receipt"
+        )
+    return result

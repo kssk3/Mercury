@@ -80,6 +80,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     status_command.add_argument("--config", metavar="PATH")
     status_command.add_argument("--expected-revision", metavar="SHA")
     status_command.add_argument("--expected-candidate-sha256", metavar="SHA256")
+    status_command.add_argument(
+        "--external-check", action="append", default=[], metavar="RECEIPT"
+    )
+    report_command = commands.add_parser(
+        "report", help="write a fresh bundle from existing execution records"
+    )
+    report_command.add_argument("--state-dir", required=True, metavar="PATH")
+    report_command.add_argument("--repository", required=True, metavar="PATH")
+    report_command.add_argument("--output-dir", required=True, metavar="PATH")
+    report_command.add_argument(
+        "--external-check", action="append", default=[], metavar="RECEIPT"
+    )
+    report_command.add_argument(
+        "--protect", action="append", default=[], metavar="PATH"
+    )
+    report_command.add_argument("--config", metavar="PATH")
+    report_command.add_argument("--expected-revision", metavar="SHA")
+    report_command.add_argument("--expected-candidate-sha256", metavar="SHA256")
     run_command = commands.add_parser(
         "run", help="preview settings or execute one hash-approved task"
     )
@@ -92,6 +110,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.show_version:
         print(f"local-harness {__version__}")
         return 0
+
+    if arguments.command == "report":
+        from agent_harness.report import export_report
+
+        try:
+            generated = export_report(
+                arguments.state_dir,
+                repository=arguments.repository,
+                output_directory=arguments.output_dir,
+                external_checks=arguments.external_check,
+                protected_paths=arguments.protect,
+                config_path=arguments.config,
+                expected_revision=arguments.expected_revision,
+                expected_candidate_sha256=arguments.expected_candidate_sha256,
+            )
+        except (OSError, ValueError, TypeError, OverflowError, RecursionError):
+            print("local-harness: 보고서를 생성하지 못했습니다.", file=sys.stderr)
+            return 2
+        print(json.dumps(generated, ensure_ascii=False, separators=(",", ":")))
+        return 1 if generated["history_diagnostics"] else 0
 
     if arguments.command == "run":
         from agent_harness.run_config import load_run_config, preview_run_config
@@ -166,6 +204,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if arguments.format == "html" and not arguments.explain:
             parser.error("HTML status requires --explain")
+        if arguments.external_check and not arguments.explain:
+            parser.error("external checks require --explain")
         if arguments.explain:
             from agent_harness.explanation import explain_execution
 
@@ -174,6 +214,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config_path=arguments.config,
                 expected_revision=arguments.expected_revision,
                 expected_candidate_sha256=arguments.expected_candidate_sha256,
+                external_checks=tuple(arguments.external_check),
             )
         else:
             if any(

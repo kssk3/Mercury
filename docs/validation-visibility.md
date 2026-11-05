@@ -1,5 +1,8 @@
 # Historical validation visibility
 
+For a repeatable handoff in another project, see [the reporting procedure](#reuse-in-another-project)
+and the reusable [current record template](verification-record-template.md).
+
 Use the installed CLI to explain one existing execution without starting work:
 
 ```sh
@@ -65,6 +68,8 @@ status. Invalid/unreadable history emits unknown with diagnostics and exit code 
 CLI syntax errors use exit code 2. The explanation never creates a lock, journal,
 receipt, retry, review, approval or merge. It does not verify output payloads,
 authenticate records, invoke recovery, capture a repository or start subprocesses.
+The explicit external-receipt option below additionally validates its fixed JUnit
+artifact; this does not verify historical native output payloads.
 
 `inspector_version` identifies the installed package version, not uncommitted
 implementation bytes. The caller must retain a separate frozen candidate manifest
@@ -107,3 +112,296 @@ CI's existing Linux Pytest command uses `pytest -v -rs` to show each node outcom
 and skip reasons. Only log verbosity changes; permissions, jobs, enforcement,
 test selection and approval authority remain unchanged. New hosted results are
 still required for a subsequently authorized publication.
+
+## Provenance projection and internal evidence navigation
+
+Only `status --explain` adds `explanation.provenance`. The default status schema,
+historical conclusion, readiness, comparison and exit behavior remain unchanged.
+The projection uses the same bounded validated state/journal pair and already
+captured configuration receipt. It does not acquire any additional files.
+
+The ownership section identifies saved Mercury journal/process metadata and
+Mercury checker metadata separately from external operator checks and independent
+reviews. These ownership values name expected sources; separate
+`record_availability` fields identify whether saved process/checker metadata was
+actually observed. A target alone does not establish a process receipt.
+Independent reviews remain unconnected. External command receipts are ingested
+only when explicitly supplied, as described below. Configured backend names
+are configuration facts, not proof of native launch, real model identity or tool
+use. Native launch count, model identity, execution timestamps and environment
+identity remain null because the saved contract does not establish those facts.
+The report inspection timestamp is never substituted for an execution timestamp.
+
+Targets retain each attempt's repository root/id, before and target revision,
+recorded candidate digest where available, contract/context digests, process
+metadata, checker result and exact command hashes/results. Caller comparison
+applies to the active target only; earlier attempts retain no requested comparison.
+No results are combined across attempts. None establishes current verification.
+Legacy missing content identity remains null; invalid histories expose no targets.
+
+Evidence cards identify captured current/journal/config paths and SHA-256 digests.
+A captured but mismatched configuration remains captured evidence with its failed
+binding visible, not evidence readiness. Invalid histories expose unavailable
+cards rather than partial unvalidated facts. Output identifiers are explicitly
+recorded identifiers whose payloads were not read, unlike digests computed from
+captured input bytes. Neither kind authenticates the source.
+
+The Korean standalone report prominently displays ownership, verification targets
+and evidence. Header navigation reaches each section directly. Ownership facts
+use two columns on desktop and one column on mobile; secondary unavailable
+execution identity fields remain available in a native disclosure. Fixed internal anchors connect cards and zero-based journal event
+indices to their exact saved attempt. Every arbitrary path/URI remains escaped,
+selectable text. Rendering performs no I/O, adds no resources, and preserves the
+exact supplied snapshot in its existing escaped JSON disclosure. Links and native
+disclosures have visible keyboard focus; long values wrap within the existing
+16px responsive layout. This is navigation within one report, not an artifact
+exporter.
+
+## Explicit external command receipts
+
+The trusted Python caller may collect **one already-authorized check command**:
+
+```python
+from pathlib import Path
+from agent_harness.external_checks import collect_external_check
+from agent_harness.policy import VerificationPolicy
+
+repository = Path("/absolute/path/to/repository")
+bundle = Path("/absolute/path/to/external-evidence/fresh-check")
+policy = VerificationPolicy(
+    (("/absolute/path/to/external-environment/bin/python", "-m", "pytest",
+      "tests/test_example.py", "--junitxml=" + str(bundle / "result.xml")),),
+    working_directory=".", timeout_seconds=60,
+)
+receipt = collect_external_check(
+    repository, policy, bundle,
+    actor="Local operator", check_label="Example unit checks",
+    criterion="Expected example behavior",
+    safe_command_display="python -m pytest tests/test_example.py --junitxml=[bundle]/result.xml",
+    protected_paths=(repository / "protected-input",),
+)
+```
+
+The parent must exist; the bundle must be fresh, exclusive, outside the repository,
+its actual Git metadata and explicit protected paths, with no symlink ancestors.
+The check owns `result.xml`, which must not exist before launch. There is no new
+execution CLI. The caller owns authorization, command arguments, privacy review of
+the display string, checker environment and declared protected paths. The existing
+trusted executable binder and controlled runner retain executable proofs, loader
+isolation, bounded output capture and no retry. This is not process confinement.
+
+`intent.json` precedes launch. `process.json` preserves the observed UTC times,
+monotonic duration and process outcome before result/target observation and terminal
+`receipt.json`. Interruption or failed terminal persistence leaves the intent and
+any completed process record in place. No reader starts recovery or runs a command;
+an incomplete receipt is unavailable. Failed writes are not successful collection.
+
+Receipts retain command SHA-256 for the actual selected executable plus arguments,
+selected tool path/hash, cwd, before/after repository observations and candidate
+digests, and explicit protected-entry fingerprints (including ignored content
+under those entries). Raw argv, stdout/stderr and environment values are not
+persisted. The display is explicitly caller-provided, not proof of exact arguments.
+Hashes detect byte differences under trusted acquisition; they do not authenticate
+the operator or establish human approval. Files and XML reads are bounded to4MiB;
+explicit protected observations are bounded to10,000entries per path.
+
+The strict JUnit subset counts testcase outcomes and checks declared aggregate
+counts. It rejects duplicate cases, contradictory/nested outcomes, DTD/entities,
+malformed XML and unsupported structures. Pytest JUnit is supported; the Vitest
+JUnit shape has synthetic compatibility coverage only. No real Vitest execution is
+claimed. Counts do not prove the criterion's semantics. Exit0with missing/invalid
+XML isUNKNOWN; failing assertions areFAIL; any skipped case preventsPASS; timeout
+remainsTIMEOUT even with partial passing XML. Process and test results remain
+separate. A changing candidate/protected target prevents an applicable success.
+
+The **original XML remains checker-owned** and can contain private test names,
+messages or captured output. It is not copied into receipt/HTML. Only normalized
+counts, fixed artifact filename, hash and its local path are projected. Restrict
+access to the entire bundle as appropriate before sharing; no scrubbed export or
+portable packaging is implemented.
+
+Connect receipts to the same historical report without changing its conclusions:
+
+```sh
+local-harness status --state-dir /absolute/path/to/external-state --explain \
+  --external-check /absolute/path/to/external-evidence/fresh-check/receipt.json \
+  --format html > report.html
+```
+
+`--external-check` is repeatable (up to32read records) and requires `--explain`.
+The reader validates fixed `intent.json`, `process.json`, `receipt.json` and
+`result.xml` siblings without following paths stored inside metadata. It refuses
+changed, missing, truncated, oversized, symlinked or hardlinked inputs. An invalid
+receipt is projected as unavailable/UNKNOWN, while historical status/diagnostics,
+readiness and exit behavior remain unchanged. Without this option the explanation
+schema remains unchanged and external ownership stays `not_ingested`.
+
+Historical applicability requires unchanged before/after content and protected
+entries, matching repository root, revision and saved candidate digest. A different
+target is marked mismatch; missing historical binding is unavailable. Matching is
+historical identity comparison, never current freshness, native launch, review or
+approval. Different commands/attempts are never aggregated into one passing run.
+The pure Korean renderer adds external cards and a fixed internal header link only
+when records were supplied, escapes every value, and performs no reads or execution.
+
+## Reuse in another project
+
+Use a Mercury checkout that contains the external-receipt feature, with its locked
+environment installed as described in [the quickstart](quickstart.md). A PR or an
+older installation does not establish that a user has this implementation. Keep
+the exact Mercury revision and, for uncommitted code, a separate content manifest.
+The Python package version alone cannot identify an uncommitted implementation.
+These instructions and the template are repository files; the current wheel
+packages `src/agent_harness`, not the repository documentation.
+
+### Collect once, then read the same evidence
+
+1. Name the project revision/content, behavioral criterion, operator and authorized
+   check. Collect it with the Python API above. Each check uses a fresh bundle;
+   reporting does not authorize a command, retry or native agent execution.
+2. Retain the complete original check bundle and existing Mercury state. Keep
+   evidence outside the checked repository, Git metadata and protected inputs.
+   For example, use sibling `app/` and `app-evidence/` directories. State and check
+   receipt paths still identify the original local locations; copying files to
+   another machine is not a supported portable migration.
+3. Capture one explanation dictionary, save it as JSON and render that exact
+   dictionary as HTML. The example below only reads existing execution/check
+   records. Replace the paths and use the Python environment for the selected
+   Mercury checkout. The parent `views` directory must already exist; `check-001`
+   must be a new name outside the project and protected locations.
+
+```python
+import json
+from pathlib import Path
+
+from agent_harness.explanation import explain_execution
+from agent_harness.html_report import render_execution_html
+
+snapshot = explain_execution(
+    "/absolute/path/to/app-evidence/native-state",
+    external_checks=(
+        "/absolute/path/to/app-evidence/checks/check-001/receipt.json",
+    ),
+)
+view = Path("/absolute/path/to/app-evidence/views/check-001")
+view.mkdir()
+with (view / "explanation.json").open("x", encoding="utf-8") as stream:
+    json.dump(snapshot, stream, ensure_ascii=False, indent=2)
+with (view / "report.html").open("x", encoding="utf-8") as stream:
+    stream.write(render_execution_html(snapshot))
+```
+
+This is caller-owned sample code, not an atomic export transaction. The explicit
+`report` command below adds bounded fresh-output validation. If a later write fails, retain the original records
+and any completed view; use a new view name for a later attempt. Output-path
+selection remains the caller's responsibility. No evidence files are moved.
+
+The existing CLI can instead print JSON or HTML with `status --explain`. Two
+independent CLI calls capture two independent inspection snapshots. To reproduce
+one HTML view exactly, retain its standalone JSON and the exact renderer source;
+read that JSON and call `render_execution_html` without calling `explain_execution`
+again. Keep any view's digest alongside its generator identity when exact bytes
+matter. The renderer does not calculate a new inspection time.
+
+### Maintain one current Markdown record
+
+Copy the [record template](verification-record-template.md) to a local `current.md`
+outside the application and shared product patch. Fill it from the saved facts;
+Mercury does not fill it automatically. Link to the original bundle, standalone
+snapshot and HTML instead of copying raw logs or manually aggregating test totals.
+Use an outcome/check ID as well as a date. Add a dated entry for a feature result,
+material failure, decision or handoff, rather than creating a note every day.
+Preserve the previous view before replacing facts needed for recovery or audit.
+
+Keep execution, verification and delivery separate. A process exiting zero does
+not establish passing assertions. A readable `status` command exiting zero does
+not establish verification success; its exit code reports history readability.
+An external PASS does not change native UNKNOWN, establish current applicability,
+or count as an independent review, approval, publication or merge. Inspect the
+reported outcome, test counts, subject/protected changes and applicability.
+
+### Share the feature, retain each user's records locally
+
+| Material | Shared product change | Local project record |
+| --- | --- | --- |
+| Collector, readers and HTML renderer | Yes, after the applicable delivery gates | Installed selected version |
+| This guide and blank Markdown template | Yes | Optional local copy |
+| Original state, intent/process/receipt, raw XML | No automatic upload | Preserve complete attributable bundles |
+| Current Markdown, snapshots and generated HTML | No automatic upload | One current view plus linked evidence |
+| Screenshots | Only deliberately selected, privacy-reviewed examples | Viewport/state evidence when UI inspection is needed |
+
+The same HTML can be opened without a server, JavaScript or remote assets. It can
+still expose project paths, operator labels and identifiers. Raw JUnit may also
+contain test names, messages or captured output. Review access and content before
+sharing any record; the implementation is not a scrubbed exporter. A static HTML
+file is a captured view, not a live dashboard or proof that adjacent files remain
+unchanged. Hashes link bytes; they do not authenticate authors.
+
+Retain unique snapshots, original failures and referenced evidence. HTML is
+regenerable only while its standalone JSON and exact generator remain available.
+Keep screenshots for a relevant UI state or defect; routine checks do not require
+them. Age alone does not make a file disposable. Automatic collection at task end,
+current-Markdown updates, screenshots and cleanup are not implemented.
+
+## Explicit fresh report bundle
+
+Create three files from one capture of already saved records:
+
+```sh
+local-harness report --state-dir /absolute/path/to/app-evidence/native-state \
+  --repository /absolute/path/to/app \
+  --external-check /absolute/path/to/app-evidence/checks/check-001/receipt.json \
+  --protect /absolute/path/to/app-evidence/current.md \
+  --output-dir /absolute/path/to/app-evidence/views/new-report
+```
+
+The output's immediate parent must exist and the output directory must be new.
+The command writes exactly `explanation.json`, `report.html` and `record.md`.
+One `explain_execution` capture feeds all three; rendering saved JSON with the
+same renderer reproduces the HTML without re-reading history. The English
+Markdown scaffold projects observed process/assertion/applicability facts and
+escapes opaque recorded text. Non-identifier values use literal code spans with
+delimiters longer than any embedded backtick run, keeping URL/email text as data.
+The displayed source representation retains escaping; exact original values
+remain in the lossless JSON. No specific Markdown viewer is executed by export.
+Only fixed sibling links are generated. No passing total combines checks or
+attempts. The record includes package version and an actual renderer-file SHA-256
+where readable; neither establishes clean Git provenance or author authentication.
+
+`--external-check` is repeatable up to 32 paths. `--protect` is repeatable for
+caller-declared entries. Optional `--config`, `--expected-revision` and
+`--expected-candidate-sha256` retain the existing historical comparison semantics.
+The explicit repository selects output protection; it does not establish that
+all supplied historical records describe that repository or are currently fresh.
+
+Before writing, the command resolves the actual Git working-tree root and checks
+its actual Git/common metadata, input state directory, supplied config, full
+external-receipt parent bundles and explicit protected paths. Output overlap in
+either direction, symlink ancestors, existing destinations and invalid parents
+are refused. Input/output selections combining `..` with a symlink component are
+rejected before lexical normalization can hide the actual selected location;
+ordinary relative paths without that ambiguity remain allowed.
+The selected repository itself must not be a terminal symlink; choose its actual
+working-tree path instead. This report-only refusal does not change shared
+repository resolver behavior.
+It reuses trusted bounded Git queries only for these boundaries;
+no native/checker command, network, retry, approval or recovery is triggered.
+Path checks are point-in-time checks, not concurrent-path confinement.
+
+The directory and fixed files are created exclusively. If a later write fails,
+completed partial files remain, originals stay in place, and no completion
+summary is printed. There is no rollback, automatic retry, atomic bundle
+transaction or power-loss durability claim. Use a new destination for a later
+attempt. Existing current Markdown is never updated or promoted.
+
+| CLI exit | Meaning |
+| --- | --- |
+| `0` | Bundle completed and original history was readable; a recorded failure can still have this code. |
+| `1` | Bundle completed with native-history diagnostics/UNKNOWN; external PASS cannot promote it. |
+| `2` | Invalid selection or failed generation; no completion summary. Partial output may remain. |
+
+The JSON stdout summary describes generation, not test success. Review actual
+saved execution/assertion outcomes in the bundle. Manual rationale, independent
+review, approval and delivery remain explicitly unrecorded; the exporter does
+not invent them. Original paths and operator identifiers can remain sensitive;
+this is a local projection, not a scrubbed or portable sharing package.
