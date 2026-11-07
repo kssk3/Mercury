@@ -1078,3 +1078,84 @@ def test_startup_reconciles_bound_projection_without_rewriting(
         "unknown" if representation == "tampered" else "completed"
     )
     assert before == (journal.path.read_bytes(), store.path.read_bytes())
+
+
+@pytest.mark.parametrize("form", ["compact", "full"])
+def test_startup_accepts_compact_and_full_review_summary(
+    completed_loop: tuple[Path, EventJournal, CurrentStateStore, str], form: str
+) -> None:
+    from dataclasses import asdict
+
+    from agent_harness.review_evidence import read_review_binding
+
+    root, journal, store, _ = completed_loop
+    verification = next(
+        event for event in journal.read() if event["event"] == "attempt_verification"
+    )
+    binding = read_review_binding(verification, verification["review_binding"])
+    current = cast(dict[str, Any], store.read())
+    summary = current["attempt_summary"]
+    assert summary["schema_version"] == 2
+    active = summary["active_attempt"]
+    assert active["verification"]["review_binding"] == asdict(binding)
+    if form == "full":
+        summary["schema_version"] = 1
+        active["verification"]["review_binding"] = verification["review_binding"]
+        store.write(current)
+    before = (
+        journal.path.read_bytes(),
+        store.path.read_bytes(),
+        (root / "user.txt").read_bytes(),
+    )
+    decision = inspect_loop(completed_loop)
+    assert decision.status == "completed"
+    assert decision.diagnostics == ("recorded_completion",)
+    assert decision.loop_status == "pass"
+    assert before == (
+        journal.path.read_bytes(),
+        store.path.read_bytes(),
+        (root / "user.txt").read_bytes(),
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "identity",
+        "version",
+        "boolean-version",
+        "extra-field",
+        "missing-field",
+        "missing-binding",
+        "verification",
+    ],
+)
+def test_startup_rejects_tampered_compact_review_summary(
+    completed_loop: tuple[Path, EventJournal, CurrentStateStore, str], mutation: str
+) -> None:
+    _, journal, store, _ = completed_loop
+    current = cast(dict[str, Any], store.read())
+    summary = current["attempt_summary"]
+    verification = summary["active_attempt"]["verification"]
+    projection = verification["review_binding"]
+    if mutation == "identity":
+        projection["candidate_sha256"] = "f" * 64
+    elif mutation == "version":
+        summary["schema_version"] = 3
+    elif mutation == "boolean-version":
+        summary["schema_version"] = True
+    elif mutation == "extra-field":
+        projection["extra"] = "unsupported"
+    elif mutation == "missing-field":
+        del projection["evidence_sha256"]
+    elif mutation == "missing-binding":
+        del verification["review_binding"]
+    else:
+        verification["overall_kind"] = "fail"
+    store.write(current)
+    before = journal.path.read_bytes(), store.path.read_bytes()
+    decision = inspect_loop(completed_loop)
+    assert decision.status == "unknown"
+    assert decision.diagnostics == ("contradictory_summary",)
+    assert decision.loop_status == "pass"
+    assert before == (journal.path.read_bytes(), store.path.read_bytes())

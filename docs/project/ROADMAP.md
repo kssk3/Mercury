@@ -73,6 +73,17 @@ they introduce no hook registrations.
 
 ## Proposed next product outcomes
 
+### H1: Explain execution, verification and stopping policy separately
+
+The user's 2026-11-01 request prepared a bounded explanation improvement.
+On 2026-11-02 the user explicitly HELD H1 to resume the frontend rebuild.
+[H1 scope and verification plan](H1-result-separation-plan.md) is preserved and
+unimplemented. Reuse recorded facts with explicit unknowns; preserve
+existing exit/retry semantics and history. It does not implement P1's candidate
+binding or resume held PR #12. Resolve the status-work overlap before admitting
+implementation. W1/W3/W6 working practices live in WORKFLOW rather than a second
+lifecycle document. No implementation or native execution is authorized here.
+
 ### P1: Bind execution results to the actual review target
 
 The current [review contract](../review-contract.md#trusted-caller-responsibilities)

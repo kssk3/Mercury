@@ -690,3 +690,115 @@ def test_inspection_incomplete_review_binding_is_unknown(tmp_path: Path) -> None
     summary = summarize_execution(journal.path.parent)
     assert summary["recorded_status"] == "unknown"
     assert summary["review_binding"] is None
+
+
+@pytest.mark.parametrize("form", ["compact", "full"])
+def test_inspection_accepts_compact_and_full_review_projection(
+    tmp_path: Path, form: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import asdict
+
+    from test_loop import _review_bound_loop
+
+    from agent_harness.review_evidence import read_review_binding
+
+    _, journal, store, result = _review_bound_loop(tmp_path)
+    assert result.status == "pass"
+    event = next(e for e in journal.read() if e["event"] == "attempt_verification")
+    binding = read_review_binding(event, event["review_binding"])
+    current = cast(dict[str, Any], store.read())
+    summary = current["attempt_summary"]
+    assert summary["schema_version"] == 2
+    verification = summary["active_attempt"]["verification"]
+    assert verification["review_binding"] == asdict(binding)
+    if form == "full":
+        summary["schema_version"] = 1
+        verification["review_binding"] = event["review_binding"]
+        store.write(current)
+    before = journal.path.read_bytes(), store.path.read_bytes()
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        pytest.fail("historical identity conversion attempted workspace execution")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    summary = summarize_execution(journal.path.parent)
+    assert summary["recorded_status"] == "pass"
+    assert (
+        summary["review_binding"]
+        == cast(dict[str, Any], event["review_binding"])["binding"]
+    )
+    assert summary["review_binding"] == asdict(binding)
+    assert before == (journal.path.read_bytes(), store.path.read_bytes())
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "change:repository_root",
+        "change:target_revision",
+        "change:attempt_id",
+        "change:contract_sha256",
+        "change:candidate_sha256",
+        "change:evidence_sha256",
+        "missing-field",
+        "missing-binding",
+        "missing-version",
+        "unsupported-version",
+        "boolean-version",
+        "extra-field",
+        "journal-candidate",
+        "compact-journal",
+        "missing-journal",
+    ],
+)
+def test_inspection_rejects_compact_review_projection_tampering(
+    tmp_path: Path, mutation: str
+) -> None:
+    from test_loop import _review_bound_loop
+
+    from agent_harness.attempt import AttemptJournal, AttemptJournalError
+
+    root, journal, store, result = _review_bound_loop(tmp_path)
+    assert result.status == "pass"
+    current = cast(dict[str, Any], store.read())
+    attempt = current["attempt_summary"]
+    projection = attempt["active_attempt"]["verification"]["review_binding"]
+    events = journal.read()
+    event = next(e for e in events if e["event"] == "attempt_verification")
+    if mutation.startswith("change:"):
+        field = mutation.split(":", 1)[1]
+        projection[field] += "altered"
+    elif mutation == "missing-field":
+        del projection["evidence_sha256"]
+    elif mutation == "missing-binding":
+        del attempt["active_attempt"]["verification"]["review_binding"]
+    elif mutation == "missing-version":
+        del attempt["schema_version"]
+    elif mutation == "unsupported-version":
+        attempt["schema_version"] = 3
+    elif mutation == "boolean-version":
+        attempt["schema_version"] = True
+    elif mutation == "extra-field":
+        projection["candidate"] = {}
+    elif mutation == "journal-candidate":
+        cast(dict[str, Any], event["review_binding"])["candidate"]["files"][0][
+            "sha256"
+        ] = "f" * 64
+    elif mutation == "compact-journal":
+        event["review_binding"] = projection
+    else:
+        events.remove(event)
+    if mutation in {"journal-candidate", "compact-journal", "missing-journal"}:
+        raw = b"".join(json.dumps(e).encode() + b"\n" for e in events)
+        journal.path.write_bytes(raw)
+        attempt["journal"]["sha256"] = hashlib.sha256(raw).hexdigest()
+        if mutation != "missing-journal":
+            with pytest.raises(AttemptJournalError):
+                AttemptJournal(root, journal=journal, state_store=store).read()
+    store.write(current)
+    before = journal.path.read_bytes(), store.path.read_bytes()
+    summary = summarize_execution(journal.path.parent)
+    assert summary["recorded_status"] == "unknown"
+    assert summary["review_binding"] is None
+    assert summary["diagnostics"]
+    assert before == (journal.path.read_bytes(), store.path.read_bytes())

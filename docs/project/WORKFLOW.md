@@ -22,6 +22,23 @@ an appropriate test, implement the smallest fix, then refactor with passing
 checks. Documentation uses proportional link, command, claim and diff checks,
 without artificial application tests.
 
+## Feature-sized work and existing authority (W1, W3)
+
+W1: Admit one observable feature or fix, including its affected producers and
+consumers, as the working unit. Plan RED, GREEN and necessary integration/UI
+acceptance together. Refactor only when needed. Separate native invocations may
+protect frozen tests or satisfy an actual dependency/runtime boundary; they do
+not create fresh feature budgets or require one delivery per file. State the
+concrete reason for a split. A unit-test count alone is not feature acceptance.
+
+W3: Reuse explicit authority within its named target, actions and endpoint.
+Continue already authorized preparation, proportional checks and recording
+without asking again. A preview is not execution authority: where the admitted
+workflow requires approval of exact configuration bytes, retain that binding.
+Ask only for genuinely missing authority or a material scope/configuration/risk
+change, after making the proposed action concrete. Never infer execution, retry,
+publication or budget authority from silence or from an adjacent recommendation.
+
 ## Verify, then review, then publish
 
 Required applicable full candidate checks must reach terminal PASS before final
@@ -111,7 +128,7 @@ into unexplained whole-file or local full-suite replay. Fixture/setup failures
 are distinct from reproduced product defects and retain their original evidence
 and deadlines. Complete hosted source CI remains an exact-HEAD integration gate.
 
-Reuse one current report for status, counters, evidence and next gate, with one
+W6: Reuse one current report for status, counters, evidence and next gate, with one
 unambiguous authoritative current decision view. Superseded implementation,
 check, review and gate fields belong in immutable historical evidence, referenced
 by absolute paths and their original revision or digest; never retarget old
@@ -121,6 +138,13 @@ execution logs and review diff packets. Publish
 short actual start/end results and meaningful blockers or requested statuses;
 monitor completion internally with backoff. Unknown timing stays UNKNOWN.
 A status question or dissatisfaction is not explicit cancellation.
+
+Keep that report concise: current outcome, execution/verification distinction,
+confirmed and unknown causes, immutable evidence references, retained counters
+and next gate. Archive its previous contents before replacing the current view
+when required to preserve the record. Do not duplicate raw logs or create a
+second competing status ledger. These are caller working practices, not claims
+that Mercury automatically implements approval or report maintenance.
 
 ## Record review approval
 

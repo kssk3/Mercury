@@ -1274,3 +1274,109 @@ def test_attempt_legacy_verification_has_no_review_binding(
     )
     assert event["schema_version"] == 1
     assert "review_binding" not in attempts.read()[-1]["verification"]
+
+
+def test_large_review_binding_current_projection_stays_readable(
+    repository: Path, tmp_path: Path
+) -> None:
+    from dataclasses import replace
+
+    from agent_harness.inspection import summarize_execution
+    from agent_harness.review_evidence import read_review_binding
+    from agent_harness.turn import FileFingerprint, compare_observations
+
+    snapshot = replace(
+        RepositoryObservation.capture(repository),
+        files=tuple(
+            FileFingerprint(
+                f"src/package_{index // 100:03d}/module_{index:05d}.py",
+                "regular",
+                "d" * 64,
+                128,
+                False,
+                0o644,
+            )
+            for index in range(8000)
+        ),
+    )
+    journal = EventJournal(tmp_path / "state")
+    store = CurrentStateStore(tmp_path / "state")
+    attempts = api(repository, journal, store)
+    turn = intent(repository)
+    turn["before"] = asdict(snapshot)
+    journal.append({"event": "loop_start", "repository_id": snapshot.repository_id})
+    journal.append(turn)
+    delta = asdict(compare_observations(snapshot, snapshot))
+    journal.append(
+        {
+            "event": "turn_observation",
+            "attempt_id": turn["attempt_id"],
+            "after": asdict(snapshot),
+            "delta": delta,
+            "process": {
+                "process_status": "successful_exit",
+                "exit_code": 0,
+                "duration_seconds": 0.1,
+                "stdout": {"retained_bytes": 0, "truncated": False},
+                "stderr": {"retained_bytes": 0, "truncated": False},
+                "final_message": None,
+                "final_output_status": "missing",
+            },
+        }
+    )
+    journal.append(
+        {
+            "event": "scope_decision",
+            "attempt_id": turn["attempt_id"],
+            "repository_id": snapshot.repository_id,
+            "delta": delta,
+            "proceed": True,
+            "out_of_scope_paths": [],
+            "protected_paths": [],
+            "unexplained_status_change": False,
+        }
+    )
+    prefix = journal.path.read_bytes()
+    event = attempts.record_verification(
+        turn["attempt_id"],
+        report(repository, snapshot.head),
+        final_observation=snapshot,
+        verification_sha256="e" * 64,
+        refresh=True,
+    )
+    assert journal.path.read_bytes().startswith(prefix)
+    outcome = {
+        "event": "loop_outcome",
+        "status": "pass",
+        "reason": "verification_passed",
+        "commands": 1,
+        "elapsed_seconds": 0.1,
+        "elapsed_boundary": "before_outcome_persistence",
+        "attempt_ids": [turn["attempt_id"]],
+    }
+    journal.append(outcome)
+    current = store.read()
+    assert current is not None
+    current["loop_summary"] = outcome
+    current["caller"] = {"preserved": True}
+    store.write(current)
+    attempts.refresh()
+    verification = attempts.read()[-1]["verification"]
+    assert verification == json.loads(json.dumps(event))
+    assert len(verification["review_binding"]["candidate"]["files"]) == 8000
+    binding = read_review_binding(verification, verification["review_binding"])
+    summary = summarize_execution(journal.path.parent)
+    journal_bytes = journal.path.stat().st_size
+    current_bytes = store.path.stat().st_size
+    sizes = {
+        "journal_bytes": journal_bytes,
+        "current_bytes": current_bytes,
+        "recorded_status": summary["recorded_status"],
+        "diagnostics": summary["diagnostics"],
+    }
+    print(json.dumps(sizes, sort_keys=True))
+    assert journal_bytes < 8 * 1024 * 1024
+    assert current_bytes < 1024 * 1024, sizes
+    assert summary["recorded_status"] == "pass", sizes
+    assert summary["review_binding"] == asdict(binding)
+    assert cast(Any, store.read())["caller"] == {"preserved": True}
