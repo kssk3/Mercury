@@ -249,6 +249,61 @@ approval. Different commands/attempts are never aggregated into one passing run.
 The pure Korean renderer adds external cards and a fixed internal header link only
 when records were supplied, escapes every value, and performs no reads or execution.
 
+## Read-only walkthrough from a Mercury checkout
+
+Use an already installed Mercury environment and an existing state directory
+from a previously admitted execution. This walkthrough does not create an
+execution, run a checker, collect a new receipt or start a native agent. The
+commands below are examples, not results from a new verification run.
+
+From the Mercury checkout, replace both absolute placeholder paths with the
+repository and state that belong to that saved execution:
+
+```sh
+mercury_cli="$PWD/.venv/bin/local-harness"
+task_repository=/absolute/path/to/app
+saved_state=/absolute/path/to/app-evidence/native-state
+
+"$mercury_cli" status --state-dir "$saved_state"
+"$mercury_cli" status --state-dir "$saved_state" --details
+"$mercury_cli" status --state-dir "$saved_state" --explain
+```
+
+The first command shows the recorded summary. `--details` adds saved process,
+scope and verification metadata; `--explain` presents evidence readiness,
+blockers and the next actor/action. These modes are alternatives and cannot be
+combined. The reader does not establish that the current repository still
+matches the record. Add `--config` or expected identities only when you retain
+the corresponding original inputs; see the comparison contract above.
+
+A readable recorded failure still exits 0. Invalid/unreadable native history
+remains UNKNOWN and exits 1; invalid CLI usage exits 2. Read the recorded outcome
+and evidence fields rather than interpreting exit 0 as a passing task. To print
+standalone HTML to stdout instead of JSON, use:
+
+```sh
+"$mercury_cli" status --state-dir "$saved_state" --explain --format html
+```
+
+For files that can be opened together, select a new report destination outside
+the repository, state and protected inputs. Its immediate parent must already
+exist. This optional command reads the original evidence and explicitly writes
+only the new bundle; it is not a filesystem-read-only operation:
+
+```sh
+fresh_view=/absolute/path/to/app-evidence/views/new-read-only-report
+"$mercury_cli" report --state-dir "$saved_state" \
+  --repository "$task_repository" --output-dir "$fresh_view"
+```
+
+The resulting `explanation.json`, `report.html` and `record.md` share one captured
+explanation. Open `report.html` locally; the page needs no server or network.
+Two separate `status` calls can have different capture times. Export completion
+also does not imply PASS; use the [report exit-code contract](#explicit-fresh-report-bundle).
+If receipt bundles already exist, the explicit `--external-check` option can
+include them without collection. No receipt path is inferred or searched here.
+Original local paths can remain in all views, so review contents before sharing.
+
 ## Reuse in another project
 
 Use a Mercury checkout that contains the external-receipt feature, with its locked

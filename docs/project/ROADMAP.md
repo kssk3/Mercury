@@ -1,7 +1,7 @@
 # Mercury roadmap
 
-Documentation date: 2026-10-24. Product snapshot:
-[main f6343844](https://github.com/kssk3/Mercury/commit/f63438440f77c3eca177399bc5c7d0bcbd985a5d).
+Documentation date: 2026-11-08. Delivered product snapshot:
+[main d2216f7a](https://github.com/kssk3/Mercury/commit/d2216f7a54e4cddee8e48e63fb45b8f32466241c).
 This document describes delivered capability and proposed outcomes. It grants
 no implementation, model execution, check, review, publication or merge authority.
 [WORKFLOW.md](WORKFLOW.md) remains the sole repository lifecycle authority.
@@ -48,30 +48,35 @@ are not current product capabilities.
 | Common agent contract | [PR #8](https://github.com/kssk3/Mercury/pull/8): preparation, execution and result boundaries, preserving Codex compatibility aliases. | [AgentAdapter](../../src/agent_harness/agent.py) |
 | Claude adapter, explicit run CLI and JavaScript example | [PR #10](https://github.com/kssk3/Mercury/pull/10): configuration-approved one-turn/no-retry CLI over the existing loop, plus the separate backend and example. | [Execution](../quickstart.md#execute-an-explicit-task), [backend limits](../quickstart.md#claude-code-backend-boundaries) |
 | Read-only execution-settings preview | [PR #11](https://github.com/kssk3/Mercury/pull/11): inspect the actual configuration and digest without state creation, checkers or native execution. | [Run preview](../run-preview.md) |
-| Pure review-result contract | [PR #13](https://github.com/kssk3/Mercury/pull/13): frozen bindings/receipts and assessment of supplied facts. No automatic loop, CLI or GitHub gate integration. | [Review contract](../review-contract.md) |
+| Pure review-result contract | [PR #13](https://github.com/kssk3/Mercury/pull/13): frozen bindings/receipts and assessment of supplied facts. Receipt assessment is not automatically enforced by the loop, CLI or GitHub. | [Review contract](../review-contract.md) |
+| Execution-produced candidate/evidence binding | [PR #15](https://github.com/kssk3/Mercury/pull/15): final-verification identities, compact current projections, journal validation and supported startup/continuation consumers. This does not authenticate review or approval. | [Recorded binding](../review-contract.md#execution-produced-binding) |
+| Bounded retry configuration and observed diagnostics | PR #15 includes explicit retry limits/feedback and bounded native diagnostics, plus source verification before import through an optional prepared launcher. Limits and source integrity do not authorize execution or prove model reliability. | [Retry settings](../run-preview.md#explicit-bounded-retries), [verified runtime](../verified-runtime.md) |
+| Historical status details and bounded profile queries | [PR #12](https://github.com/kssk3/Mercury/pull/12), merged after reconciliation with current main: saved process/scope/verification metadata and bounded Git profiling. Details do not verify the live workspace. | [Status details](../status-details.md) |
+| Historical validation explanation and offline HTML | PR #15: one bounded captured history supplies JSON explanation or standalone Korean HTML; comparison inputs remain caller context. | [Validation visibility](../validation-visibility.md) |
+| External check receipts and fresh report bundles | [PR #16](https://github.com/kssk3/Mercury/pull/16): a separately authorized single-check Python collector, read-only receipt validation, and an explicit three-file export of existing records. Export does not run checks. | [Receipt collection](../validation-visibility.md#explicit-external-command-receipts), [report export](../validation-visibility.md#explicit-fresh-report-bundle) |
 
-The existing automatic
-[main CI run 39924711186](https://github.com/kssk3/Mercury/actions/runs/39924711186)
-completed successfully for this exact snapshot. This documentation reuses that
-evidence; it neither reruns CI nor claims every later backend correction has
-been exercised with a real model. Historical live evidence remains bound to its
-actual revision, executable, environment and task.
+The pinned merge history establishes which implementation this map describes.
+This update uses that local history and the current source/contracts; it does
+not fetch remote status, rerun CI or claim a fresh native execution. Earlier CI
+and live-run evidence remains bound to its actual revision, executable,
+environment and task. A successful historical read or report export is not a
+new technical PASS.
 
 ## Local and held work
 
 | State | Work | Boundary |
 | --- | --- | --- |
-| LOCAL | Overview/quickstart alignment and this roadmap/architecture update | Unpublished documentation in the working tree; no product behavior change. |
+| LOCAL | Saved integration commit `0b91f259155124bad823ffb908aafd405ed60403` | Nine documentation/regression-test files are committed locally and unpushed. Product source matches the pinned main. Historical serial checks are not a fresh suite result; the two native-fixture parallel timeout cases remain unresolved and their investigation is stopped by the user. |
+| LOCAL | This roadmap/architecture refresh and read-only usage walkthrough | Uncommitted documentation only; no product behavior change, native run or publication. |
 | LOCAL | Personal skill and current-record maintenance outside the shipped package | Authoring-environment work, not a portable Mercury feature or proof that hooks fire. Private records do not belong in this public repository. |
-| HELD | [PR #12](https://github.com/kssk3/Mercury/pull/12), recorded candidate 79e7d4f3 | Status-detail/profile Git-limit work is excluded from the pinned main capabilities. Native completion and internal task/error evidence were not established in the retained investigation. The underlying service cause remains UNKNOWN; no current live state is asserted here. |
 
-Scoped runtime/example AGENTS guidance is locally complete in
+Scoped runtime/example AGENTS guidance is available in
 [src/agent_harness/AGENTS.md](../../src/agent_harness/AGENTS.md) and
 [examples/AGENTS.md](../../examples/AGENTS.md). These guides add folder-specific
 navigation under the existing [R1-R4](../../AGENTS.md#code-review-rules);
 they introduce no hook registrations.
 
-## Proposed next product outcomes
+## Held product outcome
 
 ### H1: Explain execution, verification and stopping policy separately
 
@@ -79,39 +84,41 @@ The user's 2026-11-01 request prepared a bounded explanation improvement.
 On 2026-11-02 the user explicitly HELD H1 to resume the frontend rebuild.
 [H1 scope and verification plan](H1-result-separation-plan.md) is preserved and
 unimplemented. Reuse recorded facts with explicit unknowns; preserve
-existing exit/retry semantics and history. It does not implement P1's candidate
-binding or resume held PR #12. Resolve the status-work overlap before admitting
-implementation. W1/W3/W6 working practices live in WORKFLOW rather than a second
-lifecycle document. No implementation or native execution is authorized here.
+existing exit/retry semantics and history. The plan predates the delivered P1/P2
+and PR #12 work; its historical status references do not override the current
+delivery table. Reassess overlap against the current implementation before any
+separately admitted H1 work. W1/W3/W6 working practices live in WORKFLOW rather
+than a second lifecycle document. No implementation or native execution is
+authorized here.
+
+## Completed follow-up outcomes
 
 ### P1: Bind execution results to the actual review target
 
-The current [review contract](../review-contract.md#trusted-caller-responsibilities)
-expects trusted identities and evidence from its caller. The next bounded
-outcome should establish that producer/consumer connection using existing run,
-evidence and review components.
+State: DELIVERED_MAIN through PR #15. The loop records the final observed
+candidate and verification identities; attempt serialization, compact current
+state, journal inspection, startup reconciliation and verification-only
+continuation preserve the connection. See the
+[execution-produced binding contract](../review-contract.md#execution-produced-binding)
+for its exact observation and size limits.
 
-Before implementation, define the admitted candidate snapshot/diff semantics,
-including relevant uncommitted content; the attempt and contract identity;
-attributable verification evidence; serialization; and invalidation when inputs
-change. Cover production, persistence, read-only presentation and supported
-recovery/continuation consumers together. Missing or mismatched evidence remains
-unknown or invalid. Existing receipt shape validation does not authenticate a
-reviewer, a person's approval or the referenced evidence.
-
-Completion means that the specified execution/candidate/evidence relationship
-is represented and checked without turning review clearance into permission,
-delivery or a replacement for technical PASS. It does not require a second
-runner, automatic reviewer dispatch or a GitHub integration. Exact files,
-affected checks and remaining review/publication allowance need separate
-admission; no execution or verification budget is allocated here.
+The caller still supplies a trusted matching report and receipt to the pure
+assessment API. Shape/digest equality does not authenticate a reviewer, findings
+or human approval. No reviewer dispatch, execution permission or automatic
+GitHub gate follows from a recorded binding.
 
 ### P2: Present binding and review evidence read-only
 
-After P1, consider exposing its established facts through existing inspection
-and review facilities. Keep recorded outcomes separate from current workspace
-verification and approval. Resolve any overlap with held PR #12 before admitting
-new status/detail work; do not silently reproduce or resume that candidate.
+State: DELIVERED_MAIN through PR #15, with PR #12 details and PR #16 reporting
+extensions. Historical inspection exposes eligible recorded bindings and
+validation explanations; offline HTML and report bundles present those facts.
+Missing, inconsistent or legacy evidence retains its documented unavailable or
+UNKNOWN state. Receipt assessment and actual independent review remain caller
+responsibilities. This visibility does not verify the current workspace.
+
+Start with the [read-only walkthrough](../validation-visibility.md#read-only-walkthrough-from-a-mercury-checkout).
+
+## Proposed next product outcome
 
 ### P3: Reduce setup for one small real repository
 

@@ -1,7 +1,8 @@
 # Mercury architecture
 
-Documentation date: 2026-10-24. This map describes product code at
-[main f6343844](https://github.com/kssk3/Mercury/commit/f63438440f77c3eca177399bc5c7d0bcbd985a5d).
+Documentation date: 2026-11-08. This map describes product code at
+[main d2216f7a](https://github.com/kssk3/Mercury/commit/d2216f7a54e4cddee8e48e63fb45b8f32466241c).
+The unpushed local integration commit `0b91f259` has the same product source.
 It is a responsibility map of existing modules, not a new package layout or
 dependency policy. [WORKFLOW.md](WORKFLOW.md) owns repository lifecycle;
 [ROADMAP.md](ROADMAP.md) separates delivered, local, held and planned outcomes.
@@ -40,14 +41,24 @@ flowchart TD
     R --> F[Post-release wrapper result]
     S --> H[Read-only historical inspection]
     F --> H
-    B[Caller-established binding, evidence and receipt] --> Q[Pure review assessment]
+    V --> B[Eligible final candidate and evidence binding]
+    B --> S
+    B --> Q[Pure review assessment]
+    U[Caller-supplied matching report and receipt] --> Q
+    H --> X[JSON explanation or offline HTML]
+    K[Existing external check receipts] --> X
+    X --> G[Explicit fresh report bundle]
 ```
 
-The diagram separates the unintegrated review API from execution. A preview
-does not supply approval. Historical inspection does not run recovery or verify
-the present workspace. Detailed user-facing contracts are in the
+Execution produces recorded identities; the caller connects trusted evidence
+and a receipt to the pure assessment API. The loop does not enforce receipt
+assessment or dispatch a reviewer. A preview does not supply approval.
+Historical inspection does not run recovery or verify the present workspace.
+Report export writes a new projection of saved records; external check collection
+is a separate, explicitly authorized Python API. Detailed contracts are in the
 [quickstart responsibility map](../quickstart.md#product-contracts-and-implementation),
-[run preview](../run-preview.md) and [review contract](../review-contract.md).
+[run preview](../run-preview.md), [review contract](../review-contract.md) and
+[validation visibility](../validation-visibility.md).
 
 ## Module responsibilities
 
@@ -56,10 +67,11 @@ Paths below are existing modules, not proposed services or agent roles.
 | Responsibility | Modules | Boundary |
 | --- | --- | --- |
 | CLI and repository inventory | [cli.py](../../src/agent_harness/cli.py), [profile.py](../../src/agent_harness/profile.py) | Route commands and collect filename-based Git information. Repository inventory is not technical verification. |
-| Approved execution configuration | [run_config.py](../../src/agent_harness/run_config.py), [task_run.py](../../src/agent_harness/task_run.py) | Parse/preview bounded settings; reload approved bytes, preflight repository/state/checkers, hold the lease, compose the loop and finalize the wrapper result. |
+| Approved execution configuration | [run_config.py](../../src/agent_harness/run_config.py), [task_run.py](../../src/agent_harness/task_run.py) | Parse/preview bounded settings, including explicit retries; reload approved bytes, preflight repository/state/checkers, hold the lease, compose the loop and finalize the wrapper result. |
 | Task and admission contracts | [contract.py](../../src/agent_harness/contract.py), [admission.py](../../src/agent_harness/admission.py), [amendment.py](../../src/agent_harness/amendment.py), [command_admission.py](../../src/agent_harness/command_admission.py) | Represent admitted scope, criteria and command/contract decisions. Recorded approval is not identity authentication. |
 | Repository, workspace and protected inputs | [repository.py](../../src/agent_harness/repository.py), [workspace.py](../../src/agent_harness/workspace.py), [scope.py](../../src/agent_harness/scope.py), [integrity.py](../../src/agent_harness/integrity.py), [baseline.py](../../src/agent_harness/baseline.py) | Establish repository identity, path/scope observations and protected fingerprints without claiming hostile-process confinement. |
 | Common and native adapter boundaries | [agent.py](../../src/agent_harness/agent.py), [adapter.py](../../src/agent_harness/adapter.py), [claude_adapter.py](../../src/agent_harness/claude_adapter.py), [native_output.py](../../src/agent_harness/native_output.py) | Prepare/run a trusted backend, validate process/result facts and retain bounded native output. Task success remains a harness decision. |
+| Bounded observations and source-verified launcher | [diagnostics.py](../../src/agent_harness/diagnostics.py), [verified_runtime.py](../../scripts/verified_runtime.py) | Record observed native milestones without inferring model latency/success; optionally verify a separately prepared frozen source inventory before import. Neither mechanism grants execution authority. |
 | Context and stored text | [context.py](../../src/agent_harness/context.py), [output.py](../../src/agent_harness/output.py) | Select bounded context and apply the caller's output-storage/redaction policy. Raw adapter text can exist before redaction. |
 | Technical verification | [policy.py](../../src/agent_harness/policy.py), [runner.py](../../src/agent_harness/runner.py), [development.py](../../src/agent_harness/development.py), [final.py](../../src/agent_harness/final.py), [evidence.py](../../src/agent_harness/evidence.py) | Bind required commands and trusted programs, collect bounded command results, decide technical outcomes and preserve protected-input failures. |
 | Execution, retry and escalation decisions | [execution.py](../../src/agent_harness/execution.py), [retry.py](../../src/agent_harness/retry.py), [escalation.py](../../src/agent_harness/escalation.py) | Represent decisions over admitted execution facts/limits. In particular, execution.py makes pure state transitions; it does not execute or persist work. |
@@ -67,7 +79,10 @@ Paths below are existing modules, not proposed services or agent roles.
 | Persistence and checkpoint facts | [state.py](../../src/agent_harness/state.py), [journal.py](../../src/agent_harness/journal.py), [attempt.py](../../src/agent_harness/attempt.py), [verification_checkpoint.py](../../src/agent_harness/verification_checkpoint.py) | Store current/journal/attempt projections and serialize supported checkpoint facts. A checkpoint alone does not authorize continuation. |
 | Startup, recovery and failure evidence | [startup.py](../../src/agent_harness/startup.py), [recovery.py](../../src/agent_harness/recovery.py), [interruption.py](../../src/agent_harness/interruption.py), [failure.py](../../src/agent_harness/failure.py) | Reconcile or classify retained evidence and support explicitly requested file recovery. Reports do not resume native sessions or create completion authority. |
 | Cooperative serialization | [lock.py](../../src/agent_harness/lock.py) | Repository lease and heartbeat; callers must coordinate on the same state location and compatible horizon. |
-| Historical presentation | [inspection.py](../../src/agent_harness/inspection.py) | Read supported state/journal/wrapper bindings without executing the task, referenced outputs or recovery. |
+| Candidate/evidence identity production | [review_evidence.py](../../src/agent_harness/review_evidence.py) with loop.py and attempt.py | Build deterministic identities from supplied final-verification observations and safe metadata; validate recorded binding without reading the live workspace or authenticating references. |
+| Historical inspection and explanation | [inspection.py](../../src/agent_harness/inspection.py), [explanation.py](../../src/agent_harness/explanation.py) | Read supported state/journal/wrapper bindings and project details or explanation from a bounded snapshot. No task, output payload, live-workspace verification or recovery is executed. |
+| Offline presentation and explicit export | [html_report.py](../../src/agent_harness/html_report.py), [report.py](../../src/agent_harness/report.py) | Render a supplied explanation without I/O; export one capture to fresh JSON/HTML/Markdown files after bounded Git/path boundary checks. Failed exports retain partial files, with no retry or rollback. |
+| External check collection and receipt reading | [external_checks.py](../../src/agent_harness/external_checks.py) | The trusted caller explicitly runs one admitted checker into a fresh protected-boundary-checked bundle. A separate reader validates fixed receipt/process/JUnit siblings without executing checks or observing the live target. |
 | Review-result assessment | [review.py](../../src/agent_harness/review.py) | Validate receipt shape and compare caller-established binding/evidence. It performs no I/O, digest production, authentication or reviewer dispatch. |
 | Development schema and package surface | [schema_validation.py](../../src/agent_harness/schema_validation.py), [__init__.py](../../src/agent_harness/__init__.py) | Development-only synthetic status validation and package version/surface; neither establishes delivery or replaces runtime evidence. |
 
@@ -86,7 +101,11 @@ Paths below are existing modules, not proposed services or agent roles.
    output artifact or successful exit alone is not scope clearance or technical
    PASS. The loop runs admitted technical phases and maps every criterion to
    exact commands, including a distinct final verification.
-5. Current state, attempt projections and terminal journal records preserve
+5. When final-verification observations match, the loop records the candidate and
+   verification binding. Supported readers require consistent terminal evidence;
+   CLI histories also require successful post-release wrapper finalization before
+   exposing the binding. A legacy history can retain technical PASS without one.
+6. Current state, attempt projections and terminal journal records preserve
    observed outcomes. CLI wrapper records also need post-release finalization;
    incomplete or inconsistent supported records remain UNKNOWN to readers.
 
@@ -105,12 +124,15 @@ parser. Distinct trust boundaries can require distinct validation.
 | Turn intent, observed process/output and attempt phases | turn.py, loop.py, attempt.py, journal.py, state.py | startup.py reconciliation; interruption.py/failure.py projections; verification_checkpoint.py and loop.py continuation; inspection.py supported histories |
 | Loop summary and CLI wrapper binding/finalization | loop.py and task_run.py with current/journal projections | inspection.py and supported startup/continuation logic; keep direct-loop/older record handling explicit |
 | Sealed file-recovery evidence | recovery.py capture/seal and caller-retained trusted references | recovery.py loading/preflight/recovery; reconcile relevant live state separately before any continuation |
-| Review binding and receipt | review.py defines records; the trusted caller currently establishes content/evidence identities | assess_review compares supplied facts; persistence and runtime/CLI presentation are proposed work, not an existing integration |
+| Final candidate and verification binding | review_evidence.py builds identities; loop.py/attempt.py serialize full journal evidence and compact current projections | inspection.py and startup.py validate matching projections; loop.py verification-only continuation records its actual final phase without another adapter preparation |
+| Review receipt assessment | review.py defines records; the trusted caller supplies matching evidence and an actual receipt | assess_review compares supplied facts without authentication, persistence, reviewer dispatch or an automatic runtime/CLI gate |
+| Historical explanation and fresh report projection | inspection.py/explanation.py capture and validate one saved snapshot; html_report.py renders it; report.py exports fresh files | JSON, standalone HTML and record.md retain recorded failures/unknowns rather than creating verification, approval or delivery |
+| External command receipt | external_checks.py saves intent before launch, observed process facts and terminal receipt after bounded target/result observation | Its reader validates fixed linked artifacts; explanation.py/report.py present applicability without rerunning commands; incomplete collection evidence remains retained and unavailable |
 
-See the [next binding outcome](ROADMAP.md#p1-bind-execution-results-to-the-actual-review-target)
-before designing that integration. Existing evidence reuse depends on relevant
-content, base, tool and environment applicability under WORKFLOW, not merely an
-unchanged Git HEAD.
+See the [delivered binding outcome](ROADMAP.md#p1-bind-execution-results-to-the-actual-review-target)
+and [binding contract](../review-contract.md#execution-produced-binding) before
+changing these records. Evidence reuse depends on relevant content, base, tool
+and environment applicability under WORKFLOW, not merely an unchanged Git HEAD.
 
 ## Trust and capability limits
 
@@ -133,8 +155,12 @@ unchanged Git HEAD.
   pass. Technical verification, review clearance, execution permission and actual
   delivery remain separate. GitHub merge/status workflows govern development of
   this repository; they are not an automatic product integration.
+- Historical reads and report-generation exit codes describe readability or
+  generation, not historical task success. External receipts cannot promote an
+  incomplete native history to PASS. Saved JSON/HTML can contain local paths and
+  operator identifiers; export is not automatic privacy scrubbing or portability.
 
 Tests and existing PASS evidence describe their recorded candidate/environment.
 The linked [development checks](../../CONTRIBUTING.md) were not executed to
-produce this documentation update. Held PR #12 and proposed roadmap items do not
-change the pinned implementation described here.
+produce this documentation update. PR #12, #15 and #16 are included in this
+snapshot; the held H1 plan and proposed P3 do not change its implementation.
