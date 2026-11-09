@@ -67,7 +67,7 @@ new technical PASS.
 | State | Work | Boundary |
 | --- | --- | --- |
 | LOCAL | Saved integration commit `0b91f259155124bad823ffb908aafd405ed60403` | Nine documentation/regression-test files are committed locally and unpushed. Product source matches the pinned main. Historical serial checks are not a fresh suite result; the two native-fixture parallel timeout cases remain unresolved and their investigation is stopped by the user. |
-| LOCAL | This roadmap/architecture refresh and read-only usage walkthrough | Uncommitted documentation only; no product behavior change, native run or publication. |
+| LOCAL | This roadmap/architecture refresh and read-only usage walkthrough | Locally committed documentation; no product behavior change, native run or publication. |
 | LOCAL | Personal skill and current-record maintenance outside the shipped package | Authoring-environment work, not a portable Mercury feature or proof that hooks fire. Private records do not belong in this public repository. |
 
 Scoped runtime/example AGENTS guidance is available in
