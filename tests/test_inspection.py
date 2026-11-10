@@ -767,7 +767,11 @@ def test_inspection_rejects_compact_review_projection_tampering(
     event = next(e for e in events if e["event"] == "attempt_verification")
     if mutation.startswith("change:"):
         field = mutation.split(":", 1)[1]
-        projection[field] += "altered"
+        if field == "target_revision" or field.endswith("_sha256"):
+            original = projection[field]
+            projection[field] = ("0" if original[0] != "0" else "1") + original[1:]
+        else:
+            projection[field] += "altered"
     elif mutation == "missing-field":
         del projection["evidence_sha256"]
     elif mutation == "missing-binding":

@@ -276,9 +276,11 @@ the JSON outcome and historical status before deciding on further work.
 New Codex turns retain optional `diagnostics` on the saved `turn_observation`
 event, including nonzero exits, timeouts and launch failures. This is separate
 from the existing `process` metadata and CLI text omission. Older/custom adapters
-may omit diagnostics; Claude keeps its existing behavior. Existing process
-projections and recovery readers do not require this optional member. Historical
-records without these observations remain incomplete.
+may omit diagnostics; Claude keeps its existing behavior. Without diagnostics, the detailed
+process milestones and filtered Codex event metadata described below are
+unavailable. Historical inspection can still report a consistently recorded
+terminal outcome and, for a consistent terminal PASS with a valid recorded
+[review binding](review-contract.md), return that binding.
 
 Milestones use monotonic elapsed seconds from launch start: process creation
 returned, complete or incomplete stdin delivery, first/last received output per

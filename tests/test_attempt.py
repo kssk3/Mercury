@@ -1277,92 +1277,54 @@ def test_attempt_legacy_verification_has_no_review_binding(
 
 
 def test_large_review_binding_current_projection_stays_readable(
-    repository: Path, tmp_path: Path
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from dataclasses import replace
 
+    from test_loop import _review_bound_loop
+
     from agent_harness.inspection import summarize_execution
     from agent_harness.review_evidence import read_review_binding
-    from agent_harness.turn import FileFingerprint, compare_observations
+    from agent_harness.turn import FileFingerprint
 
-    snapshot = replace(
-        RepositoryObservation.capture(repository),
-        files=tuple(
-            FileFingerprint(
-                f"src/package_{index // 100:03d}/module_{index:05d}.py",
-                "regular",
-                "d" * 64,
-                128,
-                False,
-                0o644,
-            )
-            for index in range(8000)
-        ),
+    # Scale only the unchanged inventory; the loop still observes its real edit.
+    unchanged = tuple(
+        FileFingerprint(
+            f"src/package_{index // 100:03d}/module_{index:05d}.py",
+            "regular",
+            "d" * 64,
+            128,
+            False,
+            0o644,
+        )
+        for index in range(7999)
     )
-    journal = EventJournal(tmp_path / "state")
-    store = CurrentStateStore(tmp_path / "state")
-    attempts = api(repository, journal, store)
-    turn = intent(repository)
-    turn["before"] = asdict(snapshot)
-    journal.append({"event": "loop_start", "repository_id": snapshot.repository_id})
-    journal.append(turn)
-    delta = asdict(compare_observations(snapshot, snapshot))
-    journal.append(
-        {
-            "event": "turn_observation",
-            "attempt_id": turn["attempt_id"],
-            "after": asdict(snapshot),
-            "delta": delta,
-            "process": {
-                "process_status": "successful_exit",
-                "exit_code": 0,
-                "duration_seconds": 0.1,
-                "stdout": {"retained_bytes": 0, "truncated": False},
-                "stderr": {"retained_bytes": 0, "truncated": False},
-                "final_message": None,
-                "final_output_status": "missing",
-            },
-        }
-    )
-    journal.append(
-        {
-            "event": "scope_decision",
-            "attempt_id": turn["attempt_id"],
-            "repository_id": snapshot.repository_id,
-            "delta": delta,
-            "proceed": True,
-            "out_of_scope_paths": [],
-            "protected_paths": [],
-            "unexplained_status_change": False,
-        }
-    )
-    prefix = journal.path.read_bytes()
-    event = attempts.record_verification(
-        turn["attempt_id"],
-        report(repository, snapshot.head),
-        final_observation=snapshot,
-        verification_sha256="e" * 64,
-        refresh=True,
-    )
-    assert journal.path.read_bytes().startswith(prefix)
-    outcome = {
-        "event": "loop_outcome",
-        "status": "pass",
-        "reason": "verification_passed",
-        "commands": 1,
-        "elapsed_seconds": 0.1,
-        "elapsed_boundary": "before_outcome_persistence",
-        "attempt_ids": [turn["attempt_id"]],
-    }
-    journal.append(outcome)
+    capture = RepositoryObservation.capture
+
+    def large_capture(root: str | Path) -> RepositoryObservation:
+        observed = capture(root)
+        return replace(observed, files=unchanged + observed.files)
+
+    monkeypatch.setattr(RepositoryObservation, "capture", staticmethod(large_capture))
+    root, journal, store, result = _review_bound_loop(tmp_path)
+    assert result.status == "pass", result.reason
+    attempts = api(root, journal, store)
+    journal_before = journal.path.read_bytes()
     current = store.read()
     assert current is not None
-    current["loop_summary"] = outcome
     current["caller"] = {"preserved": True}
     store.write(current)
     attempts.refresh()
-    verification = attempts.read()[-1]["verification"]
-    assert verification == json.loads(json.dumps(event))
+    assert journal.path.read_bytes() == journal_before
+    entry = attempts.read()[-1]
+    assert entry["scope"]["proceed"] is True
+    assert entry["observation"]["process"]["final_output_status"] == "available"
+    verification = entry["verification"]
+    final_id = verification["output_identifiers"]["final_message"]
+    assert final_id == entry["outputs"]["final_message"]["identifier"]
+    assert (journal.path.parent / "outputs" / f"{final_id}.txt").read_bytes() == b"done"
+    event = next(e for e in journal.read() if e["event"] == "attempt_verification")
+    assert verification == event
     assert len(verification["review_binding"]["candidate"]["files"]) == 8000
     binding = read_review_binding(verification, verification["review_binding"])
     summary = summarize_execution(journal.path.parent)
