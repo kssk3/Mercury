@@ -1274,3 +1274,71 @@ def test_attempt_legacy_verification_has_no_review_binding(
     )
     assert event["schema_version"] == 1
     assert "review_binding" not in attempts.read()[-1]["verification"]
+
+
+def test_large_review_binding_current_projection_stays_readable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    from test_loop import _review_bound_loop
+
+    from agent_harness.inspection import summarize_execution
+    from agent_harness.review_evidence import read_review_binding
+    from agent_harness.turn import FileFingerprint
+
+    # Scale only the unchanged inventory; the loop still observes its real edit.
+    unchanged = tuple(
+        FileFingerprint(
+            f"src/package_{index // 100:03d}/module_{index:05d}.py",
+            "regular",
+            "d" * 64,
+            128,
+            False,
+            0o644,
+        )
+        for index in range(7999)
+    )
+    capture = RepositoryObservation.capture
+
+    def large_capture(root: str | Path) -> RepositoryObservation:
+        observed = capture(root)
+        return replace(observed, files=unchanged + observed.files)
+
+    monkeypatch.setattr(RepositoryObservation, "capture", staticmethod(large_capture))
+    root, journal, store, result = _review_bound_loop(tmp_path)
+    assert result.status == "pass", result.reason
+    attempts = api(root, journal, store)
+    journal_before = journal.path.read_bytes()
+    current = store.read()
+    assert current is not None
+    current["caller"] = {"preserved": True}
+    store.write(current)
+    attempts.refresh()
+    assert journal.path.read_bytes() == journal_before
+    entry = attempts.read()[-1]
+    assert entry["scope"]["proceed"] is True
+    assert entry["observation"]["process"]["final_output_status"] == "available"
+    verification = entry["verification"]
+    final_id = verification["output_identifiers"]["final_message"]
+    assert final_id == entry["outputs"]["final_message"]["identifier"]
+    assert (journal.path.parent / "outputs" / f"{final_id}.txt").read_bytes() == b"done"
+    event = next(e for e in journal.read() if e["event"] == "attempt_verification")
+    assert verification == event
+    assert len(verification["review_binding"]["candidate"]["files"]) == 8000
+    binding = read_review_binding(verification, verification["review_binding"])
+    summary = summarize_execution(journal.path.parent)
+    journal_bytes = journal.path.stat().st_size
+    current_bytes = store.path.stat().st_size
+    sizes = {
+        "journal_bytes": journal_bytes,
+        "current_bytes": current_bytes,
+        "recorded_status": summary["recorded_status"],
+        "diagnostics": summary["diagnostics"],
+    }
+    print(json.dumps(sizes, sort_keys=True))
+    assert journal_bytes < 8 * 1024 * 1024
+    assert current_bytes < 1024 * 1024, sizes
+    assert summary["recorded_status"] == "pass", sizes
+    assert summary["review_binding"] == asdict(binding)
+    assert cast(Any, store.read())["caller"] == {"preserved": True}

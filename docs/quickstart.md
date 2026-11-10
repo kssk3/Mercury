@@ -315,6 +315,10 @@ claim. Executing a task requires the separate admission described below.
 
 ### Execute an explicit task
 
+For the minimal sequence and the distinction between contract PASS and overall
+local completion, see
+[execution and completion guidance](run-preview.md#minimal-execution-and-local-completion).
+
 `run` composes the existing loop; it does not discover a task or choose tests.
 Use a clean Git repository with a full pinned HEAD, a trusted external backend,
 existing protected checker inputs, and canonical external configuration/state

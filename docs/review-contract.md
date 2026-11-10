@@ -77,6 +77,10 @@ full evidence. Existing bounded version-1 full projections remain supported.
 The current-state limit remains 1 MiB and the journal limit remains 8 MiB.
 Already-oversized historical current files remain unreadable with `input_limit`;
 inspection does not migrate or rewrite them or open external candidate references.
+The journal also remains limited to 10,000 lines. Compact identity removes the
+duplicated candidate inventory from current state; it does not guarantee
+readability for arbitrary command metadata, caller state or journal sizes.
+Oversize, incomplete, unsupported or inconsistent records remain UNKNOWN.
 
 Verification-only continuation records a binding only after its actual final
 phase; it does not prepare or invoke an adapter again. Interrupted histories and
