@@ -223,45 +223,86 @@ them locally. Do not execute that demo just to produce preview input.
 Choose trusted absolute Node and Claude executable paths outside the disposable
 repository. Keep a new external state root and the configuration outside the
 repository, with neither directory containing the other. Record the repository's
-full current commit hash using a trusted Git executable. Replace every sample
-path below and the all-zero `expected_head` with those reviewed values, then save
-this JSON at your external configuration path:
+full current commit hash using a trusted Git executable.
 
-```json
-{
-  "schema_version": 1,
-  "repository": "/work/addition",
-  "expected_head": "0000000000000000000000000000000000000000",
-  "state_root": "/work/addition-state",
-  "backend": "claude",
-  "executable": "/trusted/bin/claude",
-  "contract": {
-    "goal": "Fix add.mjs to add two numbers; preserve check.mjs",
-    "allowed_paths": ["add.mjs"],
-    "protected_paths": ["check.mjs"],
-    "completion_criteria": ["addition handles positive, negative and zero inputs"]
-  },
-  "verification": {
-    "commands": [["/trusted/bin/node", "check.mjs"]],
-    "working_directory": ".",
-    "timeout_seconds": 5
-  },
-  "criterion_commands": {
-    "addition handles positive, negative and zero inputs": [["/trusted/bin/node", "check.mjs"]]
-  },
-  "context_paths": ["add.mjs", "check.mjs"],
-  "budgets": {
-    "timeout_seconds": 90,
-    "input_bytes": 16384,
-    "stdout_bytes": 65536,
-    "stderr_bytes": 16384,
-    "final_bytes": 8192
-  },
-  "total_timeout_seconds": 120
+For one checker command and one completion criterion, the following Python
+recipe defines each once and reuses it in the existing configuration schema.
+Adapt the goal, paths, checker arguments, criterion and limits to the admitted
+task. Supply the reviewed full HEAD explicitly; this recipe never replaces it
+with a live Git query. Prepare the configuration's parent directory separately.
+Replace every sample path and the HEAD placeholder before running this code
+with a trusted Python 3.12+ interpreter outside the target repository.
+
+```python
+import json
+import re
+from pathlib import Path
+
+repository = Path("/work/addition")
+state_root = Path("/work/addition-state")
+config_path = Path("/work/configs/addition-run.json")
+expected_head = "REPLACE_WITH_REVIEWED_FULL_GIT_HEAD"
+criterion = "addition handles positive, negative and zero inputs"
+command = ["/trusted/bin/node", "check.mjs"]
+
+if re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", expected_head) is None:
+    raise ValueError("Supply the reviewed full Git HEAD")
+for path in (repository, state_root, config_path):
+    if not path.is_absolute() or path.resolve() != path:
+        raise ValueError("Use canonical absolute paths without symlink aliases")
+if not repository.is_dir() or not config_path.parent.is_dir():
+    raise ValueError("Prepare the repository and configuration parent first")
+if repository.is_relative_to(state_root) or state_root.is_relative_to(repository):
+    raise ValueError("Repository and state root must be separate")
+if config_path.is_relative_to(repository) or config_path.is_relative_to(state_root):
+    raise ValueError("Configuration must be outside repository and state root")
+
+config = {
+    "schema_version": 1,
+    "repository": str(repository),
+    "expected_head": expected_head,
+    "state_root": str(state_root),
+    "backend": "claude",
+    "executable": "/trusted/bin/claude",
+    "contract": {
+        "goal": "Fix add.mjs to add two numbers; preserve check.mjs",
+        "allowed_paths": ["add.mjs"],
+        "protected_paths": ["check.mjs"],
+        "completion_criteria": [criterion],
+    },
+    "verification": {
+        "commands": [command],
+        "working_directory": ".",
+        "timeout_seconds": 5,
+    },
+    "criterion_commands": {criterion: [command]},
+    "context_paths": ["add.mjs", "check.mjs"],
+    "budgets": {
+        "timeout_seconds": 90,
+        "input_bytes": 16384,
+        "stdout_bytes": 65536,
+        "stderr_bytes": 16384,
+        "final_bytes": 8192,
+    },
+    "total_timeout_seconds": 120,
 }
+raw = json.dumps(config, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+with config_path.open("x", encoding="utf-8") as output:
+    output.write(raw)
+print(config_path)
 ```
 
-Preview this file using the first command. Review the exact protected checker,
+The only write is creation of the requested configuration file. Exclusive
+creation (`"x"`) fails if that path already exists, including a symlink or hard
+link; choose a fresh path without overwriting the earlier configuration.
+If writing fails, retain any partial file and inspect the error before choosing
+another path. These path checks are point-in-time observations. The shared
+Mercury parser still validates the full configuration and protected checker
+inputs during preview. The recipe does not create state, run a checker or
+agent, grant approval, or invoke preview automatically.
+
+Preview the created file separately using the first command, substituting its
+absolute path. Review the exact protected checker,
 allowed edit, criterion mapping, native executable, expected commit and budgets.
 Only after separate authorization, run the second command with the reviewed
 digest. This requests one Claude turn, zero retries, a 90-second native timeout
