@@ -12,12 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from agent_harness.adapter import (
-    CapturedText,
-    CodexCLIAdapter,
-    CodexTurnResult,
-    TurnBudgets,
-)
+from agent_harness.adapters.agents.codex import CodexCLIAdapter
 from agent_harness.admission import AdmissionRecord, admit, record_admission
 from agent_harness.context import ContextPacket, build_context_packet
 from agent_harness.contract import TaskContract
@@ -25,6 +20,7 @@ from agent_harness.journal import EventJournal
 from agent_harness.lock import RepositoryLock
 from agent_harness.loop import run_loop
 from agent_harness.policy import VerificationPolicy
+from agent_harness.ports.agent import AgentTurnResult, CapturedText, TurnBudgets
 from agent_harness.retry import RetryLimits
 from agent_harness.state import CurrentStateStore
 
@@ -49,7 +45,7 @@ class SimulatedCodexAdapter(CodexCLIAdapter):
         *,
         budgets: TurnBudgets,
         sandbox: Literal["read-only", "workspace-write"] = "workspace-write",
-    ) -> CodexTurnResult:
+    ) -> AgentTurnResult:
         admit(contract, admission)
         if sandbox != "workspace-write":
             raise ValueError("the fixture requires workspace-write")
@@ -59,7 +55,7 @@ class SimulatedCodexAdapter(CodexCLIAdapter):
         if len(final.encode("utf-8")) > budgets.final_bytes:
             raise ValueError("fixture final output exceeds its budget")
         empty = CapturedText("", 0, False)
-        return CodexTurnResult(
+        return AgentTurnResult(
             argv=("simulated-adapter",),
             repository_root=str(root),
             process_status="successful_exit",

@@ -337,12 +337,13 @@ def test_custom_reported_tool_limitation_rejects_invalid_associations(
 def test_new_fields_persist_through_synthetic_native_output_consumer(
     tmp_path: Path,
 ) -> None:
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.admission import record_admission
     from agent_harness.context import build_context_packet
     from agent_harness.contract import TaskContract
     from agent_harness.journal import EventJournal
     from agent_harness.native_output import run_stored_scoped_turn
+    from agent_harness.ports.agent import TurnBudgets
 
     root = (tmp_path / "repository").resolve()
     subprocess.run(["git", "init", "--quiet", str(root)], check=True, timeout=10)
@@ -480,13 +481,13 @@ def test_clock_reports_signed_discrepancy_without_timeout_decision(
 def test_custom_result_diagnostics_are_validated_before_persistence(
     tmp_path: Path, malformation: str
 ) -> None:
-    from agent_harness.agent import (
+    from agent_harness.diagnostics import DiagnosticsObserver
+    from agent_harness.ports.agent import (
         AgentTurnResult,
         CapturedText,
         TurnBudgets,
         _validate_result,
     )
-    from agent_harness.diagnostics import DiagnosticsObserver
 
     observer = DiagnosticsObserver(0.0, 0.0)
     observer.output(

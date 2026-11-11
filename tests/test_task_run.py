@@ -11,13 +11,13 @@ import pytest
 from test_run_config import make_fixture, write_config
 
 from agent_harness.admission import AdmissionRecord
-from agent_harness.agent import AgentTurnResult, CapturedText, TurnBudgets
 from agent_harness.cli import main
 from agent_harness.context import ContextPacket, build_context_packet
 from agent_harness.contract import TaskContract
 from agent_harness.inspection import summarize_execution
 from agent_harness.lock import RepositoryLease, RepositoryLock
 from agent_harness.policy import VerificationPolicy
+from agent_harness.ports.agent import AgentTurnResult, CapturedText, TurnBudgets
 from agent_harness.repository import resolve_repository_state_location
 from agent_harness.run_config import load_run_config
 from agent_harness.task_run import execute_run

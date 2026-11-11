@@ -125,11 +125,12 @@ def test_real_native_turn_requires_distinct_final_verification(
         "retry_time_budget": 1,
     }.get(scenario, 0)
 
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.admission import record_admission
     from agent_harness.context import ContextPacket
     from agent_harness.journal import EventJournal
     from agent_harness.loop import run_loop
+    from agent_harness.ports.agent import TurnBudgets
     from agent_harness.retry import RetryLimits
     from agent_harness.state import CurrentStateStore
 
@@ -606,12 +607,13 @@ def test_final_cleanup_obeys_elapsed_budget(
 ) -> None:
     """Post-command checks and evidence acceptance count toward the loop limit."""
     from agent_harness import loop
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.admission import record_admission
     from agent_harness.attempt import AttemptJournal
     from agent_harness.context import ContextPacket
     from agent_harness.integrity import verify_protected_inputs
     from agent_harness.journal import EventJournal
+    from agent_harness.ports.agent import TurnBudgets
     from agent_harness.retry import RetryLimits
     from agent_harness.state import CurrentStateStore
     from agent_harness.turn import RepositoryObservation
@@ -696,11 +698,12 @@ def test_final_cleanup_obeys_elapsed_budget(
 
 
 def test_verification_created_ignored_special_blocks(tmp_path: Path) -> None:
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.admission import record_admission
     from agent_harness.context import ContextPacket
     from agent_harness.journal import EventJournal
     from agent_harness.loop import run_loop
+    from agent_harness.ports.agent import TurnBudgets
     from agent_harness.retry import RetryLimits
     from agent_harness.state import CurrentStateStore
 
@@ -760,11 +763,12 @@ def test_loop_rejects_replaced_raw_history(
 ) -> None:
     import os
 
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.admission import record_admission
     from agent_harness.context import ContextPacket
     from agent_harness.journal import EventJournal
     from agent_harness.loop import run_loop
+    from agent_harness.ports.agent import TurnBudgets
     from agent_harness.retry import RetryLimits
     from agent_harness.state import CurrentStateStore
 
@@ -832,11 +836,12 @@ def test_loop_invalid_stored_evidence_never_passes(
 ) -> None:
     import hashlib
 
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.admission import record_admission
     from agent_harness.context import ContextPacket
     from agent_harness.journal import EventJournal
     from agent_harness.loop import run_loop
+    from agent_harness.ports.agent import TurnBudgets
     from agent_harness.retry import RetryLimits
     from agent_harness.state import CurrentStateStore
 
@@ -899,10 +904,11 @@ def test_loop_invalid_stored_evidence_never_passes(
 def _review_bound_loop(
     tmp_path: Path, *, mutate: bool = False
 ) -> tuple[Path, EventJournal, CurrentStateStore, LoopResult]:
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.admission import record_admission
     from agent_harness.context import ContextPacket
     from agent_harness.loop import run_loop
+    from agent_harness.ports.agent import TurnBudgets
     from agent_harness.retry import RetryLimits
 
     root = _repository(tmp_path)

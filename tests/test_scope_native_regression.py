@@ -6,12 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+from agent_harness.adapters.agents.codex import CodexCLIAdapter
 from agent_harness.admission import record_admission
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract
 from agent_harness.journal import EventJournal
 from agent_harness.native_output import NativeOutputError, run_stored_scoped_turn
+from agent_harness.ports.agent import TurnBudgets
 from agent_harness.turn import RepositoryObservation
 
 

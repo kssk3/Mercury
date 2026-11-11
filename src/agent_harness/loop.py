@@ -10,7 +10,6 @@ from dataclasses import asdict, dataclass, replace
 from typing import cast
 
 from agent_harness.admission import AdmissionRecord
-from agent_harness.agent import AgentAdapter, AgentTurnResult, TurnBudgets
 from agent_harness.attempt import (
     AttemptJournal,
     _attempt_summary,
@@ -52,6 +51,7 @@ from agent_harness.native_output import (
 )
 from agent_harness.output import OutputStore, StoredOutput
 from agent_harness.policy import VerificationPolicy
+from agent_harness.ports.agent import AgentAdapter, AgentTurnResult, TurnBudgets
 from agent_harness.repository import read_persistence_bytes
 from agent_harness.retry import RetryFeedback, RetryLimits, RetryUsage
 from agent_harness.runner import (

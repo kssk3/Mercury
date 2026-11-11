@@ -348,9 +348,10 @@ def invoke(
     *,
     task: TaskContract | None = None,
 ) -> ScopedTurnResult:
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.admission import record_admission
     from agent_harness.context import build_context_packet
+    from agent_harness.ports.agent import TurnBudgets
     from agent_harness.scope import run_scoped_turn
 
     task = task if task is not None else contract("base.txt", "added")

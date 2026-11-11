@@ -61,10 +61,11 @@ def test_node_startup_options_cannot_preload_mutable_hook(
 def test_bound_verifier_hardlink_native_mutation_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.admission import record_admission
     from agent_harness.context import ContextPacket
     from agent_harness.contract import TaskContract
+    from agent_harness.ports.agent import TurnBudgets
 
     root = (tmp_path / "repository").resolve()
     subprocess.run(("git", "init", "--quiet", str(root)), check=True, timeout=10)

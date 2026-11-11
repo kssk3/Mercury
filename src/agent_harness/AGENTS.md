@@ -11,7 +11,7 @@ the architectural description.
 | Change | Start here |
 | --- | --- |
 | CLI arguments or settings | Trace [cli.py](cli.py) into [run_config.py](run_config.py) and [task_run.py](task_run.py). Preview and approved execution have different entry paths. |
-| Common or native adapter results | Begin with [agent.py](agent.py). Read [adapter.py](adapter.py) compatibility aliases and [claude_adapter.py](claude_adapter.py) callers before changing shared native helpers. |
+| Common or native adapter results | Begin with [ports/agent.py](ports/agent.py). Native implementations live in [adapters/agents/codex.py](adapters/agents/codex.py) and [adapters/agents/claude.py](adapters/agents/claude.py), sharing [adapters/agents/_native.py](adapters/agents/_native.py). The old agent.py, adapter.py and claude_adapter.py modules preserve public imports. |
 | Turn or phase composition | Read [turn.py](turn.py) and [loop.py](loop.py) together; use the architecture's [execution ordering](../../docs/project/ARCHITECTURE.md#execution-ordering-and-invariants) rather than reconstructing it from one caller. |
 | Inventory, process execution or state decisions | Use [profile.py](profile.py) for repository inventory, [runner.py](runner.py) for checker processes, and [execution.py](execution.py) for pure execution-state transitions. These are separate responsibilities. |
 

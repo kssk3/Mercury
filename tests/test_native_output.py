@@ -10,11 +10,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+from agent_harness.adapters.agents.codex import CodexCLIAdapter
 from agent_harness.admission import record_admission
 from agent_harness.context import build_context_packet
 from agent_harness.contract import TaskContract
 from agent_harness.journal import EventJournal
+from agent_harness.ports.agent import TurnBudgets
 
 if TYPE_CHECKING:
     from agent_harness.native_output import StoredScopedTurnResult

@@ -1,11 +1,14 @@
 # Mercury architecture
 
-Documentation date: 2026-11-08. This map describes product code at
+The historical documentation baseline is 2026-11-08 at
 [main d2216f7a](https://github.com/kssk3/Mercury/commit/d2216f7a54e4cddee8e48e63fb45b8f32466241c).
-The unpushed local integration commit `0b91f259` has the same product source.
-It is a responsibility map of existing modules, not a new package layout or
-dependency policy. [WORKFLOW.md](WORKFLOW.md) owns repository lifecycle;
-[ROADMAP.md](ROADMAP.md) separates delivered, local, held and planned outcomes.
+The earlier unpushed local integration commit `0b91f259` had the same product
+source as that baseline. The current local map includes the 2026-11-11 agent
+package refactor on inspected base `c567a3ef`; this does not claim delivery to
+main. It describes existing module responsibilities and the local package
+boundary, not a new lifecycle policy. [WORKFLOW.md](WORKFLOW.md) owns repository
+lifecycle; [ROADMAP.md](ROADMAP.md) separates delivered, local, held and planned
+outcomes.
 
 ## Product execution and authoring environment
 
@@ -62,7 +65,10 @@ is a separate, explicitly authorized Python API. Detailed contracts are in the
 
 ## Module responsibilities
 
-Paths below are existing modules, not proposed services or agent roles.
+Paths below are existing modules, not proposed services or agent roles. The
+agent port is consumer-owned; task_run.py selects concrete implementations.
+Legacy agent.py, adapter.py and claude_adapter.py imports remain aliases to
+canonical definitions.
 
 | Responsibility | Modules | Boundary |
 | --- | --- | --- |
@@ -70,7 +76,7 @@ Paths below are existing modules, not proposed services or agent roles.
 | Approved execution configuration | [run_config.py](../../src/agent_harness/run_config.py), [task_run.py](../../src/agent_harness/task_run.py) | Parse/preview bounded settings, including explicit retries; reload approved bytes, preflight repository/state/checkers, hold the lease, compose the loop and finalize the wrapper result. |
 | Task and admission contracts | [contract.py](../../src/agent_harness/contract.py), [admission.py](../../src/agent_harness/admission.py), [amendment.py](../../src/agent_harness/amendment.py), [command_admission.py](../../src/agent_harness/command_admission.py) | Represent admitted scope, criteria and command/contract decisions. Recorded approval is not identity authentication. |
 | Repository, workspace and protected inputs | [repository.py](../../src/agent_harness/repository.py), [workspace.py](../../src/agent_harness/workspace.py), [scope.py](../../src/agent_harness/scope.py), [integrity.py](../../src/agent_harness/integrity.py), [baseline.py](../../src/agent_harness/baseline.py) | Establish repository identity, path/scope observations and protected fingerprints without claiming hostile-process confinement. |
-| Common and native adapter boundaries | [agent.py](../../src/agent_harness/agent.py), [adapter.py](../../src/agent_harness/adapter.py), [claude_adapter.py](../../src/agent_harness/claude_adapter.py), [native_output.py](../../src/agent_harness/native_output.py) | Prepare/run a trusted backend, validate process/result facts and retain bounded native output. Task success remains a harness decision. |
+| Common and native adapter boundaries | [ports/agent.py](../../src/agent_harness/ports/agent.py), [adapters/agents/codex.py](../../src/agent_harness/adapters/agents/codex.py), [adapters/agents/claude.py](../../src/agent_harness/adapters/agents/claude.py), [adapters/agents/_native.py](../../src/agent_harness/adapters/agents/_native.py), [native_output.py](../../src/agent_harness/native_output.py) | Prepare/run a trusted backend, validate process/result facts and retain bounded native output. Task success remains a harness decision. |
 | Bounded observations and source-verified launcher | [diagnostics.py](../../src/agent_harness/diagnostics.py), [verified_runtime.py](../../scripts/verified_runtime.py) | Record observed native milestones without inferring model latency/success; optionally verify a separately prepared frozen source inventory before import. Neither mechanism grants execution authority. |
 | Context and stored text | [context.py](../../src/agent_harness/context.py), [output.py](../../src/agent_harness/output.py) | Select bounded context and apply the caller's output-storage/redaction policy. Raw adapter text can exist before redaction. |
 | Technical verification | [policy.py](../../src/agent_harness/policy.py), [runner.py](../../src/agent_harness/runner.py), [development.py](../../src/agent_harness/development.py), [final.py](../../src/agent_harness/final.py), [evidence.py](../../src/agent_harness/evidence.py) | Bind required commands and trusted programs, collect bounded command results, decide technical outcomes and preserve protected-input failures. |

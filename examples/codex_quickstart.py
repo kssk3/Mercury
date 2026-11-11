@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 
-from agent_harness.adapter import CodexCLIAdapter, CodexTurnResult, TurnBudgets
+from agent_harness.adapters.agents.codex import CodexCLIAdapter
 from agent_harness.admission import AdmissionRecord, record_admission
 from agent_harness.context import ContextPacket, build_context_packet
 from agent_harness.contract import TaskContract
@@ -28,6 +28,7 @@ from agent_harness.journal import EventJournal
 from agent_harness.lock import RepositoryLock
 from agent_harness.loop import run_loop
 from agent_harness.policy import VerificationPolicy
+from agent_harness.ports.agent import AgentTurnResult, TurnBudgets
 from agent_harness.retry import RetryLimits
 from agent_harness.runner import CommandResult
 from agent_harness.state import CurrentStateStore
@@ -269,7 +270,7 @@ class RecordingAdapter(CodexCLIAdapter):
     def __init__(self, executable: str, evidence: Path) -> None:
         super().__init__(executable)
         self.evidence = evidence
-        self.result: CodexTurnResult | None = None
+        self.result: AgentTurnResult | None = None
         self.attempts = 0
 
     def run(
@@ -280,7 +281,7 @@ class RecordingAdapter(CodexCLIAdapter):
         *,
         budgets: TurnBudgets,
         sandbox: Literal["read-only", "workspace-write"] = "workspace-write",
-    ) -> CodexTurnResult:
+    ) -> AgentTurnResult:
         if self.attempts:
             raise RuntimeError("one native attempt only; retry/resume refused")
         self.attempts += 1

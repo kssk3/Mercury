@@ -17,16 +17,16 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from agent_harness.admission import AdmissionRecord, admit
-from agent_harness.agent import (
+from agent_harness.context import ContextPacket
+from agent_harness.contract import TaskContract, _path_key
+from agent_harness.journal import EventJournal
+from agent_harness.ports.agent import (
     AgentAdapter,
     AgentTurnResult,
     CapturedText,
     TurnBudgets,
     _validate_result,
 )
-from agent_harness.context import ContextPacket
-from agent_harness.contract import TaskContract, _path_key
-from agent_harness.journal import EventJournal
 from agent_harness.repository import (
     git_executable,
     git_read_environment,

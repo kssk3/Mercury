@@ -15,13 +15,13 @@ import pytest
 from test_run_config import make_fixture, write_config
 from test_task_run import FakeAgent
 
-from agent_harness.agent import AgentTurnResult
 from agent_harness.cli import main
 from agent_harness.context import ContextPacket
 from agent_harness.diagnostics import DiagnosticsObserver
 from agent_harness.inspection import summarize_execution
 from agent_harness.journal import EventJournal
 from agent_harness.loop import run_loop
+from agent_harness.ports.agent import AgentTurnResult
 from agent_harness.run_config import load_run_config
 from agent_harness.task_run import execute_run
 

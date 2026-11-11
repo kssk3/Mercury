@@ -10,10 +10,10 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from agent_harness.admission import AdmissionRecord
-from agent_harness.agent import AgentAdapter, TurnBudgets
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract, _path_key
 from agent_harness.journal import EventJournal
+from agent_harness.ports.agent import AgentAdapter, TurnBudgets
 from agent_harness.turn import (
     FileFingerprint,
     GitStatusEntry,
