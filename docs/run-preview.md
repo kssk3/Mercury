@@ -231,12 +231,30 @@ Adapt the goal, paths, checker arguments, criterion and limits to the admitted
 task. Supply the reviewed full HEAD explicitly; this recipe never replaces it
 with a live Git query. Prepare the configuration's parent directory separately.
 Replace every sample path and the HEAD placeholder before running this code
-with a trusted Python 3.12+ interpreter outside the target repository.
+with the trusted absolute Python 3.12+ interpreter from the prepared Mercury
+installation, using `-I -B`, outside the target repository. This recipe imports
+internal helpers from that reviewed installation; their names and behavior are
+version-dependent. Use the implementation documented here, not an arbitrary
+older installation or a copied source directory.
+
+Preparation below performs bounded, read-only Git root and metadata queries
+before creating the configuration. The helpers select the trusted system Git,
+remove inherited `GIT_*` selectors, and limit each query to 10 seconds. A failed
+query stops preparation before the write. These queries bind paths; they do not
+read or replace the explicitly reviewed `expected_head`.
 
 ```python
 import json
 import re
 from pathlib import Path
+
+from agent_harness.repository import (
+    _is_within_directory,
+    resolve_repository_root,
+    resolve_repository_state_location,
+    validate_runtime_state_directory,
+)
+from agent_harness.run_config import _absolute
 
 repository = Path("/work/addition")
 state_root = Path("/work/addition-state")
@@ -248,14 +266,21 @@ command = ["/trusted/bin/node", "check.mjs"]
 if re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", expected_head) is None:
     raise ValueError("Supply the reviewed full Git HEAD")
 for path in (repository, state_root, config_path):
-    if not path.is_absolute() or path.resolve() != path:
-        raise ValueError("Use canonical absolute paths without symlink aliases")
+    _absolute(str(path))
 if not repository.is_dir() or not config_path.parent.is_dir():
     raise ValueError("Prepare the repository and configuration parent first")
-if repository.is_relative_to(state_root) or state_root.is_relative_to(repository):
+if resolve_repository_root(repository) != repository:
+    raise ValueError("Use the actual Git working-tree root")
+if _is_within_directory(repository, state_root) or _is_within_directory(
+    state_root, repository
+):
     raise ValueError("Repository and state root must be separate")
-if config_path.is_relative_to(repository) or config_path.is_relative_to(state_root):
+if _is_within_directory(config_path, repository) or _is_within_directory(
+    config_path, state_root
+):
     raise ValueError("Configuration must be outside repository and state root")
+resolve_repository_state_location(repository, state_root)
+validate_runtime_state_directory(config_path.parent, repository)
 
 config = {
     "schema_version": 1,
@@ -297,8 +322,13 @@ creation (`"x"`) fails if that path already exists, including a symlink or hard
 link; choose a fresh path without overwriting the earlier configuration.
 If writing fails, retain any partial file and inspect the error before choosing
 another path. These path checks are point-in-time observations. The shared
-Mercury parser still validates the full configuration and protected checker
-inputs during preview. The recipe does not create state, run a checker or
+helpers compare existing ancestor identities, including case aliases on
+case-insensitive filesystems, without folding distinct case-sensitive names.
+They also reject state and configuration storage inside the repository's actual
+Git directory or common Git directory, including external metadata locations,
+before opening the configuration. They do not prevent concurrent path changes.
+The shared Mercury parser still validates the full configuration and protected
+checker inputs during preview. The recipe does not create state, run a checker or
 agent, grant approval, or invoke preview automatically.
 
 Preview the created file separately using the first command, substituting its
