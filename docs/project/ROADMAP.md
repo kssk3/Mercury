@@ -1,7 +1,7 @@
 # Mercury roadmap
 
-Documentation date: 2026-11-08. Delivered product snapshot:
-[main d2216f7a](https://github.com/kssk3/Mercury/commit/d2216f7a54e4cddee8e48e63fb45b8f32466241c).
+Documentation date: 2026-11-11. Delivered product snapshot:
+[main 79e33e9](https://github.com/kssk3/Mercury/commit/79e33e9ae2d257ea23f8e404491830a58145585f).
 This document describes delivered capability and proposed outcomes. It grants
 no implementation, model execution, check, review, publication or merge authority.
 [WORKFLOW.md](WORKFLOW.md) remains the sole repository lifecycle authority.
@@ -54,6 +54,18 @@ are not current product capabilities.
 | Historical status details and bounded profile queries | [PR #12](https://github.com/kssk3/Mercury/pull/12), merged after reconciliation with current main: saved process/scope/verification metadata and bounded Git profiling. Details do not verify the live workspace. | [Status details](../status-details.md) |
 | Historical validation explanation and offline HTML | PR #15: one bounded captured history supplies JSON explanation or standalone Korean HTML; comparison inputs remain caller context. | [Validation visibility](../validation-visibility.md) |
 | External check receipts and fresh report bundles | [PR #16](https://github.com/kssk3/Mercury/pull/16): a separately authorized single-check Python collector, read-only receipt validation, and an explicit three-file export of existing records. Export does not run checks. | [Receipt collection](../validation-visibility.md#explicit-external-command-receipts), [report export](../validation-visibility.md#explicit-fresh-report-bundle) |
+| Saved integration regressions and usage documentation | [PR #18](https://github.com/kssk3/Mercury/pull/18): delivered the saved integration commit `0b91f25`, documentation refresh and reviewed corrections at `7150132`. Covers a reachable successful 8,000-entry history, valid-format identity tampering and optional-diagnostics wording. Product source is unchanged from the previous snapshot. | [Recorded binding](../review-contract.md#execution-produced-binding), [read-only walkthrough](../validation-visibility.md#read-only-walkthrough-from-a-mercury-checkout) |
+
+PR #18 merged on 2026-11-11 KST. Its three independent-review findings were
+resolved at `7150132`; the affected 16 test cases passed, followed by an
+independent approval recommendation and the
+[owner-confirmed codex-review gate](https://github.com/kssk3/Mercury/actions/runs/42839389189).
+[PR CI](https://github.com/kssk3/Mercury/actions/runs/42837689755) passed with
+3,021 tests passing and five skipped. The pinned merge commit's
+[main CI](https://github.com/kssk3/Mercury/actions/runs/42839856775) also passed,
+including the offline quickstart. Local main was fast-forwarded to that commit;
+the merged remote/local PR branches and stale worktree registration were removed.
+The existing stash, backups and untracked `error.log` were preserved.
 
 The pinned merge history establishes which implementation this map describes.
 This update uses that local history and the current source/contracts; it does
@@ -66,8 +78,7 @@ new technical PASS.
 
 | State | Work | Boundary |
 | --- | --- | --- |
-| LOCAL | Saved integration commit `0b91f259155124bad823ffb908aafd405ed60403` | Nine documentation/regression-test files are committed locally and unpushed. Product source matches the pinned main. Historical serial checks are not a fresh suite result; the two native-fixture parallel timeout cases remain unresolved and their investigation is stopped by the user. |
-| LOCAL | This roadmap/architecture refresh and read-only usage walkthrough | Locally committed documentation; no product behavior change, native run or publication. |
+| HELD | Two native-fixture tests with two-second parallel timeouts | Root cause remains UNKNOWN. The investigation is stopped by the user. Passing serial checks and Linux CI do not resolve the historical parallel failures or authorize further investigation. |
 | LOCAL | Personal skill and current-record maintenance outside the shipped package | Authoring-environment work, not a portable Mercury feature or proof that hooks fire. Private records do not belong in this public repository. |
 
 Scoped runtime/example AGENTS guidance is available in
