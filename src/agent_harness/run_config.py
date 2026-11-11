@@ -14,10 +14,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import cast
 
-from agent_harness.agent import TurnBudgets
 from agent_harness.contract import TaskContract
 from agent_harness.loop import bind_completion_criteria
 from agent_harness.policy import VerificationPolicy
+from agent_harness.ports.agent import TurnBudgets
 from agent_harness.repository import (
     _is_within_directory,
     resolve_repository_root,

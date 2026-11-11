@@ -130,12 +130,13 @@ def build_completed_loop(
     import hashlib
     import sys
 
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.admission import record_admission
     from agent_harness.context import ContextPacket
     from agent_harness.contract import TaskContract
     from agent_harness.loop import run_loop
     from agent_harness.policy import VerificationPolicy
+    from agent_harness.ports.agent import TurnBudgets
     from agent_harness.retry import RetryLimits
 
     # Control only this temporary repository, before producer/seed Git writes.

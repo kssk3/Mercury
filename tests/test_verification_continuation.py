@@ -130,12 +130,13 @@ def test_development_checkpoint_continues_only_final(
     from test_loop import _native_fixture, _repository
 
     from agent_harness import loop
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.admission import record_admission
     from agent_harness.context import ContextPacket
     from agent_harness.contract import TaskContract
     from agent_harness.journal import EventJournal
     from agent_harness.policy import VerificationPolicy
+    from agent_harness.ports.agent import TurnBudgets
     from agent_harness.retry import RetryLimits
     from agent_harness.state import CurrentStateStore
 
@@ -404,7 +405,8 @@ def test_killed_process_continues_in_fresh_interpreter(
     driver.write_text(f"""
 import json,sys,time
 from pathlib import Path
-from agent_harness.adapter import CodexCLIAdapter,TurnBudgets
+from agent_harness.adapters.agents.codex import CodexCLIAdapter
+from agent_harness.ports.agent import TurnBudgets
 from agent_harness.admission import record_admission
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract
@@ -536,12 +538,13 @@ def test_checkpoint_roundtrip_preserves_protected_permission_evidence(
     from test_loop import _native_fixture, _repository
 
     from agent_harness import loop
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.admission import record_admission
     from agent_harness.context import ContextPacket
     from agent_harness.contract import TaskContract
     from agent_harness.journal import EventJournal
     from agent_harness.policy import VerificationPolicy
+    from agent_harness.ports.agent import TurnBudgets
     from agent_harness.retry import RetryLimits
     from agent_harness.state import CurrentStateStore
 

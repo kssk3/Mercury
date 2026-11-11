@@ -10,9 +10,9 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Literal, cast
 
-from agent_harness.adapter import TurnBudgets
 from agent_harness.evidence import EvidenceReport
 from agent_harness.journal import EventJournal
+from agent_harness.ports.agent import TurnBudgets
 from agent_harness.repository import read_persistence_bytes, resolve_repository_root
 from agent_harness.review_evidence import build_review_evidence, read_review_binding
 from agent_harness.runner import CommandResult

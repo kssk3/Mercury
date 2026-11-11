@@ -15,15 +15,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from agent_harness.adapter import CodexCLIAdapter
+from agent_harness.adapters.agents.claude import ClaudeCLIAdapter
+from agent_harness.adapters.agents.codex import CodexCLIAdapter
 from agent_harness.admission import AdmissionRecord, record_admission
-from agent_harness.agent import AgentAdapter, AgentTurnResult, TurnBudgets
-from agent_harness.claude_adapter import ClaudeCLIAdapter
 from agent_harness.context import ContextPacket, build_context_packet
 from agent_harness.contract import TaskContract
 from agent_harness.journal import EventJournal
 from agent_harness.lock import RepositoryLock
 from agent_harness.loop import run_loop
+from agent_harness.ports.agent import AgentAdapter, AgentTurnResult, TurnBudgets
 from agent_harness.repository import (
     git_executable,
     git_read_environment,

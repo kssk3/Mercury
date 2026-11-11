@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
+from agent_harness.adapters.agents.claude import ClaudeCLIAdapter
 from agent_harness.admission import record_admission
-from agent_harness.agent import AgentTurnResult, TurnBudgets, _validate_result
-from agent_harness.claude_adapter import ClaudeCLIAdapter
 from agent_harness.context import build_context_packet
 from agent_harness.contract import TaskContract
+from agent_harness.ports.agent import AgentTurnResult, TurnBudgets, _validate_result
 
 
 @pytest.fixture

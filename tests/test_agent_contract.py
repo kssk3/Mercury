@@ -12,13 +12,13 @@ from typing import Literal, cast
 
 import pytest
 
-from agent_harness.adapter import CapturedText, CodexTurnResult, TurnBudgets
 from agent_harness.admission import AdmissionRecord, record_admission
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract
 from agent_harness.journal import EventJournal
 from agent_harness.loop import run_loop
 from agent_harness.policy import VerificationPolicy
+from agent_harness.ports.agent import AgentTurnResult, CapturedText, TurnBudgets
 from agent_harness.retry import RetryLimits
 from agent_harness.state import CurrentStateStore
 from agent_harness.turn import TurnObservationError, run_observed_turn
@@ -84,13 +84,13 @@ class StructuralAdapter:
         *,
         budgets: TurnBudgets,
         sandbox: Literal["read-only", "workspace-write"] = "workspace-write",
-    ) -> CodexTurnResult:
+    ) -> AgentTurnResult:
         self.sandboxes.append(sandbox)
         root = Path(context.repository_root)
         if self.status == "successful_exit" and sandbox == "workspace-write":
             (root / "value").write_text("new")
         text = CapturedText("private payload", 15, False)
-        result = CodexTurnResult(
+        result = AgentTurnResult(
             ("synthetic-agent",),
             str(root),
             self.status,
@@ -106,7 +106,7 @@ class StructuralAdapter:
             "available",
         )
         if self.malformed == "type":
-            return cast(CodexTurnResult, "private payload")
+            return cast(AgentTurnResult, "private payload")
         if self.malformed == "root":
             return replace(result, repository_root=str(root.parent))
         if self.malformed == "capture":
@@ -177,6 +177,7 @@ def test_structural_adapter_completes_verified_loop(
 
 
 def test_legacy_types_keep_identity() -> None:
+    from agent_harness.adapter import CapturedText, CodexTurnResult, TurnBudgets
     from agent_harness.agent import AgentTurnResult
     from agent_harness.agent import CapturedText as CommonText
     from agent_harness.agent import TurnBudgets as CommonBudgets
@@ -223,7 +224,7 @@ def test_prepare_refusal_retains_intent_without_run(
 def test_incomplete_adapter_is_rejected_before_intent(
     repository: Path, tmp_path: Path, missing: str
 ) -> None:
-    from agent_harness.agent import AgentAdapter
+    from agent_harness.ports.agent import AgentAdapter
 
     class Incomplete:
         pass
@@ -403,7 +404,7 @@ def test_status_requires_plain_string_before_persistence(
             *,
             budgets: TurnBudgets,
             sandbox: Literal["read-only", "workspace-write"] = "workspace-write",
-        ) -> CodexTurnResult:
+        ) -> AgentTurnResult:
             result = super().run(
                 contract, admission, context, budgets=budgets, sandbox=sandbox
             )
@@ -602,3 +603,26 @@ def test_intent_append_failure_never_calls_preparation(
     assert raised.value.adapter_result is None
     assert not raised.value.terminal_recorded
     assert journal.read() == []
+
+
+def test_canonical_port_preserves_legacy_type_identity() -> None:
+    from agent_harness import agent
+    from agent_harness.adapter import CodexTurnResult
+    from agent_harness.ports import agent as port
+
+    assert agent.AgentAdapter is port.AgentAdapter
+    assert agent.AgentTurnResult is port.AgentTurnResult
+    assert agent.CapturedText is port.CapturedText
+    assert agent.TurnBudgets is port.TurnBudgets
+    assert agent._validate_result is port._validate_result
+    assert CodexTurnResult is port.AgentTurnResult
+
+
+def test_canonical_provider_classes_preserve_public_identity() -> None:
+    from agent_harness.adapter import CodexCLIAdapter as LegacyCodex
+    from agent_harness.adapters.agents.claude import ClaudeCLIAdapter
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
+    from agent_harness.claude_adapter import ClaudeCLIAdapter as LegacyClaude
+
+    assert LegacyCodex is CodexCLIAdapter
+    assert LegacyClaude is ClaudeCLIAdapter

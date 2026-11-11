@@ -12,13 +12,13 @@ import pytest
 from test_loop import _repository
 
 from agent_harness.admission import AdmissionRecord, record_admission
-from agent_harness.agent import AgentTurnResult, CapturedText, TurnBudgets
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract
 from agent_harness.inspection import summarize_execution
 from agent_harness.journal import EventJournal
 from agent_harness.loop import run_loop
 from agent_harness.policy import VerificationPolicy
+from agent_harness.ports.agent import AgentTurnResult, CapturedText, TurnBudgets
 from agent_harness.retry import RetryLimits
 from agent_harness.state import CurrentStateStore
 
@@ -177,8 +177,8 @@ def test_native_adapter_receives_feedback_only_as_untrusted_context(
 ) -> None:
     from test_adapter import fake
 
-    from agent_harness.adapter import CodexCLIAdapter
-    from agent_harness.claude_adapter import ClaudeCLIAdapter
+    from agent_harness.adapters.agents.claude import ClaudeCLIAdapter
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.failure import FailureAssessment, FailureFinding
     from agent_harness.retry import RetryFeedback
 

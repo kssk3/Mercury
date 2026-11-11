@@ -12,11 +12,12 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from agent_harness.adapter import CodexCLIAdapter, CodexTurnResult, TurnBudgets
+from agent_harness.adapters.agents.codex import CodexCLIAdapter
 from agent_harness.admission import AdmissionRecord, record_admission
 from agent_harness.context import ContextPacket, build_context_packet
 from agent_harness.contract import TaskContract
 from agent_harness.journal import EventJournal
+from agent_harness.ports.agent import AgentTurnResult, TurnBudgets
 
 if TYPE_CHECKING:
     from agent_harness.turn import ObservedTurnResult
@@ -620,7 +621,7 @@ def test_adapter_exception_records_fixed_failure_without_raw_exception(
 
     adapter = CodexCLIAdapter(tmp_path / "unused")
 
-    def raises(*args: object, **kwargs: object) -> CodexTurnResult:
+    def raises(*args: object, **kwargs: object) -> AgentTurnResult:
         raise RuntimeError("SECRET ADAPTER ERROR")
 
     monkeypatch.setattr(adapter, "run", raises)
@@ -1311,7 +1312,7 @@ def test_adapter_cancellation_preserves_original_object_after_failure_record_att
     cancellation = failure_type("cancelled")
     adapter = CodexCLIAdapter(tmp_path / "unused")
 
-    def cancel(*args: object, **kwargs: object) -> CodexTurnResult:
+    def cancel(*args: object, **kwargs: object) -> AgentTurnResult:
         raise cancellation
 
     monkeypatch.setattr(adapter, "run", cancel)

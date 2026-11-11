@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Literal
 
 from agent_harness.admission import AdmissionRecord
-from agent_harness.agent import AgentAdapter, CapturedText, TurnBudgets
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract
 from agent_harness.journal import EventJournal
 from agent_harness.output import OutputStore, StoredOutput
+from agent_harness.ports.agent import AgentAdapter, CapturedText, TurnBudgets
 from agent_harness.repository import (
     resolve_repository_root,
     validate_runtime_state_directory,

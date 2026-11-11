@@ -22,7 +22,7 @@ from typing import Literal
 
 import pytest
 
-from agent_harness.adapter import CodexCLIAdapter, CodexTurnResult, TurnBudgets
+from agent_harness.adapters.agents.codex import CodexCLIAdapter
 from agent_harness.admission import AdmissionRecord, record_admission
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract
@@ -30,6 +30,7 @@ from agent_harness.interruption import human_gate, report_interruption
 from agent_harness.journal import EventJournal
 from agent_harness.loop import run_loop
 from agent_harness.policy import VerificationPolicy
+from agent_harness.ports.agent import AgentTurnResult, TurnBudgets
 from agent_harness.recovery import capture_patch, recover_patch, seal_patch
 from agent_harness.retry import RetryLimits
 from agent_harness.startup import reconcile_startup
@@ -122,7 +123,7 @@ def _child(directory: str, boundary: str, descriptor: int) -> None:
             *,
             budgets: TurnBudgets,
             sandbox: Literal["read-only", "workspace-write"] = "workspace-write",
-        ) -> CodexTurnResult:
+        ) -> AgentTurnResult:
             result = super().run(
                 contract,
                 admission,

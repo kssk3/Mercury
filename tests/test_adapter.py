@@ -36,7 +36,8 @@ def fake(tmp_path: Path, body: str) -> Path:
 def test_fixed_argv_complete_stdin_and_external_final_cleanup(
     repository: Path, tmp_path: Path
 ) -> None:
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
+    from agent_harness.ports.agent import TurnBudgets
 
     executable = fake(
         tmp_path,
@@ -93,7 +94,8 @@ def test_fixed_argv_complete_stdin_and_external_final_cleanup(
 
 
 def invoke(repository: Path, executable: Path | str, **kwargs: object) -> object:
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
+    from agent_harness.ports.agent import TurnBudgets
 
     contract = TaskContract("acknowledge", (), (), ("reply",))
     admission = record_admission(
@@ -112,7 +114,7 @@ def invoke(repository: Path, executable: Path | str, **kwargs: object) -> object
 def test_flood_retained_bytes_and_invalid_utf8_are_bounded(
     repository: Path, tmp_path: Path
 ) -> None:
-    from agent_harness.adapter import CodexTurnResult
+    from agent_harness.ports.agent import AgentTurnResult
 
     executable = fake(
         tmp_path,
@@ -123,7 +125,7 @@ def test_flood_retained_bytes_and_invalid_utf8_are_bounded(
         "pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_bytes(b'\\xff' * 200000)\n",
     )
     result = invoke(repository, executable)
-    assert isinstance(result, CodexTurnResult)
+    assert isinstance(result, AgentTurnResult)
     assert result.process_status == "successful_exit"
     for output, budget in [
         (result.stdout, 31),
@@ -139,7 +141,8 @@ def test_flood_retained_bytes_and_invalid_utf8_are_bounded(
 def test_timeout_includes_startup_and_blocked_stdin(
     repository: Path, tmp_path: Path
 ) -> None:
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
+    from agent_harness.ports.agent import TurnBudgets
 
     executable = fake(tmp_path, "import time\ntime.sleep(30)\n")
     contract = TaskContract("a" * 300000, (), (), ("reply",))
@@ -216,7 +219,8 @@ def ready_timeout_process(
 def test_ready_child_timeout_preserves_output_exit_and_descendant_cleanup(
     tmp_path: Path, mode: str
 ) -> None:
-    from agent_harness import adapter
+    from agent_harness.adapters.agents import _native as adapter
+    from agent_harness.adapters.agents.codex import _read_final
 
     with ready_timeout_process(tmp_path, mode) as process:
         stdout = adapter._Capture(100)
@@ -231,7 +235,7 @@ def test_ready_child_timeout_preserves_output_exit_and_descendant_cleanup(
             assert stdout.result().text == "before timeout"
         else:
             assert process.returncode == 0
-        assert adapter._read_final(tmp_path / "final.txt", 100) == (None, "missing")
+        assert _read_final(tmp_path / "final.txt", 100) == (None, "missing")
         assert process.stdin is not None and process.stdin.closed
         assert process.stdout is not None and process.stdout.closed
         assert process.stderr is not None and process.stderr.closed
@@ -249,10 +253,10 @@ def test_ready_child_timeout_preserves_output_exit_and_descendant_cleanup(
 def test_exit_status_and_absent_final_are_separate(
     repository: Path, tmp_path: Path, body: str, status: str, code: int
 ) -> None:
-    from agent_harness.adapter import CodexTurnResult
+    from agent_harness.ports.agent import AgentTurnResult
 
     result = invoke(repository, fake(tmp_path, body))
-    assert isinstance(result, CodexTurnResult)
+    assert isinstance(result, AgentTurnResult)
     assert result.process_status == status
     assert result.exit_code == code
     assert result.final_message is None
@@ -263,7 +267,7 @@ def test_exit_status_and_absent_final_are_separate(
 def test_unsafe_final_output_is_rejected_without_blocking(
     repository: Path, tmp_path: Path, kind: str
 ) -> None:
-    from agent_harness.adapter import CodexTurnResult
+    from agent_harness.ports.agent import AgentTurnResult
 
     body = (
         "import os, pathlib, sys\nsys.stdin.buffer.read()\n"
@@ -275,16 +279,16 @@ def test_unsafe_final_output_is_rejected_without_blocking(
         "fifo": "os.mkfifo(p)\n",
     }[kind]
     result = invoke(repository, fake(tmp_path, body))
-    assert isinstance(result, CodexTurnResult)
+    assert isinstance(result, AgentTurnResult)
     assert result.final_output_status == "unsafe"
     assert result.final_message is None
 
 
 def test_launch_error_has_bounded_diagnostic(repository: Path, tmp_path: Path) -> None:
-    from agent_harness.adapter import CodexTurnResult
+    from agent_harness.ports.agent import AgentTurnResult
 
     result = invoke(repository, tmp_path / "missing")
-    assert isinstance(result, CodexTurnResult)
+    assert isinstance(result, AgentTurnResult)
     assert result.process_status == "launch_error"
     assert result.exit_code is None
     assert result.stderr.retained_bytes <= 37
@@ -292,7 +296,7 @@ def test_launch_error_has_bounded_diagnostic(repository: Path, tmp_path: Path) -
 
 @pytest.mark.parametrize("bad", [0, -1, True, float("inf"), float("nan")])
 def test_time_budget_rejects_nonfinite_or_nonpositive(bad: float) -> None:
-    from agent_harness.adapter import TurnBudgets
+    from agent_harness.ports.agent import TurnBudgets
 
     with pytest.raises(ValueError, match="timeout"):
         TurnBudgets(bad, 1, 1, 1, 1)
@@ -303,7 +307,7 @@ def test_time_budget_rejects_nonfinite_or_nonpositive(bad: float) -> None:
 )
 @pytest.mark.parametrize("bad", [0, -1, True, 1.5])
 def test_byte_budgets_require_positive_integer(field: str, bad: object) -> None:
-    from agent_harness.adapter import TurnBudgets
+    from agent_harness.ports.agent import TurnBudgets
 
     values = dict(
         timeout_seconds=1, input_bytes=1, stdout_bytes=1, stderr_bytes=1, final_bytes=1
@@ -329,8 +333,9 @@ def test_byte_budgets_require_positive_integer(field: str, bad: object) -> None:
 def test_invalid_input_never_launches(
     repository: Path, tmp_path: Path, invalid: str
 ) -> None:
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.context import ContextPacket
+    from agent_harness.ports.agent import TurnBudgets
 
     marker = tmp_path / "launched"
     executable = fake(
@@ -383,7 +388,7 @@ def test_hardlinked_final_response_is_rejected_and_descriptor_closed(
 ) -> None:
     import os
 
-    from agent_harness import adapter
+    from agent_harness.adapters.agents.codex import _read_final
 
     original = tmp_path / "unrelated.txt"
     original.write_text("unrelated private contents")
@@ -398,7 +403,7 @@ def test_hardlinked_final_response_is_rejected_and_descriptor_closed(
         return descriptor
 
     monkeypatch.setattr(os, "open", tracked_open)
-    capture, status = adapter._read_final(final, 100)
+    capture, status = _read_final(final, 100)
     assert status == "unsafe"
     assert capture is None
     assert original.read_text() == "unrelated private contents"
@@ -410,8 +415,9 @@ def test_hardlinked_final_response_is_rejected_and_descriptor_closed(
 def test_native_selection_survives_writable_path_shadow(
     repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.context import ContextPacket
+    from agent_harness.ports.agent import TurnBudgets
 
     tools = repository / "tools"
     tools.mkdir()
@@ -482,11 +488,11 @@ def test_native_selection_rejects_workspace_candidates(
 def test_relative_external_native_keeps_repository_cwd_selection(
     repository: Path, tmp_path: Path
 ) -> None:
-    from agent_harness.adapter import CodexTurnResult
+    from agent_harness.ports.agent import AgentTurnResult
 
     executable = fake(tmp_path, "import sys\nsys.stdin.read()\nprint('trusted')\n")
     result = invoke(repository, "../fake-codex")
-    assert isinstance(result, CodexTurnResult)
+    assert isinstance(result, AgentTurnResult)
     assert result.process_status == "successful_exit"
     assert result.stdout.text == "trusted\n"
     assert result.argv[0] == str(executable.resolve())
@@ -495,9 +501,10 @@ def test_relative_external_native_keeps_repository_cwd_selection(
 def test_relative_selection_is_bound_at_turn_admission(
     repository: Path, tmp_path: Path
 ) -> None:
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.context import ContextPacket
     from agent_harness.journal import EventJournal
+    from agent_harness.ports.agent import TurnBudgets
     from agent_harness.turn import _validate_turn
 
     selected = tmp_path / "selected"
@@ -543,9 +550,10 @@ def test_native_env_shebang_retry_ignores_planted_interpreter(
     monkeypatch: pytest.MonkeyPatch,
     consumer: str,
 ) -> None:
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.context import ContextPacket
     from agent_harness.journal import EventJournal
+    from agent_harness.ports.agent import TurnBudgets
     from agent_harness.turn import run_observed_turn
 
     tools = repository / "tools"
@@ -611,7 +619,7 @@ def test_native_shebang_preserves_external_runtime_and_caller_environment(
 ) -> None:
     import venv
 
-    from agent_harness.adapter import CodexTurnResult
+    from agent_harness.ports.agent import AgentTurnResult
 
     external = tmp_path / "external-bin"
     external.mkdir()
@@ -657,8 +665,9 @@ def test_native_shebang_preserves_external_runtime_and_caller_environment(
     executable.write_text(
         executable.read_text().replace(f"#!{sys.executable}", f"#!{declaration}", 1)
     )
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.context import ContextPacket
+    from agent_harness.ports.agent import TurnBudgets
 
     task = TaskContract("preserve external native runtime", (), (), ("reply",))
     result = CodexCLIAdapter(executable).run(
@@ -667,7 +676,7 @@ def test_native_shebang_preserves_external_runtime_and_caller_environment(
         ContextPacket(str(repository), 1000, ()),
         budgets=TurnBudgets(3, 10000, 4000, 1000, 100),
     )
-    assert isinstance(result, CodexTurnResult)
+    assert isinstance(result, AgentTurnResult)
     assert result.process_status == "successful_exit"
     returned = json.loads(result.stdout.text)
     assert returned["prefix"] == prefix
@@ -715,8 +724,9 @@ def test_native_unsafe_shebang_is_refused_before_launch(
 def test_native_retry_rechecks_changed_interpreter_boundary(
     repository: Path, tmp_path: Path
 ) -> None:
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.context import ContextPacket
+    from agent_harness.ports.agent import TurnBudgets
 
     marker = tmp_path / "outside-marker"
     executable = fake(tmp_path, "import sys\nsys.stdin.read()\nsys.exit(1)\n")
@@ -744,7 +754,7 @@ def test_native_retry_rechecks_changed_interpreter_boundary(
 def test_missing_native_interpreter_remains_typed_launch_error(
     repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
-    from agent_harness.adapter import CodexTurnResult
+    from agent_harness.ports.agent import AgentTurnResult
 
     monkeypatch.setenv("PATH", os.defpath)
     declaration = (
@@ -757,7 +767,7 @@ def test_missing_native_interpreter_remains_typed_launch_error(
         f"#!{declaration}\n" + executable.read_text().split("\n", 1)[1]
     )
     result = invoke(repository, executable)
-    assert isinstance(result, CodexTurnResult)
+    assert isinstance(result, AgentTurnResult)
     assert result.process_status == "launch_error"
     assert result.exit_code is None
     assert result.stderr.retained_bytes <= 37
@@ -768,8 +778,9 @@ def test_missing_native_interpreter_remains_typed_launch_error(
 def test_native_hardlink_mutation_is_refused_on_retry(
     repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.context import ContextPacket
+    from agent_harness.ports.agent import TurnBudgets
 
     ignored = repository / "ignored"
     ignored.mkdir()
@@ -823,7 +834,7 @@ def test_codex_diagnostics_record_observed_stages_without_native_payload(
 ) -> None:
     from dataclasses import asdict
 
-    from agent_harness.adapter import CodexTurnResult
+    from agent_harness.ports.agent import AgentTurnResult
 
     body = (
         "import os,sys\nsys.stdin.buffer.read()\n"
@@ -831,7 +842,7 @@ def test_codex_diagnostics_record_observed_stages_without_native_payload(
         "os.write(2, b'SECRET stderr')\n"
     )
     result = invoke(repository, fake(tmp_path, body))
-    assert isinstance(result, CodexTurnResult)
+    assert isinstance(result, AgentTurnResult)
     diagnostics = getattr(result, "diagnostics", None)
     assert diagnostics is not None
     milestones = diagnostics.milestones
@@ -861,7 +872,7 @@ def test_codex_diagnostics_record_observed_stages_without_native_payload(
 def test_ready_timeout_keeps_stages_and_incomplete_stdin_observation(
     tmp_path: Path,
 ) -> None:
-    from agent_harness import adapter
+    from agent_harness.adapters.agents import _native as adapter
     from agent_harness.diagnostics import DiagnosticsObserver
 
     with ready_timeout_process(tmp_path, "blocked_stdin") as process:
@@ -892,10 +903,10 @@ def test_ready_timeout_keeps_stages_and_incomplete_stdin_observation(
 def test_launch_error_keeps_unknown_execution_stages(
     repository: Path, tmp_path: Path
 ) -> None:
-    from agent_harness.adapter import CodexTurnResult
+    from agent_harness.ports.agent import AgentTurnResult
 
     result = invoke(repository, tmp_path / "missing")
-    assert isinstance(result, CodexTurnResult)
+    assert isinstance(result, AgentTurnResult)
     assert result.diagnostics is not None
     milestones = result.diagnostics.milestones
     assert milestones.launch_started == 0.0

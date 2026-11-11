@@ -16,7 +16,6 @@ from pathlib import Path
 from codex_quickstart import RecordingAdapter, configuration, phase_facts
 
 from agent_harness import repository
-from agent_harness.adapter import TurnBudgets
 from agent_harness.admission import record_admission
 from agent_harness.context import build_context_packet
 from agent_harness.contract import TaskContract
@@ -25,6 +24,7 @@ from agent_harness.journal import EventJournal
 from agent_harness.lock import RepositoryLock
 from agent_harness.loop import run_loop
 from agent_harness.policy import VerificationPolicy
+from agent_harness.ports.agent import TurnBudgets
 from agent_harness.retry import RetryLimits
 from agent_harness.state import CurrentStateStore
 

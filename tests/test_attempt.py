@@ -167,11 +167,12 @@ def build_complete_events(
 ) -> list[dict[str, Any]]:
     import sys
 
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.admission import record_admission
     from agent_harness.context import build_context_packet
     from agent_harness.contract import TaskContract
     from agent_harness.native_output import run_stored_scoped_turn
+    from agent_harness.ports.agent import TurnBudgets
 
     executable = tmp_path / "fake-codex"
     executable.write_text(
@@ -921,11 +922,12 @@ def test_real_timeout_stored_turn_metadata_remains_readable(
 ) -> None:
     import sys
 
-    from agent_harness.adapter import CodexCLIAdapter, TurnBudgets
+    from agent_harness.adapters.agents.codex import CodexCLIAdapter
     from agent_harness.admission import record_admission
     from agent_harness.context import build_context_packet
     from agent_harness.contract import TaskContract
     from agent_harness.native_output import run_stored_scoped_turn
+    from agent_harness.ports.agent import TurnBudgets
 
     executable = tmp_path / "controlled-timeout"
     body = f"#!{sys.executable}\nimport os, sys, time\nsys.stdin.buffer.read()\n"
