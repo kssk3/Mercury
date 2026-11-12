@@ -19,6 +19,14 @@ The product snapshot is
 See the [roadmap](docs/project/ROADMAP.md) for delivery states and the
 [architecture map](docs/project/ARCHITECTURE.md) for current module ownership.
 
+## Web introduction and synthetic demo
+
+The independently managed [web app](web/README.md) lives in `web/`. It provides
+an introduction and a clickable walkthrough using synthetic browser-only data.
+Use Node.js 24+ and npm to run it; no Python backend or AI credentials are
+required. Its dependency lockfile, build and checks are separate from the
+Python package. The web demo does not execute agents or verification commands.
+
 ## What problem does it help with?
 
 **This is a hypothetical shopping-cart integration story, not a runnable tutorial.**
