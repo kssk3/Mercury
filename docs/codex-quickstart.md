@@ -8,7 +8,7 @@ without an account or model call.
 
 Use macOS/POSIX, Git, Python 3.12+, the installed Mercury package, and a trusted
 Codex CLI already signed in using ChatGPT. From the repository root, prepare the
-package as described in the [README](../README.en.md), then run:
+package using the [installation instructions](../README.md#install-from-source), then run:
 
 ```sh
 .venv/bin/python examples/codex_quickstart.py --approve-codex-demo
@@ -131,4 +131,4 @@ files and directories remain. Forced termination can leave temporary resources.
 The task prompt discourages other agents/services/installs and confines intent
 to the fixture, but does not establish filesystem confinement or prevent all
 external writes. Ignored files and Git internals remain outside aggregate file
-observation, as described in the [project limits](../README.en.md).
+observation; see the [trust and capability limits](project/ARCHITECTURE.md#trust-and-capability-limits).
