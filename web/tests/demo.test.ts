@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createDemoStore, getVisibleResult, scenarioFromHash } from "../src/lib/demo";
+import { readFileSync } from "node:fs";
+import { parseDemoReceipt } from "../src/lib/demo-evidence";
+import { checkLabel, createDemoStore, getVisibleResult, scenarioFromHash, summarizeReceipt } from "../src/lib/demo";
 
 // These tests catch out-of-bounds navigation, stale result leakage, and shared instances.
 test("starts at the first step with no premature technical result", () => {
@@ -60,4 +62,43 @@ test("scenario fragments are allowlisted and leave ordinary anchors alone", () =
   for (const hash of ["", "#demo", "#how-it-works", "#demo-unknown", "#demo-__proto__", "#demo-%72egression"]) {
     assert.equal(scenarioFromHash(hash), null);
   }
+});
+
+// Contract: missing execution must not read like failed checks, and actions follow observed outcomes.
+const receiptFor = (id: string) => parseDemoReceipt(JSON.parse(readFileSync(new URL(`../public/demo/cart/${id}.json`, import.meta.url), "utf8")));
+test("phase evidence distinguishes observed failure, unrun checks and unknown results", () => {
+  const incomplete = summarizeReceipt(receiptFor("incomplete"));
+  assert.match(incomplete.evidence.join(" "), /최종 검사: 미실행 2개/);
+  assert.doesNotMatch(incomplete.evidence.join(" "), /최종 검사 0\/2 통과|실패/);
+  const regression = summarizeReceipt(receiptFor("regression"));
+  assert.match(regression.evidence.join(" "), /개발 검사: 통과 1개 · 실패 1개/);
+  assert.match(regression.evidence.join(" "), /최종 검사: 미실행 2개/);
+  const mixed = receiptFor("incomplete");
+  Object.assign(mixed.checks.find(c => c.phase === "final")!, { availability: "observed", exitCode: 1, timedOut: false });
+  assert.match(summarizeReceipt(mixed).evidence.join(" "), /최종 검사: 실패 1개 · 미실행 1개/);
+  for (const [exitCode, timedOut] of [[0, true], [null, false], [0, null]] as const) {
+    const unknown = receiptFor("correct");
+    Object.assign(unknown.checks.find(c => c.phase === "final")!, { exitCode, timedOut });
+    assert.equal(checkLabel(unknown.checks.find(c => c.phase === "final")!), "UNKNOWN");
+    assert.equal(summarizeReceipt(unknown).result, "UNKNOWN");
+    assert.match(summarizeReceipt(unknown).evidence.join(" "), /최종 검사: 통과 1개 · 확인 불가 1개/);
+  }
+  const missing = receiptFor("correct");
+  missing.checks = missing.checks.filter(c => c.phase !== "final");
+  assert.equal(summarizeReceipt(missing).result, "UNKNOWN");
+  assert.match(summarizeReceipt(missing).evidence.join(" "), /최종 검사: 기록 없음 · 확인 불가/);
+});
+test("primary evidence follows receipt facts even when scenario names differ", () => {
+  for (const [id, panel, label] of [["correct", "Checks", "통과한 검사 보기"], ["regression", "Checks", "실패한 검사 보기"], ["scope_escape", "Scope", "승인 범위와 변경 파일 비교하기"], ["incomplete", "Checks", "미실행·확인 불가 검사 보기"]]) {
+    assert.deepEqual(summarizeReceipt(receiptFor(id)).evidenceAction, { panel, label });
+  }
+  for (const reason of ["scope", "recordedStatus"]) {
+    const uncertain = receiptFor("correct");
+    if (reason === "scope") uncertain.scope = { ...uncertain.scope, availability: "unavailable", proceed: null, changed: [], violations: [] };
+    else uncertain.recordedStatus = "unknown";
+    assert.equal(summarizeReceipt(uncertain).result, "UNKNOWN");
+    assert.equal(summarizeReceipt(uncertain).evidenceAction.label, "검사 실행 상태 확인하기");
+  }
+  const renamed = receiptFor("scope_escape"); renamed.scenarioId = "correct";
+  assert.equal(summarizeReceipt(renamed).evidenceAction.panel, "Scope");
 });

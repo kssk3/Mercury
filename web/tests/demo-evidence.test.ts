@@ -57,7 +57,7 @@ test("result summaries explain four recorded outcomes using their observed evide
   const correct = demo.summarizeReceipt(parseDemoReceipt(load("correct")));
   assert.equal(correct.result, "PASS");
   assert.match(correct.conclusion, /검사/);
-  assert.match(correct.evidence.join(" "), /개발 검사 2\/2 통과.*최종 검사 2\/2 통과/);
+  assert.match(correct.evidence.join(" "), /개발 검사: 통과 2개.*최종 검사: 통과 2개/);
   assert.match(correct.nextDecision, /사람.*검토/);
   const regression = demo.summarizeReceipt(parseDemoReceipt(load("regression")));
   assert.equal(regression.result, "FAIL");
@@ -66,11 +66,11 @@ test("result summaries explain four recorded outcomes using their observed evide
   const scope = demo.summarizeReceipt(parseDemoReceipt(load("scope_escape")));
   assert.equal(scope.result, "OUT OF SCOPE");
   assert.match(scope.evidence.join(" "), /shipping\.py/);
-  assert.match(scope.evidence.join(" "), /미실행 4개/);
+  assert.match(scope.evidence.join(" "), /개발 검사: 미실행 2개.*최종 검사: 미실행 2개/);
   assert.match(scope.nextDecision, /별도 승인/);
   const incomplete = demo.summarizeReceipt(parseDemoReceipt(load("incomplete")));
   assert.equal(incomplete.result, "UNKNOWN");
-  assert.match(incomplete.evidence.join(" "), /개발 검사 2\/2 통과.*최종 검사 0\/2 통과.*미실행 2개/);
+  assert.match(incomplete.evidence.join(" "), /개발 검사: 통과 2개.*최종 검사: 미실행 2개/);
   assert.match(incomplete.nextDecision, /최종 검증/);
 });
 

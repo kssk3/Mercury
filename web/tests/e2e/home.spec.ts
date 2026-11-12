@@ -16,8 +16,8 @@ test("visitor compares four recorded outcomes and matching downloadable evidence
     await expect(demo.getByTestId("recorded-status")).toHaveText(status);
     await demo.getByRole("button", { name: "Checks", exact: true }).click();
     if (id === "regression") await expect(demo.getByText("43,000원", { exact: true })).toBeVisible();
-    if (id === "scope_escape") await expect(demo.getByRole("cell", { name: "NOT RUN", exact: true })).toHaveCount(4);
-    if (id === "incomplete") await expect(demo.getByRole("cell", { name: "NOT RUN", exact: true })).toHaveCount(2);
+    if (id === "scope_escape") await expect(demo.getByRole("cell", { name: /^NOT RUN\s*미실행$/ })).toHaveCount(4);
+    if (id === "incomplete") await expect(demo.getByRole("cell", { name: /^NOT RUN\s*미실행$/ })).toHaveCount(2);
     await demo.getByRole("button", { name: "Evidence", exact: true }).click();
     const link = demo.getByRole("link", { name: "공개 실행 근거 JSON 다운로드" });
     await expect(link).toHaveAttribute("href", `${new URL(baseURL!).pathname.replace(/\/$/, "")}/demo/cart/${id}.json`);
@@ -46,7 +46,7 @@ test("scenario conclusion, observed evidence and next decision precede details o
   for (const viewport of [{ width: 1440, height: 1000 }, { width: 375, height: 812 }]) {
     await page.setViewportSize(viewport);
     for (const [label, result, conclusion, evidence, next] of [
-      ["정상 수정", "PASS", "선택한 검사가 수정 결과를 뒷받침합니다.", "최종 검사 2/2 통과", "사람이 검토"],
+      ["정상 수정", "PASS", "선택한 검사가 수정 결과를 뒷받침합니다.", "최종 검사: 통과 2개", "사람이 검토"],
       ["회귀 발생", "FAIL", "수정 후 검사에서 회귀가 발견됐습니다.", "예상 40,000원 → 실제 43,000원", "배송비 정책"],
       ["범위 이탈", "OUT OF SCOPE", "승인한 변경 범위를 벗어났습니다.", "범위·보호 위반: shipping.py", "별도 승인"],
       ["검증 불완전", "UNKNOWN", "아직 완료로 판단할 수 없습니다.", "미실행 2개", "최종 검증"],
@@ -195,4 +195,43 @@ test("shared scenario URLs initialize on direct entry and unknown fragments rema
   await page.reload();
   await expect(summary.getByTestId("evidence-outcome")).toHaveText("PASS");
   await expect(summary).not.toBeFocused();
+});
+
+test("result actions expose matching evidence with keyboard focus and honest check states", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("./");
+  const demo = page.getByRole("region", { name: "클릭형 실행 데모" });
+  const summary = demo.getByRole("region", { name: "선택한 시나리오의 판단" });
+  const output = process.env.MERCURY_SCREENSHOT_DIR ?? "test-results";
+  for (const viewport of [{ width: 1440, height: 1000 }, { width: 375, height: 812 }]) {
+    await page.setViewportSize(viewport);
+    for (const [scenario, action, panel, evidence] of [
+      ["정상 수정", "통과한 검사 보기", "Checks", "PASS"],
+      ["회귀 발생", "실패한 검사 보기", "Checks", "FAIL"],
+      ["범위 이탈", "승인 범위와 변경 파일 비교하기", "Scope", "shipping.py"],
+      ["검증 불완전", "미실행·확인 불가 검사 보기", "Checks", "NOT RUN"],
+    ]) {
+      await demo.getByRole("button", { name: new RegExp(`^${scenario}`) }).click();
+      const actionButton = summary.getByRole("button", { name: action });
+      await actionButton.focus(); await page.keyboard.press("Enter");
+      const target = demo.getByRole("region", { name: `${panel} 근거`, exact: true });
+      await expect(target).toBeFocused();
+      await expect(target).toBeInViewport();
+      await expect(target).toContainText(evidence);
+      await expect(demo.getByRole("button", { name: panel, exact: true })).toHaveAttribute("aria-pressed", "true");
+      if (scenario === "검증 불완전") {
+        await expect(summary).toContainText("최종 검사: 미실행 2개");
+        await expect(summary).not.toContainText("0/2 통과");
+        await expect(target.getByRole("row").filter({ hasText: "최종" })).toHaveCount(2);
+        await expect(target.getByRole("row").filter({ hasText: "최종" }).filter({ hasText: "NOT RUN미실행" })).toHaveCount(2);
+      }
+      // A repeat action must restore the evidence panel after manual exploration.
+      await demo.getByRole("button", { name: "Diff", exact: true }).click();
+      await actionButton.click();
+      await expect(target).toBeFocused();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    }
+    await summary.screenshot({ path: `${output}/${viewport.width === 375 ? "mobile" : "desktop"}-evidence-action.png` });
+    await demo.getByRole("region", { name: "Checks 근거", exact: true }).screenshot({ path: `${output}/${viewport.width === 375 ? "mobile" : "desktop"}-check-states.png` });
+  }
 });
