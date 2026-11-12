@@ -414,7 +414,7 @@ def report(repository: Path, revision: str | None, kind: str = "pass") -> Any:
     from agent_harness.development import DevelopmentVerificationResult
     from agent_harness.evidence import build_evidence_report
     from agent_harness.final import decide_technical_outcome
-    from agent_harness.runner import CommandResult
+    from agent_harness.ports.verification import CommandResult
 
     assert revision is not None
     baseline_result = CommandResult(

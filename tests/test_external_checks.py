@@ -201,8 +201,8 @@ def test_reader_refuses_tampered_or_unsafe_records(
 
 
 def test_executable_drift_records_launch_error_without_running(tmp_path: Path) -> None:
+    from agent_harness.adapters._executables import bind_verification_executables
     from agent_harness.external_checks import collect_external_check
-    from agent_harness.runner import bind_verification_executables
 
     root = repository(tmp_path)
     checker = tmp_path / "checker"
@@ -240,7 +240,7 @@ def test_failure_preserves_intent_and_available_process(
         def interrupt(*args: Any, **kwargs: Any) -> Any:
             raise KeyboardInterrupt
 
-        from agent_harness.runner import ControlledCommandRunner
+        from agent_harness.adapters.verification.local import ControlledCommandRunner
 
         monkeypatch.setattr(ControlledCommandRunner, "run", interrupt)
         exception: type[BaseException] = KeyboardInterrupt
@@ -398,8 +398,8 @@ def test_collector_boundary_rejects_terminal_repository_alias(
     tmp_path: Path, prebound: bool
 ) -> None:
     """Never bind or execute in the alias parent instead of its target."""
+    from agent_harness.adapters._executables import bind_verification_executables
     from agent_harness.external_checks import collect_external_check
-    from agent_harness.runner import bind_verification_executables
 
     tmp_path = tmp_path.resolve()
     parent = repository(tmp_path)

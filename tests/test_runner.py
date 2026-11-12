@@ -11,9 +11,10 @@ from typing import Any
 
 import pytest
 
-import agent_harness.runner as runner_module
+import agent_harness.adapters._executables as executable_module
+import agent_harness.adapters.verification.local as runner_module
+from agent_harness.adapters.verification.local import ControlledCommandRunner
 from agent_harness.policy import VerificationPolicy
-from agent_harness.runner import ControlledCommandRunner
 
 
 @pytest.mark.parametrize("invocation", ["direct", "shebang"])
@@ -48,7 +49,7 @@ def test_node_startup_options_cannot_preload_mutable_hook(
     monkeypatch.setenv("NODE_OPTIONS", f"--require={hook}")
     monkeypatch.setenv("MERCURY_CALLER", "retained")
     policy = VerificationPolicy((command,), ".", 2)
-    selected = runner_module.bind_verification_executables(policy, root)
+    selected = executable_module.bind_verification_executables(policy, root)
     # Invocation must scrub even a value installed after selection.
     monkeypatch.setenv("NODE_OPTIONS", f"--require={hook} --no-warnings")
     result = ControlledCommandRunner().run(policy, root, selections=selected)[0]
@@ -90,7 +91,7 @@ def test_bound_verifier_hardlink_native_mutation_is_refused(
         f"#!{sys.executable}\nfrom pathlib import Path\nPath({str(marker)!r}).touch()\n"
     )
     policy = VerificationPolicy(((str(checker),),), ".", 3)
-    selected = runner_module.bind_verification_executables(policy, root)
+    selected = executable_module.bind_verification_executables(policy, root)
     baseline = ControlledCommandRunner().run(policy, root, selections=selected)[0]
     assert baseline.exit_code == 1
     native = tmp_path / "native"
@@ -547,7 +548,7 @@ def test_runner_drains_continuous_output_until_timeout_and_continues(
     )
     later = (sys.executable, "-c", "print('after noise')")
     policy = VerificationPolicy((command, later), ".", 1)
-    selections = runner_module.bind_verification_executables(policy, tmp_path)
+    selections = executable_module.bind_verification_executables(policy, tmp_path)
     communicate = subprocess.Popen.communicate
     verification_argv = []
     for selection in selections.executables:
@@ -703,7 +704,7 @@ def test_bound_verification_preserves_selection_and_missing_failure(
     monkeypatch.setenv("PATH", str(external) + os.pathsep + os.defpath)
     monkeypatch.setenv("MERCURY_SELECTION", "retained")
     policy = VerificationPolicy((("checker",), ("missing-checker",)), ".", 2)
-    selected = runner_module.bind_verification_executables(policy, root)
+    selected = executable_module.bind_verification_executables(policy, root)
     baseline = ControlledCommandRunner().run(policy, root, selections=selected)
     replacement = tmp_path / "replacement"
     replacement.mkdir()
@@ -739,7 +740,7 @@ def test_bound_selection_preserves_external_virtualenv_invocation(
         "import sys; print(sys.prefix)",
     )
     policy = VerificationPolicy((command,), ".", 5)
-    selected = runner_module.bind_verification_executables(policy, root)
+    selected = executable_module.bind_verification_executables(policy, root)
     monkeypatch.setenv("PATH", os.defpath)
     result = ControlledCommandRunner().run(policy, root, selections=selected)[0]
     assert result.exit_code == 0
@@ -815,7 +816,7 @@ def test_bound_nonregular_selection_stays_typed_launch_failure(
     selected = tmp_path / "external-fifo"
     os.mkfifo(selected)
     policy = VerificationPolicy(((str(selected),),), ".", 2)
-    bindings = runner_module.bind_verification_executables(policy, root)
+    bindings = executable_module.bind_verification_executables(policy, root)
     selected.unlink()
     selected.write_text("#!/bin/sh\nexit 0\n")
     selected.chmod(0o700)
@@ -947,7 +948,7 @@ def test_verification_accepts_external_distinct_identity(
     program.chmod(0o700)
     command = (str(program),)
     policy = VerificationPolicy((command,), ".", 2)
-    bindings = runner_module.bind_verification_executables(policy, root)
+    bindings = executable_module.bind_verification_executables(policy, root)
     result = ControlledCommandRunner().run(policy, root, selections=bindings)[0]
     assert result.exit_code == 0
     assert result.stdout == "external\n"
@@ -973,7 +974,7 @@ def test_indirect_verification_uses_frozen_external_resolvers(
         "PATH", str(root) + os.pathsep + str(external) + os.pathsep + os.defpath
     )
     policy = VerificationPolicy(((str(checker),),), ".", 2)
-    bindings = runner_module.bind_verification_executables(policy, root)
+    bindings = executable_module.bind_verification_executables(policy, root)
     for name in ("generic-runtime", "generic-helper"):
         planted = root / name
         planted.write_text("#!/bin/sh\necho fabricated\n")
@@ -1001,7 +1002,7 @@ def test_child_search_excludes_mutable_entries(
     monkeypatch.setenv("PATH", value)
     command = (sys.executable, "-c", "import os; print(os.environ['PATH'])")
     policy = VerificationPolicy((command,), ".", 2)
-    binding = runner_module.bind_verification_executables(policy, root)
+    binding = executable_module.bind_verification_executables(policy, root)
     result = ControlledCommandRunner().run(policy, root, selections=binding)[0]
     assert result.exit_code == 0
     assert result.stdout.strip() == "/dev/null/mercury-no-search"
@@ -1023,7 +1024,7 @@ def test_rejects_repository_shebang_interpreter(tmp_path: Path, alias: bool) -> 
     checker.write_text(f"#!{interpreter}\nexit 0\n")
     checker.chmod(0o700)
     with pytest.raises(ValueError, match="outside"):
-        runner_module.bind_verification_executables(
+        executable_module.bind_verification_executables(
             VerificationPolicy(((str(checker),),), ".", 2), root
         )
 
@@ -1044,13 +1045,13 @@ def test_loader_resolvers_preserve_safe_caller_values(
         "import os; print(os.environ['PYTHONPATH']); print(os.environ['MERCURY_CALLER'])",
     )
     policy = VerificationPolicy((command,), ".", 2)
-    binding = runner_module.bind_verification_executables(policy, root)
+    binding = executable_module.bind_verification_executables(policy, root)
     monkeypatch.setenv("PYTHONPATH", str(root))
     result = ControlledCommandRunner().run(policy, root, selections=binding)[0]
     assert result.stdout == str(external) + "\nretained\n"
     monkeypatch.setenv("LD_PRELOAD", str(root / "planted-loader"))
     with pytest.raises(ValueError, match="outside"):
-        runner_module.bind_verification_executables(policy, root)
+        executable_module.bind_verification_executables(policy, root)
 
 
 @pytest.mark.parametrize("declaration", ["generic-runtime", "-S generic-runtime -e"])
@@ -1082,12 +1083,12 @@ def test_literal_startup_path_is_frozen(
     monkeypatch.setenv(name, str(startup))
     command = (sys.executable, "-c", f"import os; print(os.environ[{name!r}])")
     policy = VerificationPolicy((command,), ".", 2)
-    binding = runner_module.bind_verification_executables(policy, root)
+    binding = executable_module.bind_verification_executables(policy, root)
     monkeypatch.setenv(name, str(root / "unsafe"))
     result = ControlledCommandRunner().run(policy, root, selections=binding)[0]
     assert result.stdout == str(startup) + "\n"
     with pytest.raises(ValueError, match="outside"):
-        runner_module.bind_verification_executables(policy, root)
+        executable_module.bind_verification_executables(policy, root)
 
 
 @pytest.mark.parametrize("name", ["ENV", "BASH_ENV"])
@@ -1099,7 +1100,7 @@ def test_dynamic_startup_is_refused(
 ) -> None:
     monkeypatch.setenv(name, value)
     with pytest.raises(ValueError, match="ambiguous"):
-        runner_module.bind_verification_executables(
+        executable_module.bind_verification_executables(
             VerificationPolicy(((sys.executable,),), ".", 2), tmp_path
         )
 
@@ -1117,7 +1118,7 @@ def test_interpreter_proof_uses_bounded_descriptor(
         pytest.fail("whole-file read is not a finite streaming proof")
 
     monkeypatch.setattr(Path, "read_bytes", forbidden)
-    binding = runner_module.bind_verification_executables(
+    binding = executable_module.bind_verification_executables(
         VerificationPolicy(((str(checker),),), ".", 2), root
     )
     assert binding.executables[0].launch_error is None
@@ -1181,7 +1182,7 @@ def test_ambiguous_env_split_is_refused(tmp_path: Path, arguments: str) -> None:
     checker.write_text(f"#!/usr/bin/env {arguments}\n")
     checker.chmod(0o700)
     with pytest.raises(ValueError, match="ambiguous"):
-        runner_module.bind_verification_executables(
+        executable_module.bind_verification_executables(
             VerificationPolicy(((str(checker),),), ".", 2), root
         )
 
@@ -1199,7 +1200,7 @@ def test_bash_startup_uses_frozen_literal_path(
     policy = VerificationPolicy(
         (("/bin/bash", "-c", 'printf "%s\\n" "$MERCURY_STARTUP"'),), ".", 2
     )
-    binding = runner_module.bind_verification_executables(policy, root)
+    binding = executable_module.bind_verification_executables(policy, root)
     monkeypatch.setenv("BASH_ENV", str(planted))
     assert (
         ControlledCommandRunner().run(policy, root, selections=binding)[0].stdout
@@ -1226,7 +1227,7 @@ def test_file_proof_bounds_reads_and_detects_change(
 
     monkeypatch.setattr(os, "read", changed)
     with pytest.raises(OSError, match="changed"):
-        runner_module._file_proof(path)
+        executable_module._file_proof(path)
     assert len(sizes) >= 3
 
 
@@ -1244,7 +1245,7 @@ def test_resolver_value_separators(tmp_path: Path, name: str, value: str) -> Non
     separator = " " if name == "LD_PRELOAD" else ":"
     paths = [str(tmp_path / part) for part in value.split(separator)]
     environment = {name: separator.join(paths)}
-    frozen = dict(runner_module._resolver_environment(environment, root, [root]))
+    frozen = dict(executable_module._resolver_environment(environment, root, [root]))
     assert frozen[name] == ":".join(paths)
 
 
@@ -1395,7 +1396,7 @@ def test_metadata_cwd_alias_is_refused_before_external_side_effects(
     if explicit_selection:
         safe = VerificationPolicy((command,), ".", 5)
         selection = replace(
-            runner_module.bind_verification_executables(safe, root),
+            executable_module.bind_verification_executables(safe, root),
             working_directory=str(metadata.resolve()),
         )
     with pytest.raises(ValueError, match="Git metadata"):

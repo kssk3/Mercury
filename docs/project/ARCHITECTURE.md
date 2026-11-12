@@ -68,7 +68,9 @@ is a separate, explicitly authorized Python API. Detailed contracts are in the
 Paths below are existing modules, not proposed services or agent roles. The
 agent port is consumer-owned; task_run.py selects concrete implementations.
 Legacy agent.py, adapter.py and claude_adapter.py imports remain aliases to
-canonical definitions.
+canonical definitions. The working-tree verification boundary similarly keeps
+runner.py as public aliases; this snapshot does not claim that refactor is
+delivered to main.
 
 | Responsibility | Modules | Boundary |
 | --- | --- | --- |
@@ -79,7 +81,7 @@ canonical definitions.
 | Common and native adapter boundaries | [ports/agent.py](../../src/agent_harness/ports/agent.py), [adapters/agents/codex.py](../../src/agent_harness/adapters/agents/codex.py), [adapters/agents/claude.py](../../src/agent_harness/adapters/agents/claude.py), [adapters/agents/_native.py](../../src/agent_harness/adapters/agents/_native.py), [native_output.py](../../src/agent_harness/native_output.py) | Prepare/run a trusted backend, validate process/result facts and retain bounded native output. Task success remains a harness decision. |
 | Bounded observations and source-verified launcher | [diagnostics.py](../../src/agent_harness/diagnostics.py), [verified_runtime.py](../../scripts/verified_runtime.py) | Record observed native milestones without inferring model latency/success; optionally verify a separately prepared frozen source inventory before import. Neither mechanism grants execution authority. |
 | Context and stored text | [context.py](../../src/agent_harness/context.py), [output.py](../../src/agent_harness/output.py) | Select bounded context and apply the caller's output-storage/redaction policy. Raw adapter text can exist before redaction. |
-| Technical verification | [policy.py](../../src/agent_harness/policy.py), [runner.py](../../src/agent_harness/runner.py), [development.py](../../src/agent_harness/development.py), [final.py](../../src/agent_harness/final.py), [evidence.py](../../src/agent_harness/evidence.py) | Bind required commands and trusted programs, collect bounded command results, decide technical outcomes and preserve protected-input failures. |
+| Technical verification | [ports/verification.py](../../src/agent_harness/ports/verification.py), [adapters/verification/local.py](../../src/agent_harness/adapters/verification/local.py), [adapters/_executables.py](../../src/agent_harness/adapters/_executables.py), [composition/verification.py](../../src/agent_harness/composition/verification.py), [policy.py](../../src/agent_harness/policy.py), [runner.py](../../src/agent_harness/runner.py), [development.py](../../src/agent_harness/development.py), [final.py](../../src/agent_harness/final.py), [evidence.py](../../src/agent_harness/evidence.py) | Bind required commands and trusted programs, collect bounded command results, decide technical outcomes and preserve protected-input failures. |
 | Execution, retry and escalation decisions | [execution.py](../../src/agent_harness/execution.py), [retry.py](../../src/agent_harness/retry.py), [escalation.py](../../src/agent_harness/escalation.py) | Represent decisions over admitted execution facts/limits. In particular, execution.py makes pure state transitions; it does not execute or persist work. |
 | Turn and loop composition | [turn.py](../../src/agent_harness/turn.py), [loop.py](../../src/agent_harness/loop.py) | Order snapshots, saved intent, preparation, execution, scope checks, verification, terminal records and supported explicit continuation. |
 | Persistence and checkpoint facts | [state.py](../../src/agent_harness/state.py), [journal.py](../../src/agent_harness/journal.py), [attempt.py](../../src/agent_harness/attempt.py), [verification_checkpoint.py](../../src/agent_harness/verification_checkpoint.py) | Store current/journal/attempt projections and serialize supported checkpoint facts. A checkpoint alone does not authorize continuation. |
@@ -91,6 +93,29 @@ canonical definitions.
 | External check collection and receipt reading | [external_checks.py](../../src/agent_harness/external_checks.py) | The trusted caller explicitly runs one admitted checker into a fresh protected-boundary-checked bundle. A separate reader validates fixed receipt/process/JUnit siblings without executing checks or observing the live target. |
 | Review-result assessment | [review.py](../../src/agent_harness/review.py) | Validate receipt shape and compare caller-established binding/evidence. It performs no I/O, digest production, authentication or reviewer dispatch. |
 | Development schema and package surface | [schema_validation.py](../../src/agent_harness/schema_validation.py), [__init__.py](../../src/agent_harness/__init__.py) | Development-only synthetic status validation and package version/surface; neither establishes delivery or replaces runtime evidence. |
+
+## Verification execution boundary
+
+`ports.verification` owns the execution protocol and unchanged result/proof
+records. `adapters.verification.local.ControlledCommandRunner` selects and runs
+trusted local programs; `adapters._executables` contains proof/path/environment
+checks shared with native agent adapters. Selecting a program and validating it
+again before launch remain separate steps. These checks are not an OS sandbox.
+
+The loop binds at its existing pre-agent point and passes the same selection to
+per-command baseline, development and final execution. Its scope observations,
+retry/command budgets, persistence and technical decisions remain application
+responsibilities. Verification-only continuation keeps its existing re-entry
+rules and does not invoke agent preparation or execution. External receipt
+collection still saves intent before launch and keeps its 65536-byte output cap.
+
+Public loop/development/external-check entry points accept an optional trusted
+executor. Their default composition calls, and task_run.py's explicit assembly,
+are transitional composition boundaries; those modules are not wholly pure.
+The internal `_run_loop` receives its executor explicitly. Old runner imports
+alias canonical objects, while private monkeypatch paths follow definition
+owners. Arbitrary dynamic imports and class introspection/pickle identity strings
+are outside the static dependency and public import compatibility contract.
 
 ## Execution ordering and invariants
 

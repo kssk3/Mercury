@@ -22,7 +22,7 @@ from agent_harness.integrity import (
     ProtectedDirectoryFingerprint,
     ProtectedInputFingerprint,
 )
-from agent_harness.runner import CommandResult
+from agent_harness.ports.verification import CommandResult
 from agent_harness.scope import _digest
 
 

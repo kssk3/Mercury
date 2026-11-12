@@ -8,7 +8,7 @@ import pytest
 
 
 def test_checkpoint_results_restore_positionally_without_persisting_secrets() -> None:
-    from agent_harness.runner import CommandResult
+    from agent_harness.ports.verification import CommandResult
     from agent_harness.verification_checkpoint import restore_results, safe_results
 
     command = ("checker", "private-argv-canary")
@@ -30,7 +30,7 @@ def test_checkpoint_results_restore_positionally_without_persisting_secrets() ->
 def test_checkpoint_rejects_unproven_launch_and_conflicting_timeout() -> None:
     import pytest
 
-    from agent_harness.runner import CommandResult
+    from agent_harness.ports.verification import CommandResult
     from agent_harness.verification_checkpoint import restore_results, safe_results
 
     command = ("checker",)
@@ -67,7 +67,7 @@ def test_restoration_rejects_changed_order_extra_fields_and_invalid_duration() -
 
     import pytest
 
-    from agent_harness.runner import CommandResult
+    from agent_harness.ports.verification import CommandResult
     from agent_harness.verification_checkpoint import restore_results, safe_results
 
     commands = (("first",), ("second",))

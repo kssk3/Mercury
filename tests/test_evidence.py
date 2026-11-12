@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_harness.adapters.verification.local import ControlledCommandRunner
 from agent_harness.baseline import VerificationBaseline
 from agent_harness.development import DevelopmentVerificationResult
 from agent_harness.evidence import EvidenceReport, build_evidence_report
@@ -23,7 +24,7 @@ from agent_harness.integrity import (
     verify_protected_inputs,
 )
 from agent_harness.policy import VerificationPolicy
-from agent_harness.runner import CommandResult, ControlledCommandRunner
+from agent_harness.ports.verification import CommandResult
 
 
 def result(command: tuple[str, ...], exit_code: int) -> CommandResult:

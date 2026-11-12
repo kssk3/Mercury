@@ -29,8 +29,8 @@ from agent_harness.lock import RepositoryLock
 from agent_harness.loop import run_loop
 from agent_harness.policy import VerificationPolicy
 from agent_harness.ports.agent import AgentTurnResult, TurnBudgets
+from agent_harness.ports.verification import CommandResult
 from agent_harness.retry import RetryLimits
-from agent_harness.runner import CommandResult
 from agent_harness.state import CurrentStateStore
 
 BUG = "def discount(price, percent):\n    return price * (1 - percent / 50)\n"
