@@ -51,6 +51,16 @@ export function summarizeReceipt(receipt: DemoReceipt): { result: TechnicalResul
   return { result, evidence, conclusion: "아직 완료로 판단할 수 없습니다.", nextDecision: "미실행·확인 불가 근거와 중단 상태를 검토하고, 승인된 절차에 따라 최종 검증 근거를 확인하세요." };
 }
 
+export function scenarioFromHash(hash: string): ScenarioId | null {
+  switch (hash) {
+    case "#demo-correct": return "correct";
+    case "#demo-regression": return "regression";
+    case "#demo-scope-escape": return "scope_escape";
+    case "#demo-incomplete": return "incomplete";
+    default: return null;
+  }
+}
+
 export interface DemoState {
   scenario: ScenarioId;
   step: number;

@@ -316,3 +316,34 @@ h2 { font-size: 35px; font-weight: 800; }
   .cart-journey p { flex: 1; min-width: 0; }
   .case-results { grid-template-columns: 1fr; }
 }
+/* Usage situations lead directly to recorded scenario summaries. */
+.hero-context { margin-top: 16px; color: var(--muted); font-size: 15px; line-height: 1.85; }
+.situations-section { padding-block: 64px; background: var(--page); border-block: 1px solid var(--line); }
+.situations-grid, .tools-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 28px; }
+.situation { display: flex; flex-direction: column; min-width: 0; }
+.situation-number { color: var(--primary); font-size: 12px; font-weight: 700; margin-bottom: 12px; }
+.situation h3, .tool-relationship h3 { font-size: 20px; line-height: 1.55; }
+.situation p { color: var(--muted); font-size: 14px; line-height: 1.85; }
+.situation .situation-question { margin-block: 16px 12px; color: var(--ink); }
+.situation .text-link { margin-top: auto; padding-top: 18px; color: var(--primary); }
+.tools-section { padding-top: 72px; }
+.tool-relationship { border-top: 2px solid var(--line); padding-top: 20px; min-width: 0; }
+.tool-relationship p { font-size: 14px; color: var(--muted); line-height: 1.85; margin-top: 18px; }
+.tool-relationship p span { display: block; font-size: 11px; color: var(--ink); font-weight: 700; margin-bottom: 5px; }
+.fit-note { border-left: 3px solid var(--line); padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.85; margin-top: 30px; max-width: 850px; }
+.application-grid { grid-template-columns: repeat(4,minmax(0,1fr)); gap: 24px; }
+.application-grid h3 { font-size: 18px; }
+.start-secondary { display: flex; width: fit-content; font-weight: 500; }
+.cart-verdict:focus { outline: 3px solid var(--primary); outline-offset: 4px; }
+@media (max-width: 1000px) { .application-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 720px) {
+  .hero-context { font-size: 14px; }
+  .situations-section { padding-block: 48px; }
+  .situations-grid, .tools-grid, .application-grid { grid-template-columns: 1fr; gap: 28px; }
+  .situation + .situation { border-top: 1px solid var(--line); padding-top: 26px; }
+  .situation h3, .tool-relationship h3 { font-size: 19px; }
+  .situation p, .tool-relationship p { font-size: 14px; }
+  .situation .text-link { padding-top: 12px; }
+  .tools-section { padding-top: 52px; }
+  .fit-note { font-size: 12px; }
+}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createDemoStore, getVisibleResult } from "../src/lib/demo";
+import { createDemoStore, getVisibleResult, scenarioFromHash } from "../src/lib/demo";
 
 // These tests catch out-of-bounds navigation, stale result leakage, and shared instances.
 test("starts at the first step with no premature technical result", () => {
@@ -49,4 +49,15 @@ test("each demo has an independent initial state", () => {
   first.getState().next();
   assert.equal(second.getState().scenario, "correct");
   assert.equal(second.getState().step, 0);
+});
+
+// Contract: shared fragment links select only explicit demo scenarios.
+test("scenario fragments are allowlisted and leave ordinary anchors alone", () => {
+  assert.equal(typeof scenarioFromHash, "function");
+  for (const [hash, scenario] of [["#demo-correct", "correct"], ["#demo-regression", "regression"], ["#demo-scope-escape", "scope_escape"], ["#demo-incomplete", "incomplete"]]) {
+    assert.equal(scenarioFromHash(hash), scenario);
+  }
+  for (const hash of ["", "#demo", "#how-it-works", "#demo-unknown", "#demo-__proto__", "#demo-%72egression"]) {
+    assert.equal(scenarioFromHash(hash), null);
+  }
 });

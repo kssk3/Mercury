@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { ArrowLeft, ArrowRight, Check, FileText, FlaskConical, RotateCcw } from "lucide-react";
-import { checkLabel, createDemoStore, receiptOutcome, scenarios, steps, summarizeReceipt, type ScenarioId } from "@/lib/demo";
+import { checkLabel, createDemoStore, receiptOutcome, scenarioFromHash, scenarios, steps, summarizeReceipt, type ScenarioId } from "@/lib/demo";
 import type { DemoReceipt } from "@/lib/demo-evidence";
 
 const panels = ["Diff", "Checks", "Scope", "Evidence"] as const;
@@ -19,6 +19,39 @@ const phaseNames = { baseline: "기준선", development: "개발", final: "최�
 export function Demo({ receipts }: { receipts: Record<ScenarioId, DemoReceipt> }) {
   const [store] = useState(createDemoStore);
   const state = useStore(store);
+  const summaryRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    let frame = 0;
+    const showScenario = (hash: string) => {
+      const selected = scenarioFromHash(hash);
+      if (!selected) return;
+      store.getState().selectScenario(selected);
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        summaryRef.current?.focus({ preventScroll: true });
+        summaryRef.current?.scrollIntoView({ block: "start" });
+      });
+    };
+    const onHashChange = () => showScenario(window.location.hash);
+    const onLink = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const anchor = event.target instanceof Element ? event.target.closest("a[href]") : null;
+      if (!(anchor instanceof HTMLAnchorElement) || anchor.target && anchor.target !== "_self" || anchor.hasAttribute("download")) return;
+      const destination = new URL(anchor.href);
+      if (destination.origin !== window.location.origin || destination.pathname !== window.location.pathname || destination.search !== window.location.search || !scenarioFromHash(destination.hash)) return;
+      event.preventDefault();
+      if (window.location.hash !== destination.hash) window.location.hash = destination.hash;
+      else showScenario(destination.hash);
+    };
+    onHashChange();
+    window.addEventListener("hashchange", onHashChange);
+    document.addEventListener("click", onLink);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("hashchange", onHashChange);
+      document.removeEventListener("click", onLink);
+    };
+  }, [store]);
   const [panel, setPanel] = useState<typeof panels[number]>("Diff");
   const scenario = scenarios[state.scenario];
   const receipt = receipts[state.scenario];
@@ -31,7 +64,7 @@ export function Demo({ receipts }: { receipts: Record<ScenarioId, DemoReceipt> }
     <div className="demo-notice"><span className="notice-dot" /><p><strong>Mercury 실제 실행 · 수정은 시뮬레이션</strong><span> 저장된 실행 기록을 탐색합니다. 브라우저에서 명령이나 AI를 실행하지 않습니다.</span></p></div>
     <div className="cart-task"><div><span className="workspace-label">작업 요청</span><h3>쿠폰이 상품 금액보다 커도 결제 금액이 음수가 되지 않게 수정해주세요.</h3><p>할인 전 합계 50,000원 이상 무료 배송, 그 외 3,000원. 배송비 정책은 그대로 유지합니다.</p></div><dl><div><dt>수정 허용</dt><dd><code>cart.py</code></dd></div><div><dt>보호 대상</dt><dd><code>shipping.py</code> · 두 검사 파일</dd></div><div><dt>핵심 기대값</dt><dd>10,000 − 15,000 + 배송비 → <strong>3,000원</strong><br />60,000 − 20,000 + 무료 배송 → <strong>40,000원</strong></dd></div></dl></div>
     <div className="cart-scenarios" role="group" aria-label="데모 시나리오">{(Object.keys(scenarios) as ScenarioId[]).map(id => <button key={id} aria-pressed={state.scenario === id} onClick={() => state.selectScenario(id)}><strong>{scenarios[id].label}</strong><span>{scenarios[id].summary}</span><code>{receiptOutcome(receipts[id])}</code></button>)}</div>
-    <section className="cart-verdict" aria-label="선택한 시나리오의 판단" aria-live="polite">
+    <section ref={summaryRef} tabIndex={-1} className="cart-verdict" aria-label="선택한 시나리오의 판단" aria-live="polite">
       <div className="verdict-heading"><span className="workspace-label">{scenario.label} · 결과 요약</span><strong className="cart-outcome" data-testid="evidence-outcome">{result}</strong></div>
       <div className="verdict-grid">
         <div><span className="verdict-label">결론</span><h3>{summary.conclusion}</h3></div>
