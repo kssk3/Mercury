@@ -127,3 +127,24 @@ The dependent `deploy` job publishes that exact checked artifact using the
 upload or deploy. Actions are pinned to full release commits. Repository Pages
 must use GitHub Actions as its publishing source; settings activation and actual
 live deployment are integration steps, not guaranteed by a local build.
+
+## Recorded cart evidence
+
+The four JSON files in `public/demo/cart/` are public projections of actual
+Mercury runs using deterministic simulated edits. They do not show native AI
+performance. The server-only receipt loader validates schema and snapshot
+hashes during static generation; the client receives parsed data without Node
+APIs. Downloads serve the same JSON files that the UI imports.
+
+See [the offline recipe](../docs/quickstart.md#recorded-cart-scenarios) for
+reproduction and explicit public export. Private state and command output stay
+outside the repository. Fixture and candidate hashes use compact UTF-8 JSON
+arrays of `[path, content]`, sorted by the fixed ASCII paths, with literal
+Unicode and no trailing newline. The shared Python/Node golden vector is
+`[["a.py","한글\\n"]]` for content containing one newline, with SHA-256
+`5b61a6f73dd261cea2b459c9cf15e668c186303829a36dae531dca63845f682a`.
+
+`MERCURY_BASE_PATH=/Mercury` binds both Next's exported asset paths and the
+client's public receipt links. No backend or runtime model call is required.
+Technical PASS, historical source identity, content consistency and review
+approval remain separate claims.

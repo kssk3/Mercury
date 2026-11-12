@@ -6,7 +6,7 @@ import { createDemoStore, getVisibleResult } from "../src/lib/demo";
 test("starts at the first step with no premature technical result", () => {
   const store = createDemoStore();
   assert.equal(store.getState().step, 0);
-  assert.equal(store.getState().scenario, "success");
+  assert.equal(store.getState().scenario, "correct");
   assert.equal(getVisibleResult(store.getState()), null);
 });
 test("previous and next stop at the first and fifth steps", () => {
@@ -20,7 +20,7 @@ test("previous and next stop at the first and fifth steps", () => {
 test("changing scenario resets progress and hides a previous success", () => {
   const store = createDemoStore();
   for (let i = 0; i < 4; i++) store.getState().next();
-  store.getState().selectScenario("failure");
+  store.getState().selectScenario("regression");
   assert.equal(store.getState().step, 0);
   assert.equal(getVisibleResult(store.getState()), null);
   for (let i = 0; i < 4; i++) store.getState().next();
@@ -28,7 +28,7 @@ test("changing scenario resets progress and hides a previous success", () => {
 });
 test("missing terminal evidence stays unknown rather than becoming success", () => {
   const store = createDemoStore();
-  store.getState().selectScenario("unknown");
+  store.getState().selectScenario("incomplete");
   for (let i = 0; i < 4; i++) store.getState().next();
   assert.equal(getVisibleResult(store.getState()), "UNKNOWN");
   store.getState().previous();
@@ -36,17 +36,17 @@ test("missing terminal evidence stays unknown rather than becoming success", () 
 });
 test("reset retains the chosen scenario but returns to the beginning", () => {
   const store = createDemoStore();
-  store.getState().selectScenario("failure");
+  store.getState().selectScenario("regression");
   store.getState().next();
   store.getState().reset();
-  assert.equal(store.getState().scenario, "failure");
+  assert.equal(store.getState().scenario, "regression");
   assert.equal(store.getState().step, 0);
 });
 test("each demo has an independent initial state", () => {
   const first = createDemoStore();
   const second = createDemoStore();
-  first.getState().selectScenario("unknown");
+  first.getState().selectScenario("incomplete");
   first.getState().next();
-  assert.equal(second.getState().scenario, "success");
+  assert.equal(second.getState().scenario, "correct");
   assert.equal(second.getState().step, 0);
 });

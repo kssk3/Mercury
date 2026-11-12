@@ -1,25 +1,14 @@
 import { createStore } from "zustand/vanilla";
 
-export type ScenarioId = "success" | "failure" | "unknown";
-export type TechnicalResult = "PASS" | "FAIL" | "UNKNOWN";
+import type { ScenarioId } from "./demo-evidence";
+export type { ScenarioId } from "./demo-evidence";
+export type TechnicalResult = "PASS" | "FAIL" | "UNKNOWN" | "OUT OF SCOPE";
 export const steps = ["작업과 범위", "에이전트 변경", "변경 범위 관찰", "선택한 검사", "근거 확인"] as const;
-
-export const scenarios: Record<ScenarioId, { label: string; summary: string; result: TechnicalResult; value: string; check: string; conclusion: string }> = {
-  success: {
-    label: "검사 통과", summary: "선택한 검사가 모두 통과한 경우", result: "PASS", value: "after",
-    check: "개발 검사: exit 0\n별도 최종 검사: exit 0\n보호된 check.py: 변경 없음",
-    conclusion: "허용된 파일의 변경과 선택한 검사의 통과 근거가 있습니다. 이 근거를 바탕으로 사람이 변경 내용을 검토합니다.",
-  },
-  failure: {
-    label: "검사 실패", summary: "변경은 있었지만 검사에서 실패한 경우", result: "FAIL", value: "aftr",
-    check: "개발 검사: exit 1\nexpected 'after', got 'aftr'\n완료 기준: 충족하지 못함",
-    conclusion: "에이전트가 작업을 마쳤다고 해도 선택한 검사에 실패하면 기술 결과는 실패입니다. 실패 근거를 확인하고 수정 여부를 결정합니다.",
-  },
-  unknown: {
-    label: "확인 불가", summary: "최종 검사 근거가 완전하지 않은 경우", result: "UNKNOWN", value: "after",
-    check: "개발 검사: exit 0\n별도 최종 검사: 종료 근거 없음\n관측 기록: 불완전",
-    conclusion: "개발 검사가 통과했어도 최종 검사의 종료 근거가 없으면 성공으로 판단하지 않습니다. 불완전한 근거는 확인 불가로 남깁니다.",
-  },
+export const scenarios: Record<ScenarioId, { label: string; summary: string; result: TechnicalResult; conclusion: string }> = {
+  correct: { label: "정상 수정", summary: "할인과 배송비 검사 통과", result: "PASS", conclusion: "요구한 할인 수정과 기존 배송비 동작을 검사가 뒷받침합니다. 변경 내용과 검사 충분성은 사람이 검토합니다." },
+  regression: { label: "회귀 발생", summary: "음수는 고쳤지만 배송비가 3,000원 늘어남", result: "FAIL", conclusion: "할인 검사는 통과했지만 기존 배송비 검사가 실패했습니다. Mercury는 재시도 없이 사람의 판단을 요청한 상태입니다." },
+  scope_escape: { label: "범위 이탈", summary: "승인하지 않은 배송비 정책 변경", result: "OUT OF SCOPE", conclusion: "보호 대상 shipping.py 변경을 관찰하여 개발·최종 검사를 진행하지 않았습니다. 정책 변경은 별도 승인이 필요합니다." },
+  incomplete: { label: "검증 불완전", summary: "개발 검사 이후 최종 검증 직전 중단", result: "UNKNOWN", conclusion: "개발 검사가 통과했어도 최종 검사는 실행되지 않았습니다. 중단된 실행을 완료로 판단할 수 없습니다." },
 };
 
 export interface DemoState {
@@ -32,7 +21,7 @@ export interface DemoState {
 }
 
 export const createDemoStore = () => createStore<DemoState>((set) => ({
-  scenario: "success",
+  scenario: "correct",
   step: 0,
   next: () => set((state) => ({ step: Math.min(state.step + 1, steps.length - 1) })),
   previous: () => set((state) => ({ step: Math.max(state.step - 1, 0) })),

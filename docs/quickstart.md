@@ -498,3 +498,60 @@ changed inputs return exit 1 and one JSON line with `recorded_status: "unknown"`
 Argument syntax errors, including missing `--state-dir`, retain argparse exit 2.
 A recorded pass does not verify the current workspace, prove output authenticity,
 obtain approval, permit a rerun, or authorize merge.
+
+## Recorded cart scenarios
+
+The optional cart fixture fixes a coupon that makes merchandise negative while
+preserving shipping based on the original subtotal. Only `cart.py` is allowed to
+change; `shipping.py` and the two checkers are protected. Inputs are nonnegative
+integer won. Tax, refunds and coupon stacking are outside this fixed example.
+The original value-file example remains the default.
+
+Create an existing private evidence parent outside the source repository, then
+select one scenario explicitly:
+
+```sh
+mkdir -m 700 /tmp/mercury-cart-private
+.venv/bin/python examples/quickstart.py --approve-demo --fixture cart --scenario correct --evidence-parent /tmp/mercury-cart-private
+```
+
+The other choices are `regression`, `scope_escape` and `incomplete`. These are
+deterministic simulated edits, not native model calls. Mercury itself observes
+the disposable repository, runs the real protected Python checkers and records
+its actual outcome. The incomplete case interrupts before final checker
+execution using the saved final-phase intent. A nonzero example exit is expected
+for all three unsuccessful scenarios; do not retry them until they appear green.
+Regression has a technical FAIL but can terminate as `human/retry_budget`.
+The scope violation can terminate as `human/unsafe_failure`. These raw states
+are not replaced with simplified website labels.
+
+Each run prints its fresh private evidence directory. `capture.json` contains
+fixture snapshots and explicit executor facts; `executor.jsonl` retains actual
+command output; `state/` retains Mercury records. Handled failure or interruption
+retains these files. The owned fixture repository is removed on exit. Keep raw
+records private: they contain local paths and are not a publication format.
+Point-in-time path validation and cooperative locks are not an OS sandbox.
+
+Export public evidence as a separate operation, replacing the input placeholder
+with the actual printed directory and choosing a fresh output file:
+
+```sh
+.venv/bin/python examples/cart_receipt.py --private-run /tmp/mercury-cart-private/cart-RUN_ID --output-file /tmp/cart-correct.json
+```
+
+The exporter accepts only this fixed fixture, rejects unknown capture fields,
+nonfixture payloads, overwrite and private-state overlap, and permits source-tree
+output only inside `web/public/demo/cart/`. It uses the existing historical
+reader for status and scope; invalid projections cannot promote captured checks
+to verified results. Public receipts omit raw journal, transcripts, absolute
+paths and environment. Snapshot digests prove content consistency, not
+execution authenticity. The recorded core SHA identifies the unchanged Git
+baseline; the example code can be uncommitted. No configuration binding, review
+approval or merge permission is implied.
+
+The checked-in website receipts come from four separate local Mercury runs.
+Regeneration is deliberate: generate each scenario once, export into a fresh
+file, inspect it, then replace the corresponding public snapshot. Builds and CI
+consume those files without executing an agent. The separate
+[native Codex example](codex-quickstart.md) uses a different percentage-discount
+task and its receipt is not evidence for this cart fixture.
