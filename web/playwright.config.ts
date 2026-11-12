@@ -7,13 +7,13 @@ export default defineConfig({
   timeout: 20000,
   reporter: "list",
   use: {
-    baseURL: "http://127.0.0.1:4173",
+    baseURL: `http://127.0.0.1:4173${process.env.MERCURY_BASE_PATH ?? ""}/`,
     headless: true,
     launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : {},
   },
   webServer: {
     command: "node tests/serve.mjs",
-    url: "http://127.0.0.1:4173",
+    url: `http://127.0.0.1:4173${process.env.MERCURY_BASE_PATH ?? ""}/`,
     reuseExistingServer: false,
     timeout: 10000,
   },

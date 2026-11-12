@@ -27,9 +27,9 @@ npm run build
 
 The build exports static assets to `out/`; serve that directory with a static
 web server. `next start` is not used with static export. The default output
-assumes deployment at the domain root. Configure and verify asset paths before
-hosting beneath a URL subdirectory. Deployment and backend integration are
-separate work.
+uses the domain root for local development. `MERCURY_BASE_PATH` is a build-time
+setting; use the same value for the build and browser tests when serving a
+subdirectory. Backend integration remains separate work.
 
 For browser acceptance, first build, then install Playwright's Chromium once:
 
@@ -99,3 +99,31 @@ TypeScript diagnostic fixture. These checks exercise the configured tools,
 including Hooks/dependencies, keys, alt/ARIA, Next scripts, explicit `any`,
 children props, comment text and unsafe HTML. They do not constitute a complete
 accessibility audit or make every rule in the two plugins semantically equal.
+
+## Web CI and GitHub Pages
+
+`.github/workflows/web.yml` runs on pull requests to main, pushes to main and
+manual dispatch. Its read-only `web-checks` job uses Node 24 and the npm lockfile,
+runs lint, typecheck, unit/lint fixtures, static build and Chromium acceptance.
+The existing Python CI and review-approval workflow remain separate gates.
+
+The Pages project site is configured for <https://kssk3.github.io/Mercury/>.
+CI builds with `MERCURY_BASE_PATH=/Mercury` and tests that same mount, including
+its script/style URLs and hydrated demo. To reproduce locally from `web/`:
+
+```sh
+MERCURY_BASE_PATH=/Mercury npm run build
+MERCURY_BASE_PATH=/Mercury npm run test:e2e
+```
+
+Ordinary `npm run dev` and builds without this environment variable keep the
+root path. Browser tests start their own loopback static server and require an
+already installed Playwright Chromium as described above. Changing the base
+path requires rebuilding; it is not a runtime switch on an existing export.
+
+Only successful main push/manual runs upload `web/out` as the Pages artifact.
+The dependent `deploy` job publishes that exact checked artifact using the
+`github-pages` environment and job-scoped Pages/OIDC permissions. PR runs do not
+upload or deploy. Actions are pinned to full release commits. Repository Pages
+must use GitHub Actions as its publishing source; settings activation and actual
+live deployment are integration steps, not guaranteed by a local build.
