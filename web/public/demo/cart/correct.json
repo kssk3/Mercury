@@ -1,0 +1,221 @@
+{
+  "schemaVersion": 1,
+  "scenarioId": "correct",
+  "sourceMode": "recorded_simulated",
+  "runId": "cart-r0lfmk3b",
+  "capturedAt": "2026-11-12T05:22:10.208604+00:00",
+  "mercuryRevision": "0416e606a5b5f62b7b2d70d5f57d00df8442c7d4",
+  "fixtureSha256": "d8d56e073f3bf0e10a530687898fe93753f01ca71af91bac2fc54cdc1bc9708b",
+  "candidateSha256": "d7d823f3a50a850d7fea1e10644fff59fb6ef100978ab29f412f581f0a2caf70",
+  "recordedStatus": "pass",
+  "recordedReason": "final_verification",
+  "diagnostics": [],
+  "checks": [
+    {
+      "phase": "baseline",
+      "commandId": "discount",
+      "exitCode": 1,
+      "timedOut": false,
+      "cases": [
+        {
+          "actual": 18000,
+          "coupon": 5000,
+          "expected": 18000,
+          "subtotal": 20000
+        },
+        {
+          "actual": -2000,
+          "coupon": 15000,
+          "expected": 3000,
+          "subtotal": 10000
+        }
+      ],
+      "availability": "observed"
+    },
+    {
+      "phase": "baseline",
+      "commandId": "shipping",
+      "exitCode": 0,
+      "timedOut": false,
+      "cases": [
+        {
+          "actual": 50000,
+          "coupon": 0,
+          "expected": 50000,
+          "subtotal": 50000
+        },
+        {
+          "actual": 40000,
+          "coupon": 20000,
+          "expected": 40000,
+          "subtotal": 60000
+        },
+        {
+          "actual": 48000,
+          "coupon": 0,
+          "expected": 48000,
+          "subtotal": 45000
+        }
+      ],
+      "availability": "observed"
+    },
+    {
+      "phase": "development",
+      "commandId": "discount",
+      "exitCode": 0,
+      "timedOut": false,
+      "cases": [
+        {
+          "actual": 18000,
+          "coupon": 5000,
+          "expected": 18000,
+          "subtotal": 20000
+        },
+        {
+          "actual": 3000,
+          "coupon": 15000,
+          "expected": 3000,
+          "subtotal": 10000
+        }
+      ],
+      "availability": "observed"
+    },
+    {
+      "phase": "development",
+      "commandId": "shipping",
+      "exitCode": 0,
+      "timedOut": false,
+      "cases": [
+        {
+          "actual": 50000,
+          "coupon": 0,
+          "expected": 50000,
+          "subtotal": 50000
+        },
+        {
+          "actual": 40000,
+          "coupon": 20000,
+          "expected": 40000,
+          "subtotal": 60000
+        },
+        {
+          "actual": 48000,
+          "coupon": 0,
+          "expected": 48000,
+          "subtotal": 45000
+        }
+      ],
+      "availability": "observed"
+    },
+    {
+      "phase": "final",
+      "commandId": "discount",
+      "exitCode": 0,
+      "timedOut": false,
+      "cases": [
+        {
+          "actual": 18000,
+          "coupon": 5000,
+          "expected": 18000,
+          "subtotal": 20000
+        },
+        {
+          "actual": 3000,
+          "coupon": 15000,
+          "expected": 3000,
+          "subtotal": 10000
+        }
+      ],
+      "availability": "observed"
+    },
+    {
+      "phase": "final",
+      "commandId": "shipping",
+      "exitCode": 0,
+      "timedOut": false,
+      "cases": [
+        {
+          "actual": 50000,
+          "coupon": 0,
+          "expected": 50000,
+          "subtotal": 50000
+        },
+        {
+          "actual": 40000,
+          "coupon": 20000,
+          "expected": 40000,
+          "subtotal": 60000
+        },
+        {
+          "actual": 48000,
+          "coupon": 0,
+          "expected": 48000,
+          "subtotal": 45000
+        }
+      ],
+      "availability": "observed"
+    }
+  ],
+  "scope": {
+    "availability": "observed",
+    "allowed": [
+      "cart.py"
+    ],
+    "protected": [
+      "shipping.py",
+      "check_discount.py",
+      "check_shipping.py"
+    ],
+    "changed": [
+      "cart.py"
+    ],
+    "violations": [],
+    "proceed": true
+  },
+  "diff": {
+    "beforeFiles": [
+      {
+        "path": "cart.py",
+        "content": "from shipping import shipping_fee\n\ndef total(subtotal, coupon):\n    merchandise = subtotal - coupon\n    return merchandise + shipping_fee(subtotal)\n"
+      },
+      {
+        "path": "check_discount.py",
+        "content": "import json\nfrom cart import total\ncases = ((20000, 5000, 18000), (10000, 15000, 3000))\nrows = [dict(subtotal=s, coupon=c, expected=e, actual=total(s, c)) for s,c,e in cases]\nprint(json.dumps(rows, sort_keys=True))\nraise SystemExit(0 if all(r['actual'] == r['expected'] for r in rows) else 1)\n"
+      },
+      {
+        "path": "check_shipping.py",
+        "content": "import json\nfrom cart import total\ncases = ((50000, 0, 50000), (60000, 20000, 40000), (45000, 0, 48000))\nrows = [dict(subtotal=s, coupon=c, expected=e, actual=total(s, c)) for s,c,e in cases]\nprint(json.dumps(rows, sort_keys=True))\nraise SystemExit(0 if all(r['actual'] == r['expected'] for r in rows) else 1)\n"
+      },
+      {
+        "path": "shipping.py",
+        "content": "def shipping_fee(subtotal):\n    return 0 if subtotal >= 50000 else 3000\n"
+      }
+    ],
+    "afterFiles": [
+      {
+        "path": "cart.py",
+        "content": "from shipping import shipping_fee\n\ndef total(subtotal, coupon):\n    merchandise = max(0, subtotal - coupon)\n    return merchandise + shipping_fee(subtotal)\n"
+      },
+      {
+        "path": "check_discount.py",
+        "content": "import json\nfrom cart import total\ncases = ((20000, 5000, 18000), (10000, 15000, 3000))\nrows = [dict(subtotal=s, coupon=c, expected=e, actual=total(s, c)) for s,c,e in cases]\nprint(json.dumps(rows, sort_keys=True))\nraise SystemExit(0 if all(r['actual'] == r['expected'] for r in rows) else 1)\n"
+      },
+      {
+        "path": "check_shipping.py",
+        "content": "import json\nfrom cart import total\ncases = ((50000, 0, 50000), (60000, 20000, 40000), (45000, 0, 48000))\nrows = [dict(subtotal=s, coupon=c, expected=e, actual=total(s, c)) for s,c,e in cases]\nprint(json.dumps(rows, sort_keys=True))\nraise SystemExit(0 if all(r['actual'] == r['expected'] for r in rows) else 1)\n"
+      },
+      {
+        "path": "shipping.py",
+        "content": "def shipping_fee(subtotal):\n    return 0 if subtotal >= 50000 else 3000\n"
+      }
+    ]
+  },
+  "limitations": [
+    "Historical recorded Mercury execution with deterministic simulated edits; no native model was invoked.",
+    "mercuryRevision identifies the unchanged core Git base; example code may be uncommitted.",
+    "Scope observation is not an OS sandbox. Technical results do not grant review or merge approval.",
+    "Checker cases are captured executor facts; scope and terminal status are historical Mercury projections.",
+    "No execution-configuration binding or independent product review approval is supplied by this receipt.",
+    "Snapshot hashes establish content consistency, not authenticity or current-workspace verification."
+  ]
+}

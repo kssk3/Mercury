@@ -2,55 +2,57 @@
 
 import { useState } from "react";
 import { useStore } from "zustand";
-import { ArrowLeft, ArrowRight, Check, FileText, FlaskConical, RotateCcw, ShieldCheck, Terminal, CircleHelp, X } from "lucide-react";
-import { createDemoStore, getVisibleResult, scenarios, steps, type ScenarioId } from "@/lib/demo";
+import { ArrowLeft, ArrowRight, Check, FileText, FlaskConical, RotateCcw } from "lucide-react";
+import { createDemoStore, scenarios, steps, type ScenarioId } from "@/lib/demo";
+import type { DemoCheck, DemoReceipt } from "@/lib/demo-evidence";
 
-const stepDescriptions = [
-  "사람이 작업, 허용 파일, 보호할 검사와 완료 기준을 먼저 정합니다.",
-  "선택한 에이전트가 코드를 바꿉니다. 변경했다는 사실만으로 완료가 되지는 않습니다.",
-  "Mercury는 실제 바뀐 경로와 보호 입력을 관찰합니다. 관찰은 운영체제 샌드박스를 뜻하지 않습니다.",
-  "사람이 선택한 명령의 관측 결과를 모읍니다. 검사의 의미와 충분성은 사람이 결정합니다.",
-  "변경 범위와 검사 근거를 함께 읽습니다. 기술 결과는 리뷰 승인이나 머지 승인이 아닙니다.",
+const panels = ["Diff", "Checks", "Scope", "Evidence"] as const;
+const descriptions = [
+  "음수 할인 금액을 고치되, 할인 전 합계로 배송비를 정하는 기존 정책은 유지합니다.",
+  "정해진 후보 변경을 시뮬레이션으로 적용했습니다. 실제 AI 모델은 호출하지 않았습니다.",
+  "Mercury가 허용 경로와 보호 입력의 변경을 관찰했습니다. OS 샌드박스나 자동 롤백은 아닙니다.",
+  "보호된 두 검사 명령의 실제 관측 결과입니다. 실행되지 않은 단계는 NOT RUN으로 남습니다.",
+  "실행 상태, 검사, 범위와 남은 불확실성을 함께 검토합니다. 기술 결과는 승인과 별개입니다.",
 ];
-const stepIcons = [FileText, Terminal, ShieldCheck, FlaskConical, FileText];
+const phaseNames = { baseline: "기준선", development: "개발", final: "최종" };
+function checkLabel(check: DemoCheck): string {
+  if (check.availability === "not_run") return "NOT RUN";
+  if (check.availability === "unavailable" || check.exitCode === null || check.timedOut) return "UNKNOWN";
+  return check.exitCode === 0 ? "PASS" : "FAIL";
+}
+function outcome(receipt: DemoReceipt): string {
+  if (receipt.scope.availability === "observed" && receipt.scope.proceed === false) return "OUT OF SCOPE";
+  if (receipt.checks.some(c => c.phase !== "baseline" && checkLabel(c) === "FAIL")) return "FAIL";
+  if (receipt.recordedStatus === "pass" && receipt.checks.filter(c => c.phase === "final").every(c => checkLabel(c) === "PASS")) return "PASS";
+  return "UNKNOWN";
+}
 
-export function Demo() {
+export function Demo({ receipts }: { receipts: Record<ScenarioId, DemoReceipt> }) {
   const [store] = useState(createDemoStore);
   const state = useStore(store);
+  const [panel, setPanel] = useState<typeof panels[number]>("Diff");
   const scenario = scenarios[state.scenario];
-  const result = getVisibleResult(state);
-  const Icon = stepIcons[state.step];
-
-  return (
-    <section className="demo-section" id="demo" aria-label="클릭형 실행 데모">
-      <div className="section-heading">
-        <div><h2>완료라는 말 다음에,<br />무엇을 확인할까요?</h2><p>같은 작업, 다른 근거. 세 가지 결과를 직접 살펴보세요.</p></div>
-        <span className="demo-label"><FlaskConical size={16} aria-hidden="true" /> 클릭형 데모</span>
-      </div>
-      <div className="demo-notice"><span className="notice-dot" /><p><strong>브라우저 안에서만 동작하는 합성 데이터입니다.</strong><span> 실제 파일·에이전트·검사 명령을 실행하지 않습니다.</span></p></div>
-      <div className="scenario-picker" role="group" aria-label="데모 시나리오">
-        {(Object.keys(scenarios) as ScenarioId[]).map((id) => <button key={id} aria-pressed={state.scenario === id} onClick={() => state.selectScenario(id)}>{scenarios[id].label}</button>)}
-      </div>
-      <div className="demo-workspace">
-        <div className="demo-steps">
-          <p className="workspace-label">하나의 변경을 따라가기</p>
-          <ol>{steps.map((step, i) => <li key={step} aria-current={i === state.step ? "step" : undefined} className={i < state.step ? "completed" : ""}><span className="step-marker">{i < state.step ? <Check size={16} aria-hidden="true" /> : i + 1}</span><span>{step}</span>{i === state.step && <span className="current-label">현재</span>}</li>)}</ol>
-          <p className="step-hint">작업의 시작부터 근거 확인까지<br />다음 단계로 이동해 보세요.</p>
-        </div>
-        <div className="demo-detail" aria-live="polite" aria-atomic="true">
-          <div className="detail-topline"><span><Icon size={18} aria-hidden="true" /> {steps[state.step]}</span><span>{state.step + 1} / 5</span></div>
-          <h3>{["무엇을, 어디까지 바꿀지 정합니다.", "에이전트의 변경이 생겼습니다.", "바뀐 경로를 확인합니다.", "검사 결과를 실제로 확인합니다.", "관측된 근거로 결과를 읽습니다."][state.step]}</h3>
-          <p className="detail-description">{stepDescriptions[state.step]}</p>
-          <div className="evidence-panel">
-            {state.step === 0 && <><div className="file-caption"><FileText size={16} aria-hidden="true" /> 합성 작업 계약</div><dl className="contract-list"><div><dt>작업</dt><dd>value.txt의 값을 before에서 after로 변경</dd></div><div><dt>허용 파일</dt><dd><code>value.txt</code></dd></div><div><dt>보호 입력</dt><dd><code>check.py</code></dd></div><div><dt>완료 기준</dt><dd>변경 범위 일치 + 선택한 검사 통과</dd></div></dl></>}
-            {state.step === 1 && <><div className="file-caption"><FileText size={16} aria-hidden="true" /> value.txt · 합성 변경</div><pre className="diff"><span className="removed">− before</span>{"\n"}<span className="added">+ {scenario.value}</span></pre><p className="panel-note">변경된 내용이 기대와 일치하는지는 다음 근거로 확인합니다.</p></>}
-            {state.step === 2 && <><div className="file-caption"><ShieldCheck size={16} aria-hidden="true" /> 변경 경로 관찰 · 합성 기록</div><ul className="observation-list"><li><Check size={17} aria-hidden="true" /> <code>value.txt</code><span>허용 범위 안의 변경</span></li><li><Check size={17} aria-hidden="true" /> <code>check.py</code><span>보호 입력 변경 없음</span></li></ul><p className="panel-note">이 예시의 관찰 결과입니다. 모든 파일 접근을 차단하는 기능은 아닙니다.</p></>}
-            {state.step === 3 && <><div className="file-caption"><Terminal size={16} aria-hidden="true" /> 선택한 검사 · 합성 출력</div><pre className="check-output">$ python check.py{"\n\n"}{scenario.check}</pre><p className="panel-note">화면의 명령과 출력은 설명용 데이터이며 실행되지 않습니다.</p></>}
-            {state.step === 4 && <div className={`result-content result-${state.scenario}`}><div className="result-icon">{result === "PASS" ? <Check aria-hidden="true" /> : result === "FAIL" ? <X aria-hidden="true" /> : <CircleHelp aria-hidden="true" />}</div><span className="result-value" data-testid="technical-result">{result}</span><p>{scenario.conclusion}</p><span className="result-footnote">합성 기술 결과 · 리뷰 및 머지 승인과 별개</span></div>}
-          </div>
+  const receipt = receipts[state.scenario];
+  const result = outcome(receipt);
+  const basePath = process.env.NEXT_PUBLIC_MERCURY_BASE_PATH ?? "";
+  const changedFiles = receipt.diff.afterFiles.filter((file, i) => file.content !== receipt.diff.beforeFiles[i].content);
+  return <section className="demo-section" id="demo" aria-label="클릭형 실행 데모">
+    <div className="section-heading"><div><h2>같은 할인 버그,<br />네 가지 다른 판단.</h2><p>수정 코드부터 실제 검사와 실행 근거까지 비교하세요.</p></div><span className="demo-label"><FlaskConical size={16} aria-hidden="true" /> 실행 근거 탐색</span></div>
+    <div className="demo-notice"><span className="notice-dot" /><p><strong>Mercury 실제 실행 · 수정은 시뮬레이션</strong><span> 저장된 실행 기록을 탐색합니다. 브라우저에서 명령이나 AI를 실행하지 않습니다.</span></p></div>
+    <div className="cart-task"><div><span className="workspace-label">작업 요청</span><h3>쿠폰이 상품 금액보다 커도 결제 금액이 음수가 되지 않게 수정해주세요.</h3><p>할인 전 합계 50,000원 이상 무료 배송, 그 외 3,000원. 배송비 정책은 그대로 유지합니다.</p></div><dl><div><dt>수정 허용</dt><dd><code>cart.py</code></dd></div><div><dt>보호 대상</dt><dd><code>shipping.py</code> · 두 검사 파일</dd></div><div><dt>핵심 기대값</dt><dd>10,000 − 15,000 + 배송비 → <strong>3,000원</strong><br />60,000 − 20,000 + 무료 배송 → <strong>40,000원</strong></dd></div></dl></div>
+    <div className="cart-scenarios" role="group" aria-label="데모 시나리오">{(Object.keys(scenarios) as ScenarioId[]).map(id => <button key={id} aria-pressed={state.scenario === id} onClick={() => state.selectScenario(id)}><strong>{scenarios[id].label}</strong><span>{scenarios[id].summary}</span><code>{outcome(receipts[id])}</code></button>)}</div>
+    <div className="cart-inspector">
+      <div className="cart-main"><div className="evidence-tabs" role="group" aria-label="근거 보기">{panels.map(name => <button key={name} aria-pressed={panel === name} onClick={() => setPanel(name)}>{name}</button>)}</div>
+        <div className="cart-panel" aria-label={`${panel} 근거`}>
+          {panel === "Diff" && <><h3>실제로 바뀐 코드</h3><p className="panel-intro">실행 전·후 스냅샷 비교입니다. Mercury의 범위 관찰은 Scope에서 별도로 확인합니다.</p>{changedFiles.map(file => <article className="cart-file" key={file.path}><h4><FileText size={16} aria-hidden="true" /> {file.path}</h4><div className="cart-code-pair"><div><span>변경 전</span><pre className="removed"><code>{receipt.diff.beforeFiles.find(f => f.path === file.path)?.content}</code></pre></div><div><span>변경 후</span><pre className="added"><code>{file.content}</code></pre></div></div></article>)}</>}
+          {panel === "Checks" && <><h3>할인은 고쳤어도 배송비는?</h3><p className="panel-intro">기준선 할인 실패는 알려진 버그입니다. 개발·최종 단계에서 두 검사가 어떻게 달라졌는지 보세요.</p><div className="table-scroll"><table className="cart-checks"><caption className="sr-only">실제 실행된 검사 결과</caption><thead><tr><th>단계</th><th>명령</th><th>관측 결과</th><th>exit</th></tr></thead><tbody>{receipt.checks.map(c => <tr key={`${c.phase}/${c.commandId}`}><td>{phaseNames[c.phase]}</td><td><code>python -B check_{c.commandId}.py</code></td><td><strong className={`check-${checkLabel(c).toLowerCase().replace(" ", "-")}`}>{checkLabel(c)}</strong></td><td>{c.exitCode ?? "—"}</td></tr>)}</tbody></table></div><div className="case-results">{receipt.checks.filter(c => c.phase === "development" && c.cases !== null).map(c => <div key={c.commandId}><h4>{c.commandId === "discount" ? "할인" : "배송비"} 검사에서 관측한 값</h4>{c.cases?.map(row => <p key={`${row.subtotal}/${row.coupon}`}>상품 {row.subtotal.toLocaleString("ko-KR")}원 · 쿠폰 {row.coupon.toLocaleString("ko-KR")}원<br /><span>예상 {row.expected.toLocaleString("ko-KR")}원 → 실제 <strong>{row.actual.toLocaleString("ko-KR")}원</strong></span></p>)}</div>)}</div></>}
+          {panel === "Scope" && <><h3>승인한 변경 안에 있나요?</h3><dl className="cart-facts"><div><dt>관찰 상태</dt><dd>{receipt.scope.availability}</dd></div><div><dt>허용 파일</dt><dd>{receipt.scope.allowed.join(", ")}</dd></div><div><dt>보호 입력</dt><dd>{receipt.scope.protected.join(", ")}</dd></div><div><dt>실제 변경</dt><dd>{receipt.scope.availability === "observed" ? receipt.scope.changed.join(", ") || "없음" : "확인 불가"}</dd></div><div><dt>범위·보호 위반</dt><dd>{receipt.scope.availability === "observed" ? receipt.scope.violations.join(", ") || "관측된 위반 없음" : "확인 불가"}</dd></div><div><dt>진행 허용 관찰</dt><dd>{receipt.scope.proceed === null ? "확인 불가" : String(receipt.scope.proceed)}</dd></div></dl><p className="panel-note">위반을 관찰하면 후속 검사가 실행되지 않을 수 있습니다. 실행 차단은 OS 수준 격리를 의미하지 않습니다.</p></>}
+          {panel === "Evidence" && <><h3>이 판단은 어떤 기록에서 왔나요?</h3><dl className="cart-facts"><div><dt>출처</dt><dd>{receipt.sourceMode === "recorded_simulated" ? "Mercury 실제 실행 · 수정은 시뮬레이션" : "네이티브 모델 실행"}</dd></div><div><dt>실행 ID</dt><dd data-testid="run-id">{receipt.runId}</dd></div><div><dt>기록 시각</dt><dd>{receipt.capturedAt}</dd></div><div><dt>Mercury 코어 기준</dt><dd><code>{receipt.mercuryRevision}</code></dd></div><div><dt>Fixture SHA-256</dt><dd><code>{receipt.fixtureSha256}</code></dd></div><div><dt>Candidate SHA-256</dt><dd><code>{receipt.candidateSha256}</code></dd></div><div><dt>기록 진단</dt><dd>{receipt.diagnostics.join(", ") || "진단 없음"}</dd></div></dl><p className="panel-note">코어 기준 SHA는 실행한 Mercury의 Git 기준입니다. 예제 변경은 미커밋 상태일 수 있습니다. 해시는 내용 일치를 확인하며 실행의 진위나 현재 작업 폴더를 증명하지 않습니다.</p><p className="panel-note">체커 값은 실제 executor 캡처, 범위와 상태는 Mercury 기록 조회에서 왔습니다. 실행 설정 바인딩과 리뷰 승인은 제공하지 않습니다.</p><a className="text-link" href={`${basePath}/demo/cart/${state.scenario}.json`} download>공개 실행 근거 JSON 다운로드 <ArrowRight size={16} aria-hidden="true" /></a><p className="panel-note"><a href="https://github.com/kssk3/Mercury/blob/main/docs/quickstart.md#recorded-cart-scenarios">동일한 예제 재현 방법</a> · <a href="https://github.com/kssk3/Mercury/blob/main/docs/codex-quickstart.md">별도 실제 Codex 할인 예제</a></p></>}
         </div>
       </div>
-      <div className="demo-controls"><button className="reset-button" onClick={state.reset}><RotateCcw size={16} aria-hidden="true" /> 처음부터</button><div><button className="secondary-button" onClick={state.previous} disabled={state.step === 0}><ArrowLeft size={16} aria-hidden="true" /> 이전 단계</button><button className="primary-button" onClick={state.next} disabled={state.step === 4}>다음 단계 <ArrowRight size={16} aria-hidden="true" /></button></div></div>
-    </section>
-  );
+      <aside className="cart-verdict" aria-label="선택한 시나리오의 판단"><span className="workspace-label">{scenario.label}</span><strong className="cart-outcome" data-testid="evidence-outcome">{result}</strong><p>{scenario.conclusion}</p><dl><div><dt>기록된 실행 상태</dt><dd data-testid="recorded-status">{receipt.recordedStatus}</dd></div><div><dt>기록된 이유</dt><dd>{receipt.recordedReason ?? "확인 불가"}</dd></div></dl><p className="verdict-note">기술 결과 ≠ 리뷰·머지 승인</p></aside>
+    </div>
+    <div className="cart-journey"><ol>{steps.map((step, i) => <li key={step} aria-current={i === state.step ? "step" : undefined}><span>{i < state.step ? <Check size={14} aria-hidden="true" /> : i + 1}</span>{step}</li>)}</ol><div aria-live="polite"><strong>{state.step + 1} / 5</strong><p>{descriptions[state.step]}</p>{state.step === 4 && <span data-testid="technical-result">{result}</span>}</div></div>
+    <div className="demo-controls"><button className="reset-button" onClick={state.reset}><RotateCcw size={16} aria-hidden="true" /> 처음부터</button><div><button className="secondary-button" onClick={state.previous} disabled={state.step === 0}><ArrowLeft size={16} aria-hidden="true" /> 이전 단계</button><button className="primary-button" onClick={state.next} disabled={state.step === 4}>다음 단계 <ArrowRight size={16} aria-hidden="true" /></button></div></div>
+  </section>;
 }
