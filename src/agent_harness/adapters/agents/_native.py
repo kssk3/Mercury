@@ -14,14 +14,14 @@ import subprocess
 import time
 from pathlib import Path
 
-from agent_harness.diagnostics import DiagnosticsObserver
-from agent_harness.policy import VerificationPolicy
-from agent_harness.ports.agent import CapturedText
-from agent_harness.runner import (
-    VerificationExecutable,
+from agent_harness.adapters._executables import (
     _validate_executable_proofs,
     bind_verification_executables,
 )
+from agent_harness.diagnostics import DiagnosticsObserver
+from agent_harness.policy import VerificationPolicy
+from agent_harness.ports.agent import CapturedText
+from agent_harness.ports.verification import VerificationExecutable
 
 
 class _Capture:

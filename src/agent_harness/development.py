@@ -4,11 +4,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agent_harness.baseline import VerificationBaseline, VerificationDelta
+from agent_harness.composition.verification import create_verification_executor
 from agent_harness.policy import VerificationPolicy
-from agent_harness.runner import (
+from agent_harness.ports.verification import (
     CommandResult,
-    ControlledCommandRunner,
     VerificationExecutables,
+    VerificationExecutor,
 )
 
 
@@ -30,6 +31,7 @@ def run_development_profile(
     baseline: VerificationBaseline,
     *,
     selections: VerificationExecutables | None = None,
+    verification_executor: VerificationExecutor | None = None,
 ) -> DevelopmentVerificationResult:
     """Reuse an explicit pre-baseline selection when continuity is required.
 
@@ -38,7 +40,9 @@ def run_development_profile(
     """
     if tuple(result.command for result in baseline.results) != policy.commands:
         raise ValueError("baseline must use the same command sequence")
-    results = ControlledCommandRunner().run(policy, repository, selections=selections)
+    if verification_executor is None:
+        verification_executor = create_verification_executor()
+    results = verification_executor.run(policy, repository, selections=selections)
     return DevelopmentVerificationResult(
         baseline=baseline,
         results=results,

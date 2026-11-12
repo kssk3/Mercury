@@ -18,6 +18,7 @@ from typing import Literal
 from agent_harness.adapters.agents.claude import ClaudeCLIAdapter
 from agent_harness.adapters.agents.codex import CodexCLIAdapter
 from agent_harness.admission import AdmissionRecord, record_admission
+from agent_harness.composition.verification import create_verification_executor
 from agent_harness.context import ContextPacket, build_context_packet
 from agent_harness.contract import TaskContract
 from agent_harness.journal import EventJournal
@@ -253,6 +254,7 @@ def execute_run(config: RunConfig) -> tuple[dict[str, object], int]:
             config.contract,
             admission,
             context,
+            verification_executor=create_verification_executor(),
             policy=config.policy,
             criterion_commands=config.criterion_commands,
             journal=journal,

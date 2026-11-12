@@ -15,7 +15,7 @@ from agent_harness.development import DevelopmentVerificationResult
 from agent_harness.evidence import EvidenceReport, build_evidence_report
 from agent_harness.final import TechnicalDecisionKind, decide_technical_outcome
 from agent_harness.integrity import ProtectedInputCheck, ProtectedInputState
-from agent_harness.runner import CommandResult
+from agent_harness.ports.verification import CommandResult
 
 if TYPE_CHECKING:
     from agent_harness.review import ReviewBinding, ReviewReceipt

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from agent_harness.runner import CommandResult
+from agent_harness.ports.verification import CommandResult
 
 
 @dataclass(frozen=True)

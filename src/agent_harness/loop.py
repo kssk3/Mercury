@@ -17,6 +17,7 @@ from agent_harness.attempt import (
     _observation,
 )
 from agent_harness.baseline import VerificationBaseline
+from agent_harness.composition.verification import create_verification_executor
 from agent_harness.context import ContextPacket
 from agent_harness.contract import TaskContract
 from agent_harness.development import DevelopmentVerificationResult
@@ -52,13 +53,9 @@ from agent_harness.native_output import (
 from agent_harness.output import OutputStore, StoredOutput
 from agent_harness.policy import VerificationPolicy
 from agent_harness.ports.agent import AgentAdapter, AgentTurnResult, TurnBudgets
+from agent_harness.ports.verification import CommandResult, VerificationExecutor
 from agent_harness.repository import read_persistence_bytes
 from agent_harness.retry import RetryFeedback, RetryLimits, RetryUsage
-from agent_harness.runner import (
-    CommandResult,
-    ControlledCommandRunner,
-    bind_verification_executables,
-)
 from agent_harness.scope import ScopeTurnError
 from agent_harness.state import CurrentStateStore
 from agent_harness.turn import (
@@ -165,16 +162,20 @@ def run_loop(
     monotonic: Callable[[], float] = time.monotonic,
     checkpoint_verification: bool = False,
     wall_clock: Callable[[], float] = time.time,
+    verification_executor: VerificationExecutor | None = None,
 ) -> LoopResult:
     """Run a fresh task; permitted retries receive bounded observed failure facts.
 
     Optional checkpoints enable explicit verification-only continuation.
     """
+    if verification_executor is None:
+        verification_executor = create_verification_executor()
     return _run_loop(
         adapter,
         contract,
         admission,
         context,
+        verification_executor=verification_executor,
         policy=policy,
         criterion_commands=criterion_commands,
         journal=journal,
@@ -195,6 +196,7 @@ def _run_loop(
     admission: AdmissionRecord,
     context: ContextPacket,
     *,
+    verification_executor: VerificationExecutor,
     policy: VerificationPolicy,
     criterion_commands: object,
     journal: EventJournal,
@@ -281,7 +283,7 @@ def _run_loop(
                 (command,), policy.working_directory, policy.timeout_seconds
             )
             command_before = RepositoryObservation.capture(root)
-            result = ControlledCommandRunner().run(
+            result = verification_executor.run(
                 single, root, selections=verification_executables
             )[0]
             if result.exit_code is None and not result.timed_out:
@@ -343,7 +345,7 @@ def _run_loop(
         directory = (root / policy.working_directory).resolve(strict=True)
         if not directory.is_dir() or not directory.is_relative_to(root):
             return finish("blocked", "invalid_input")
-        verification_executables = bind_verification_executables(policy, root)
+        verification_executables = verification_executor.bind(policy, root)
         attempts = AttemptJournal(root, journal=journal, state_store=state_store)
         if not _continuation and (
             attempts.read()
@@ -923,17 +925,21 @@ def continue_verification(
     max_output_bytes: int,
     monotonic: Callable[[], float] = time.monotonic,
     wall_clock: Callable[[], float] = time.time,
+    verification_executor: VerificationExecutor | None = None,
 ) -> LoopResult:
     """Explicit whole-phase continuation; caller holds its B4 repository lease.
 
     The adapter is validated for input compatibility but never invoked here.
     Historical baseline stdout/stderr are unavailable after restoration.
     """
+    if verification_executor is None:
+        verification_executor = create_verification_executor()
     return _run_loop(
         adapter,
         contract,
         admission,
         context,
+        verification_executor=verification_executor,
         policy=policy,
         criterion_commands=criterion_commands,
         journal=journal,

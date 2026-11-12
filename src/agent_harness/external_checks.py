@@ -18,18 +18,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from agent_harness.composition.verification import create_verification_executor
 from agent_harness.policy import VerificationPolicy
+from agent_harness.ports.verification import (
+    VerificationExecutables,
+    VerificationExecutor,
+)
 from agent_harness.repository import (
     _is_within_directory,
     resolve_repository_root,
     validate_runtime_state_directory,
 )
 from agent_harness.review_evidence import _candidate, candidate_sha256
-from agent_harness.runner import (
-    ControlledCommandRunner,
-    VerificationExecutables,
-    bind_verification_executables,
-)
 from agent_harness.turn import RepositoryObservation
 
 _LIMIT = 4 * 1024 * 1024
@@ -298,6 +298,7 @@ def collect_external_check(
     safe_command_display: str,
     protected_paths: tuple[Path, ...] = (),
     selections: VerificationExecutables | None = None,
+    verification_executor: VerificationExecutor | None = None,
 ) -> dict[str, Any]:
     """Run ONE already-authorized command. Caller supplies authority and safe display.
 
@@ -326,7 +327,13 @@ def collect_external_check(
         for path in protected
     ):
         raise ValueError("bundle overlaps protected path")
-    selected = selections or bind_verification_executables(policy, root)
+    if verification_executor is None:
+        verification_executor = create_verification_executor(max_output_bytes=65536)
+    selected = (
+        selections
+        if selections is not None
+        else verification_executor.bind(policy, root)
+    )
     if (
         len(selected.executables) != 1
         or selected.executables[0].command != policy.commands[0]
@@ -361,9 +368,7 @@ def collect_external_check(
     _write(destination / "intent.json", intent)
     started = datetime.now(UTC).isoformat()
     tick = time.monotonic()
-    result = ControlledCommandRunner(max_output_bytes=65536).run(
-        policy, root, selections=selected
-    )[0]
+    result = verification_executor.run(policy, root, selections=selected)[0]
     duration = time.monotonic() - tick
     ended = datetime.now(UTC).isoformat()
     process = {

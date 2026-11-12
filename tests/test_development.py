@@ -14,7 +14,7 @@ from agent_harness.development import (
 from agent_harness.evidence import build_evidence_report
 from agent_harness.final import TechnicalDecisionKind, decide_technical_outcome
 from agent_harness.policy import VerificationPolicy
-from agent_harness.runner import CommandResult
+from agent_harness.ports.verification import CommandResult
 
 
 def result(command: tuple[str, ...], exit_code: int | None) -> CommandResult:
@@ -145,10 +145,8 @@ def test_direct_profile_rejects_different_command_sequence() -> None:
 def test_development_reuses_prebaseline_external_selection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from agent_harness.runner import (
-        ControlledCommandRunner,
-        bind_verification_executables,
-    )
+    from agent_harness.adapters._executables import bind_verification_executables
+    from agent_harness.adapters.verification.local import ControlledCommandRunner
 
     root = tmp_path / "repository"
     root.mkdir()
@@ -180,7 +178,7 @@ def test_development_reuses_prebaseline_external_selection(
 def test_baseline_mismatch_is_refused_before_commands(
     tmp_path: Path, mismatch: str, explicit_selection: bool
 ) -> None:
-    from agent_harness.runner import bind_verification_executables
+    from agent_harness.adapters._executables import bind_verification_executables
 
     marker = tmp_path / "marker"
     command = (

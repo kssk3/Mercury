@@ -340,8 +340,9 @@ def test_real_loop_one_fake_turn_and_redacted_evidence(
 def test_interrupted_verification_preserves_observed_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
+    from agent_harness.adapters.verification.local import ControlledCommandRunner
     from agent_harness.journal import EventJournal
-    from agent_harness.runner import CommandResult, ControlledCommandRunner
+    from agent_harness.ports.verification import CommandResult
 
     path, data = make_fixture(tmp_path)
     config = load_run_config(path, write_config(path, data), "human")

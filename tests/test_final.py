@@ -7,7 +7,7 @@ import pytest
 from agent_harness.baseline import VerificationBaseline
 from agent_harness.development import DevelopmentVerificationResult
 from agent_harness.final import TechnicalDecisionKind, decide_technical_outcome
-from agent_harness.runner import CommandResult
+from agent_harness.ports.verification import CommandResult
 
 
 def result(command: tuple[str, ...], exit_code: int) -> CommandResult:
