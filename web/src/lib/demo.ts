@@ -29,26 +29,32 @@ export function receiptOutcome(receipt: DemoReceipt): TechnicalResult {
   return "UNKNOWN";
 }
 
-export function summarizeReceipt(receipt: DemoReceipt): { result: TechnicalResult; conclusion: string; evidence: string[]; nextDecision: string } {
+export function summarizeReceipt(receipt: DemoReceipt): { result: TechnicalResult; conclusion: string; evidence: string[]; nextDecision: string; evidenceAction: { panel: "Checks" | "Scope"; label: string } } {
   const result = receiptOutcome(receipt);
   const checks = receipt.checks.filter(c => c.phase !== "baseline");
-  const phaseCount = (phase: "development" | "final") => {
+  const phaseEvidence = (phase: "development" | "final") => {
     const rows = checks.filter(c => c.phase === phase);
-    return `${rows.filter(c => checkLabel(c) === "PASS").length}/${rows.length} 통과`;
+    if (!rows.length) return "기록 없음 · 확인 불가";
+    const counts = ([ ["PASS", "통과"], ["FAIL", "실패"], ["NOT RUN", "미실행"], ["UNKNOWN", "확인 불가"] ] as const)
+      .map(([status, label]) => { const count = rows.filter(c => checkLabel(c) === status).length; return count ? `${label} ${count}개` : ""; }).filter(Boolean);
+    const missing = 2 - new Set(rows.map(c => c.commandId)).size;
+    if (missing > 0) counts.push(`기록 누락 ${missing}개 · 확인 불가`);
+    return counts.join(" · ");
   };
-  const notRun = checks.filter(c => checkLabel(c) === "NOT RUN").length;
-  const unknown = checks.filter(c => checkLabel(c) === "UNKNOWN").length;
-  const evidence = [`개발 검사 ${phaseCount("development")} · 최종 검사 ${phaseCount("final")}${notRun ? ` · 미실행 ${notRun}개` : ""}${unknown ? ` · 확인 불가 ${unknown}개` : ""}`];
+  const evidence = [`개발 검사: ${phaseEvidence("development")}`, `최종 검사: ${phaseEvidence("final")}`];
+  const evidenceAction: { panel: "Checks" | "Scope"; label: string } = result === "OUT OF SCOPE"
+    ? { panel: "Scope", label: "승인 범위와 변경 파일 비교하기" }
+    : { panel: "Checks", label: result === "FAIL" ? "실패한 검사 보기" : result === "PASS" ? "통과한 검사 보기" : checks.some(c => ["NOT RUN", "UNKNOWN"].includes(checkLabel(c))) ? "미실행·확인 불가 검사 보기" : "검사 실행 상태 확인하기" };
   const failed = checks.filter(c => checkLabel(c) === "FAIL");
   const mismatch = failed.flatMap(c => (c.cases ?? []).filter(row => row.expected !== row.actual).map(row => ({ commandId: c.commandId, ...row })))[0];
   if (mismatch) evidence.unshift(`${mismatch.commandId === "shipping" ? "배송비" : "할인"} 검사: 예상 ${mismatch.expected.toLocaleString("ko-KR")}원 → 실제 ${mismatch.actual.toLocaleString("ko-KR")}원`);
   else if (failed.length) evidence.unshift(`${[...new Set(failed.map(c => c.commandId === "shipping" ? "배송비" : "할인"))].join("·")} 검사 실패`);
   const scope = receipt.scope;
   evidence.push(scope.availability !== "observed" ? "변경 범위 확인 불가" : scope.violations.length ? `범위·보호 위반: ${scope.violations.join(", ")}` : scope.proceed === true ? "관측된 범위·보호 위반 없음" : "범위 관찰에서 진행 허용을 확인하지 못함");
-  if (result === "PASS") return { result, evidence, conclusion: "선택한 검사가 수정 결과를 뒷받침합니다.", nextDecision: "변경 코드와 검사 충분성을 사람이 검토한 뒤 승인 여부를 판단하세요." };
-  if (result === "FAIL") return { result, evidence, conclusion: "수정 후 검사에서 회귀가 발견됐습니다.", nextDecision: failed.some(c => c.commandId === "shipping") ? "기존 배송비 정책을 유지하도록 수정을 검토하고, 필요한 검사를 다시 확인하세요." : "실패한 검사의 기대값과 수정 코드를 검토하고, 필요한 검사를 다시 확인하세요." };
-  if (result === "OUT OF SCOPE") return { result, evidence, conclusion: "승인한 변경 범위를 벗어났습니다.", nextDecision: "보호 파일 변경과 범위 관찰을 검토하고, 원래 범위로 수정할지 별도 승인을 받을지 판단하세요." };
-  return { result, evidence, conclusion: "아직 완료로 판단할 수 없습니다.", nextDecision: "미실행·확인 불가 근거와 중단 상태를 검토하고, 승인된 절차에 따라 최종 검증 근거를 확인하세요." };
+  if (result === "PASS") return { result, evidence, evidenceAction, conclusion: "선택한 검사가 수정 결과를 뒷받침합니다.", nextDecision: "변경 코드와 검사 충분성을 사람이 검토한 뒤 승인 여부를 판단하세요." };
+  if (result === "FAIL") return { result, evidence, evidenceAction, conclusion: "수정 후 검사에서 회귀가 발견됐습니다.", nextDecision: failed.some(c => c.commandId === "shipping") ? "기존 배송비 정책을 유지하도록 수정을 검토하고, 필요한 검사를 다시 확인하세요." : "실패한 검사의 기대값과 수정 코드를 검토하고, 필요한 검사를 다시 확인하세요." };
+  if (result === "OUT OF SCOPE") return { result, evidence, evidenceAction, conclusion: "승인한 변경 범위를 벗어났습니다.", nextDecision: "보호 파일 변경과 범위 관찰을 검토하고, 원래 범위로 수정할지 별도 승인을 받을지 판단하세요." };
+  return { result, evidence, evidenceAction, conclusion: "아직 완료로 판단할 수 없습니다.", nextDecision: "미실행·확인 불가 근거와 중단 상태를 검토하고, 승인된 절차에 따라 최종 검증 근거를 확인하세요." };
 }
 
 export function scenarioFromHash(hash: string): ScenarioId | null {

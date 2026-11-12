@@ -347,3 +347,9 @@ h2 { font-size: 35px; font-weight: 800; }
   .tools-section { padding-top: 52px; }
   .fit-note { font-size: 12px; }
 }
+
+.evidence-action { display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; color: var(--primary); background: var(--page); font-size: 13px; font-weight: 700; text-align: left; cursor: pointer; max-width: 100%; }
+.evidence-action:hover { background: var(--surface); }
+.evidence-action svg { flex-shrink: 0; }
+.cart-panel:focus { outline: 3px solid var(--primary); outline-offset: 4px; }
+.check-meaning { display: block; color: var(--muted); font-size: 11px; margin-top: 3px; }
