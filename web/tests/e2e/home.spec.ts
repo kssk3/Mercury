@@ -37,6 +37,44 @@ test("visitor compares four recorded outcomes and matching downloadable evidence
   expect(unexpectedRequests).toEqual([]);
 });
 
+test("scenario conclusion, observed evidence and next decision precede details on desktop and mobile", async ({ page }) => {
+  await page.goto("./");
+  const demo = page.getByRole("region", { name: "클릭형 실행 데모" });
+  const summary = demo.getByRole("region", { name: "선택한 시나리오의 판단" });
+  const tabs = demo.getByRole("group", { name: "근거 보기" });
+  const output = process.env.MERCURY_SCREENSHOT_DIR ?? "test-results";
+  for (const viewport of [{ width: 1440, height: 1000 }, { width: 375, height: 812 }]) {
+    await page.setViewportSize(viewport);
+    for (const [label, result, conclusion, evidence, next] of [
+      ["정상 수정", "PASS", "선택한 검사가 수정 결과를 뒷받침합니다.", "최종 검사 2/2 통과", "사람이 검토"],
+      ["회귀 발생", "FAIL", "수정 후 검사에서 회귀가 발견됐습니다.", "예상 40,000원 → 실제 43,000원", "배송비 정책"],
+      ["범위 이탈", "OUT OF SCOPE", "승인한 변경 범위를 벗어났습니다.", "범위·보호 위반: shipping.py", "별도 승인"],
+      ["검증 불완전", "UNKNOWN", "아직 완료로 판단할 수 없습니다.", "미실행 2개", "최종 검증"],
+    ]) {
+      await demo.getByRole("button", { name: new RegExp(`^${label}`) }).click();
+      await expect(summary).toHaveCount(1);
+      await expect(summary.getByTestId("evidence-outcome")).toHaveText(result);
+      await expect(summary.getByRole("heading", { name: conclusion, exact: true })).toBeVisible();
+      await expect(summary).toContainText(evidence);
+      await expect(summary.getByTestId("next-decision")).toContainText(next);
+      await expect(summary.getByText("핵심 근거", { exact: true })).toBeVisible();
+      await expect(summary.getByText("다음 판단", { exact: true })).toBeVisible();
+      expect(await summary.evaluate(node => Boolean(node.compareDocumentPosition(document.querySelector(".evidence-tabs")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+      const summaryBox = await summary.boundingBox(); const tabsBox = await tabs.boundingBox();
+      expect(summaryBox!.y + summaryBox!.height).toBeLessThanOrEqual(tabsBox!.y);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    }
+    await summary.getByText("기록된 실행 상태와 이유", { exact: true }).click();
+    await expect(summary.getByTestId("recorded-status")).toBeVisible();
+    await summary.getByText("기록된 실행 상태와 이유", { exact: true }).click();
+    await demo.getByRole("button", { name: "다음 단계" }).click();
+    await demo.getByRole("button", { name: "처음부터" }).click();
+    await expect(summary.getByTestId("evidence-outcome")).toHaveText("UNKNOWN");
+    await expect(summary).toContainText("미실행 2개");
+    await summary.screenshot({ path: `${output}/${viewport.width === 375 ? "mobile" : "desktop"}-summary.png` });
+  }
+});
+
 test("mobile layout and keyboard controls remain usable", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.emulateMedia({ reducedMotion: "reduce" });
