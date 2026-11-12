@@ -115,3 +115,84 @@ test("exported assets load beneath the deployment mount", async ({ page, request
   for (const asset of assets) { expect(asset.status).toBe(200); expect(new URL(asset.url).pathname.startsWith(`${root.pathname}_next/`)).toBe(true); }
   if (root.pathname !== "/") expect((await request.get("http://127.0.0.1:4173/")).status()).toBe(404);
 });
+
+
+test("usage situations connect value explanations to the matching demo summary", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("./");
+  const demo = page.getByRole("region", { name: "클릭형 실행 데모" });
+  const summary = demo.getByRole("region", { name: "선택한 시나리오의 판단" });
+  const usage = page.getByRole("region", { name: "AI 작업을 검토할 때, 이런 순간에 도움이 됩니다." });
+  const tools = page.getByRole("region", { name: "익숙한 개발 도구와 함께 사용합니다." });
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("어디까지 확인됐는지");
+  for (const name of ["Git diff", "테스트", "CI"]) await expect(tools.getByRole("heading", { name, exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "방금 본 장바구니 사례 재현하기" })).toHaveAttribute("href", /#recorded-cart-scenarios$/);
+  for (const [name, hash, outcome] of [
+    ["배송비 회귀 사례 보기", "#demo-regression", "FAIL"],
+    ["승인 범위 이탈 사례 보기", "#demo-scope-escape", "OUT OF SCOPE"],
+    ["미완료 검증 사례 보기", "#demo-incomplete", "UNKNOWN"],
+  ]) {
+    const link = usage.getByRole("link", { name });
+    await link.focus(); await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(new RegExp(`${hash}$`));
+    await expect(summary.getByTestId("evidence-outcome")).toHaveText(outcome);
+    await expect(summary).toBeFocused();
+    await expect(summary).toBeInViewport();
+    await expect(demo.getByText("1 / 5", { exact: true })).toBeVisible();
+  }
+  await page.goBack();
+  await expect(summary.getByTestId("evidence-outcome")).toHaveText("OUT OF SCOPE");
+  await expect(summary).toBeFocused();
+  await page.goForward();
+  await expect(summary.getByTestId("evidence-outcome")).toHaveText("UNKNOWN");
+  // Same URL fragment still activates the case after a manual selection.
+  await demo.getByRole("button", { name: /^정상 수정/ }).click();
+  await demo.getByRole("button", { name: "다음 단계" }).click();
+  await usage.getByRole("link", { name: "미완료 검증 사례 보기" }).click();
+  await expect(summary.getByTestId("evidence-outcome")).toHaveText("UNKNOWN");
+  await expect(demo.getByText("1 / 5", { exact: true })).toBeVisible();
+  await expect(summary).toBeFocused();
+  // Ordinary section navigation must preserve the current selection and focus.
+  await page.getByRole("link", { name: "작동 방식", exact: true }).click();
+  await expect(page).toHaveURL(/#how-it-works$/);
+  await expect(summary).not.toBeFocused();
+  await expect(summary.getByTestId("evidence-outcome")).toHaveText("UNKNOWN");
+  await page.getByRole("link", { name: "데모", exact: true }).click();
+  await expect(page).toHaveURL(/#demo$/);
+  await expect(summary.getByTestId("evidence-outcome")).toHaveText("UNKNOWN");
+  const output = process.env.MERCURY_SCREENSHOT_DIR ?? "test-results";
+  for (const [name, width, height] of [["desktop", 1440, 1000], ["mobile", 375, 812]] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await usage.screenshot({ path: `${output}/${name}-situations.png` });
+    await tools.screenshot({ path: `${output}/${name}-tools.png` });
+    await page.locator(".hero").screenshot({ path: `${output}/${name}-hero.png` });
+    await usage.getByRole("link", { name: "배송비 회귀 사례 보기" }).click();
+    await expect(summary).toBeFocused();
+    await expect(summary).toBeInViewport();
+  }
+  expect(errors).toEqual([]);
+});
+
+test("shared scenario URLs initialize on direct entry and unknown fragments remain ordinary anchors", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const demo = page.getByRole("region", { name: "클릭형 실행 데모" });
+  const summary = demo.getByRole("region", { name: "선택한 시나리오의 판단" });
+  for (const [hash, outcome] of [["#demo-regression", "FAIL"], ["#demo-scope-escape", "OUT OF SCOPE"], ["#demo-incomplete", "UNKNOWN"], ["#demo-correct", "PASS"]]) {
+    await page.goto(`./${hash}`);
+    await page.reload();
+    await expect(summary.getByTestId("evidence-outcome")).toHaveText(outcome);
+    await expect(summary).toBeFocused();
+    await expect(summary).toBeInViewport();
+  }
+  await page.goto("./#demo-unknown");
+  await page.reload();
+  await expect(summary.getByTestId("evidence-outcome")).toHaveText("PASS");
+  await expect(summary).not.toBeFocused();
+  await page.goto("./#demo");
+  await page.reload();
+  await expect(summary.getByTestId("evidence-outcome")).toHaveText("PASS");
+  await expect(summary).not.toBeFocused();
+});
