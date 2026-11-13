@@ -2,6 +2,7 @@
 
 **A local reliability harness for coding agents.**
 
+[Live demo](https://kssk3.github.io/Mercury/) ·
 [Quick start](#quick-start) · [Run a real task](#run-a-real-task) ·
 [Documentation](#documentation) · [Roadmap](docs/project/ROADMAP.md) ·
 [MIT License](LICENSE)
@@ -172,9 +173,32 @@ check receipt is a separate, explicitly authorized operation.
 
 ## Web walkthrough
 
-The optional [web app](web/README.md) introduces Mercury through a clickable
-walkthrough. It uses synthetic scenarios and saved simulated-run evidence; it
-does not launch an agent, run a checker, or connect to a Mercury backend.
+[Open the live homepage and cart demo](https://kssk3.github.io/Mercury/)
+without installing anything. The walkthrough compares four outcomes of fixing
+a coupon bug while preserving the existing shipping policy:
+
+| Scenario | What the recorded evidence shows | Open the key evidence |
+| --- | --- | --- |
+| [Correct fix](https://kssk3.github.io/Mercury/#demo-correct) | Selected development and final checks pass, with no observed scope violation. | Passed checks |
+| [Regression](https://kssk3.github.io/Mercury/#demo-regression) | The discount fix changes shipping behavior; a selected check fails. | Failed checks |
+| [Scope violation](https://kssk3.github.io/Mercury/#demo-scope-escape) | A protected shipping-policy file changes outside the approved scope. | Approved scope and observed file changes |
+| [Incomplete verification](https://kssk3.github.io/Mercury/#demo-incomplete) | Development checks pass, but final checks were not run; the result remains UNKNOWN. | Not-run and unknown checks |
+
+Each result shows its conclusion, key evidence and next human decision, with a
+button that opens the relevant evidence panel. Development and final summaries
+separate passed, failed, not-run and unknown checks: an unrun check is not a
+failed check, and missing evidence is not success.
+
+Git diff shows code changes, tests check selected behavior, and CI reports its
+configured workflow. Mercury connects the scope, check execution and interruption
+records of a local agent task so you can review them together. It complements
+those tools; it does not choose meaningful tests or automatically approve a merge.
+
+The demo explores saved evidence from actual Mercury runs with deterministic
+simulated edits and public synthetic inputs. It does not measure native AI
+performance or launch an agent, run a checker, or contact a backend in the
+browser. [Reproduce the recorded cart scenarios](docs/quickstart.md#recorded-cart-scenarios),
+or use the [web development guide](web/README.md) to run the site locally.
 
 With Node.js 24+ and npm, run from the repository root:
 
