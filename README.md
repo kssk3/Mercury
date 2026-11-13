@@ -189,6 +189,14 @@ button that opens the relevant evidence panel. Development and final summaries
 separate passed, failed, not-run and unknown checks: an unrun check is not a
 failed check, and missing evidence is not success.
 
+The [project adoption walkthrough](https://kssk3.github.io/Mercury/#how-it-works)
+connects allowed/protected files, completion criteria and checker commands,
+configuration preview, separately approved execution, and historical result
+inspection. Its configuration fragments illustrate the CLI fields; they are not
+complete executable configurations or the exact settings behind the recorded
+cart runs. Follow the linked preparation guide for your own project, or choose
+the separate disposable offline example to learn the flow first.
+
 Git diff shows code changes, tests check selected behavior, and CI reports its
 configured workflow. Mercury connects the scope, check execution and interruption
 records of a local agent task so you can review them together. It complements
