@@ -235,3 +235,53 @@ test("result actions expose matching evidence with keyboard focus and honest che
     await demo.getByRole("region", { name: "Checks 근거", exact: true }).screenshot({ path: `${output}/${viewport.width === 375 ? "mobile" : "desktop"}-check-states.png` });
   }
 });
+
+
+test("project adoption connects scope, mapped checks, approved execution and historical results", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("./#how-it-works");
+  const adoption = page.getByRole("region", { name: "내 프로젝트에서는 이렇게 사용합니다." });
+  await expect(adoption.getByRole("heading", { name: "1. 작업 범위 정하기" })).toBeVisible();
+  await expect(adoption).toContainText("cart.py");
+  await expect(adoption).toContainText("shipping.py");
+  await expect(adoption).toContainText("할인 전 합계");
+  const contract = adoption.getByText("범위 설정 예시 보기", { exact: true });
+  await contract.focus(); await page.keyboard.press("Enter");
+  await expect(adoption.locator("details").filter({ hasText: "범위 설정 예시 보기" })).toHaveAttribute("open", "");
+  await expect(adoption).toContainText('"allowed_paths"');
+  await expect(adoption).toContainText("완전한 실행 설정이 아닙니다");
+  const checks = adoption.getByText("검사 연결 설정 예시 보기", { exact: true });
+  await checks.focus(); await page.keyboard.press("Enter");
+  await expect(adoption).toContainText('"criterion_commands"');
+  await expect(adoption).toContainText('"/absolute/path/to/python3"');
+  await expect(adoption).toContainText('"-B"');
+  const preview = adoption.getByRole("region", { name: "설정 미리보기 명령" });
+  const execute = adoption.getByRole("region", { name: "승인 후 실행 명령" });
+  await expect(preview).toContainText("run --preview");
+  await expect(preview).not.toContainText("--approver");
+  await expect(execute).toContainText("--approve-config-sha256 REVIEWED_64_CHARACTER_SHA256");
+  await expect(adoption).toContainText("미리보기는 에이전트나 검사를 실행하지 않으며 승인을 대신하지 않습니다");
+  await expect(adoption).toContainText("status --state-dir /absolute/path/to/run-state --explain");
+  await expect(adoption).toContainText("state_root가 아니라 실행 결과가 알려준 상태 디렉터리");
+  await expect(adoption).toContainText("현재 작업 폴더를 다시 검증하지 않습니다");
+  await expect(adoption.getByRole("link", { name: "완전한 설정과 준비 절차 보기" })).toHaveAttribute("href", /quickstart.md#execute-an-explicit-task$/);
+  const start = page.getByRole("region", { name: "시작 방법을 선택하세요." });
+  await expect(start.getByRole("heading", { name: "먼저 예제로 이해하기" })).toBeVisible();
+  await expect(start.getByRole("heading", { name: "내 프로젝트에 적용하기" })).toBeVisible();
+  const summary = page.getByRole("region", { name: "선택한 시나리오의 판단" });
+  const output = process.env.MERCURY_SCREENSHOT_DIR ?? "test-results";
+  for (const [name, width, height] of [["desktop", 1440, 1000], ["mobile", 375, 812]] as const) {
+    await page.setViewportSize({ width, height });
+    for (const [label, result] of [["정상 수정 기록", "PASS"], ["회귀 기록", "FAIL"], ["범위 이탈 기록", "OUT OF SCOPE"], ["검증 불완전 기록", "UNKNOWN"]]) {
+      await adoption.getByRole("link", { name: label, exact: true }).click();
+      await expect(summary.getByTestId("evidence-outcome")).toHaveText(result);
+      await expect(summary).toBeFocused();
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const code = adoption.getByRole("region", { name: "승인 후 실행 명령" });
+    await code.focus(); await page.keyboard.press("ArrowRight");
+    await expect.poll(() => code.evaluate(node => node.scrollWidth > node.clientWidth ? node.scrollLeft > 0 : true)).toBe(true);
+    await adoption.screenshot({ path: `${output}/${name}-adoption.png` });
+    await start.screenshot({ path: `${output}/${name}-start-routes.png` });
+  }
+});

@@ -353,3 +353,48 @@ h2 { font-size: 35px; font-weight: 800; }
 .evidence-action svg { flex-shrink: 0; }
 .cart-panel:focus { outline: 3px solid var(--primary); outline-offset: 4px; }
 .check-meaning { display: block; color: var(--muted); font-size: 11px; margin-top: 3px; }
+
+/* The adoption guide keeps essential context visible and configuration details optional. */
+.adoption-task { padding: 22px 26px; border-left: 3px solid var(--primary); background: var(--page); margin-bottom: 38px; }
+.adoption-task .workspace-label { display: block; margin-bottom: 8px; }
+.adoption-task p { font-size: 15px; }
+.adoption-note { color: var(--muted); font-size: 12px !important; margin-top: 14px; }
+.adoption-steps { list-style: none; padding: 0; margin: 0; }
+.adoption-steps > li + li { border-top: 1px solid var(--line); margin-top: 36px; padding-top: 36px; }
+.adoption-step { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: 50px; align-items: start; }
+.adoption-copy h3 { font-size: 23px; }
+.adoption-copy p { color: var(--muted); font-size: 14px; margin-top: 14px; }
+.adoption-copy .text-link { margin-top: 16px; }
+.adoption-example { min-width: 0; }
+.scope-files { border: 1px solid var(--line); border-radius: 9px; padding: 10px 20px; }
+.scope-files > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; padding: 10px 0; font-size: 13px; }
+.scope-files > div + div { border-top: 1px solid var(--line); }
+.scope-files span { color: var(--muted); font-size: 12px; }
+.adoption-details { margin-top: 18px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.adoption-details summary { padding: 12px 16px; cursor: pointer; font-size: 13px; font-weight: 700; color: var(--primary); }
+.adoption-details summary:focus-visible, .adoption-section pre:focus-visible, .quickstart-panel pre:focus-visible { outline: 3px solid var(--primary); outline-offset: -3px; }
+.adoption-details > p { padding: 0 16px 12px; font-size: 12px; color: var(--muted); }
+.adoption-section pre { margin: 0; max-width: 100%; overflow-x: auto; padding: 16px; background: var(--page); font-size: 11px; line-height: 1.9; word-break: normal; }
+.adoption-section pre code { white-space: pre; overflow-wrap: normal; }
+.criterion-pairs { display: grid; gap: 12px; }
+.criterion-pairs > div { border-left: 2px solid var(--line); padding: 6px 16px; }
+.criterion-pairs strong, .criterion-pairs code, .criterion-pairs span { display: block; }
+.criterion-pairs strong { font-size: 14px; }.criterion-pairs code { font-size: 12px; margin-top: 5px; color: var(--primary); }.criterion-pairs span { font-size: 12px; color: var(--muted); }
+.adoption-command + .adoption-command { margin-top: 24px; }
+.adoption-command h4, .adoption-results h4 { font-size: 14px; margin: 0 0 10px; }
+.adoption-command pre { border: 1px solid var(--line); border-radius: 7px; }
+.adoption-command p, .adoption-results > p { margin-top: 10px; font-size: 12px; color: var(--muted); }
+.adoption-questions { font-size: 14px; padding-left: 20px; margin-block: 16px; }
+.adoption-questions li + li { margin-top: 7px; }
+.adoption-results { margin-top: 24px; }.adoption-results > div { display: flex; flex-wrap: wrap; gap: 0 20px; margin-top: 12px; }
+.adoption-start-grid { gap: 54px; align-items: start; }.adoption-start-grid h3 { font-size: 24px; }.adoption-start-grid .quickstart-panel { margin-top: 20px; min-width: 0; }.adoption-start-grid > div { min-width: 0; }.adoption-real-start { padding-left: 32px; border-left: 1px solid var(--line); }
+@media (max-width: 760px) {
+  .adoption-task { padding: 18px; }.adoption-task p { font-size: 13px; }
+  .adoption-step { grid-template-columns: minmax(0, 1fr); gap: 22px; }
+  .adoption-copy h3 { font-size: 21px; }.adoption-copy p { font-size: 13px; }
+  .adoption-steps > li + li { margin-top: 30px; padding-top: 30px; }
+  .scope-files { padding-inline: 14px; }.scope-files > div { font-size: 12px; }
+  .adoption-section pre { padding: 14px; font-size: 10px; }
+  .adoption-start-grid { gap: 32px; }.adoption-real-start { border-left: 0; border-top: 1px solid var(--line); padding: 30px 0 0; }
+  .adoption-results .text-link { font-size: 12px; }.adoption-questions { font-size: 13px; }
+}
