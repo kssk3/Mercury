@@ -743,3 +743,103 @@ def test_workflow_does_not_execute_proposed_classifier(repo: Path, route: str) -
     assert (repo / "github-output").read_text() == (
         "record_only=false\nmacos_required=true\nverification=full\nstate_required=true\n"
     )
+
+
+def aggregate_job() -> str:
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    assert "\n  required-ci:\n" in workflow, "CI has no required-result aggregate"
+    return workflow.split("\n  required-ci:\n", 1)[1]
+
+
+def run_aggregate(**values: str) -> subprocess.CompletedProcess[str]:
+    command = aggregate_job().split("        run: |\n", 1)[1]
+    command = "\n".join(
+        line.removeprefix("          ") for line in command.splitlines()
+    )
+    return subprocess.run(
+        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", command],
+        env=values,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+
+def test_required_ci_always_observes_both_jobs_without_write_permissions() -> None:
+    job = aggregate_job()
+    assert "name: Required CI\n" in job
+    assert "if: ${{ always() }}\n" in job
+    assert "needs: [static-checks, tests-linux]\n" in job
+    assert "permissions: {}\n" in job
+    for name, expression in {
+        "STATIC_RESULT": "needs.static-checks.result",
+        "LINUX_RESULT": "needs.tests-linux.result",
+        "RECORD_ONLY": "needs.static-checks.outputs.record_only",
+        "VERIFICATION": "needs.static-checks.outputs.verification",
+        "STATE_REQUIRED": "needs.static-checks.outputs.state_required",
+    }.items():
+        assert f"{name}: ${{{{ {expression} }}}}" in job
+
+
+@pytest.mark.parametrize(
+    ("record_only", "verification", "state_required"),
+    [
+        ("false", "full", "true"),
+        ("true", "document", "false"),
+        ("true", "state", "true"),
+    ],
+)
+@pytest.mark.parametrize(
+    "static_result", ["success", "failure", "cancelled", "skipped", ""]
+)
+@pytest.mark.parametrize(
+    "linux_result", ["success", "failure", "cancelled", "skipped", ""]
+)
+def test_required_ci_only_accepts_completed_applicable_checks(
+    record_only: str,
+    verification: str,
+    state_required: str,
+    static_result: str,
+    linux_result: str,
+) -> None:
+    result = run_aggregate(
+        STATIC_RESULT=static_result,
+        LINUX_RESULT=linux_result,
+        RECORD_ONLY=record_only,
+        VERIFICATION=verification,
+        STATE_REQUIRED=state_required,
+    )
+    expected_linux = "success" if verification == "full" else "skipped"
+    assert (result.returncode == 0) is (
+        static_result == "success" and linux_result == expected_linux
+    ), result.stderr
+
+
+@pytest.mark.parametrize(
+    ("key", "invalid"),
+    [
+        ("RECORD_ONLY", ""),
+        ("RECORD_ONLY", "true"),
+        ("RECORD_ONLY", "False"),
+        ("VERIFICATION", ""),
+        ("VERIFICATION", "document"),
+        ("VERIFICATION", "unknown"),
+        ("STATE_REQUIRED", ""),
+        ("STATE_REQUIRED", "false"),
+        ("STATIC_RESULT", "unknown"),
+        ("LINUX_RESULT", "neutral"),
+    ],
+)
+def test_required_ci_rejects_missing_unknown_or_inconsistent_evidence(
+    key: str, invalid: str
+) -> None:
+    values = {
+        "STATIC_RESULT": "success",
+        "LINUX_RESULT": "success",
+        "RECORD_ONLY": "false",
+        "VERIFICATION": "full",
+        "STATE_REQUIRED": "true",
+    }
+    values[key] = invalid
+    assert run_aggregate(**values).returncode != 0
