@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.27"]
+requires = ["hatchling>=1.33.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -18,10 +18,10 @@ local-harness = "agent_harness.cli:main"
 [dependency-groups]
 dev = [
   "jsonschema>=4.26",
-  "mypy>=1.10",
-  "pytest>=8.0",
-  "ruff>=0.9",
-  "types-jsonschema>=4.26",
+  "mypy>=2.4.1",
+  "pytest>=9.2.0",
+  "ruff>=0.17.4",
+  "types-jsonschema>=4.26.0.20261006",
 ]
 
 [tool.hatch.build.targets.wheel]
