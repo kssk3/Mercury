@@ -251,22 +251,25 @@ JS
 The subtraction in `add.mjs` is the initial defect for the example task.
 Keep this directory available for preview. Setup stops at the initial commit.
 
-Choose trusted absolute Node and Claude executable paths outside the disposable
-repository. Keep a new external state root and the configuration outside the
-repository, with neither directory containing the other. Record the repository's
-full current commit hash using a trusted Git executable.
+From a shell outside the fixture, set the inputs once. Copy the repository
+path and reviewed full commit printed above. For the executables, supply the
+trusted absolute paths for your prepared Mercury installation, Node and Claude.
+Keep this shell open for the preparation and preview blocks.
 
-For one checker command and one completion criterion, the following Python
-recipe defines each once and reuses it in the existing configuration schema.
-Adapt the goal, paths, checker arguments, criterion and limits to the admitted
-task. Supply the reviewed full HEAD explicitly; this recipe never replaces it
-with a live Git query. Prepare the configuration's parent directory separately.
-Replace every sample path and the HEAD placeholder before running this code
-with the trusted absolute Python 3.12+ interpreter from the prepared Mercury
-installation, using `-I -B`, outside the target repository. This recipe imports
-internal helpers from that reviewed installation; their names and behavior are
-version-dependent. Use the implementation documented here, not an arbitrary
-older installation or a copied source directory.
+```sh
+mercury_python='/absolute/path/to/mercury-venv/bin/python'
+fixture_repo='/absolute/path/printed/by/fixture'
+reviewed_head='REPLACE_WITH_REVIEWED_FULL_GIT_HEAD'
+node_bin='/absolute/path/to/node'
+claude_bin='/absolute/path/to/claude'
+```
+
+Use a system temporary directory outside the fixture (check `TMPDIR` if
+customized). Run the next block unchanged. It creates a fresh directory for
+the configuration and
+the proposed state path. Only the configuration file is written inside that
+directory. The supplied commit is recorded as the requested baseline. This recipe uses internal helpers from the reviewed Mercury
+installation and requires its Python 3.12+ interpreter.
 
 Preparation below performs bounded, read-only Git root and metadata queries
 before creating the configuration. The helpers select the trusted system Git,
@@ -274,9 +277,12 @@ remove inherited `GIT_*` selectors, and limit each query to 10 seconds. A failed
 query stops preparation before the write. These queries bind paths; they do not
 read or replace the explicitly reviewed `expected_head`.
 
-```python
+```sh
+preview_dir=$(mktemp -d) && preview_dir=$(cd "$preview_dir" && pwd -P) &&
+"$mercury_python" -I -B - "$fixture_repo" "$reviewed_head" "$preview_dir" "$node_bin" "$claude_bin" <<'PYTHON'
 import json
 import re
+import sys
 from pathlib import Path
 
 from agent_harness.repository import (
@@ -287,12 +293,12 @@ from agent_harness.repository import (
 )
 from agent_harness.run_config import _absolute
 
-repository = Path("/work/addition")
-state_root = Path("/work/addition-state")
-config_path = Path("/work/configs/addition-run.json")
-expected_head = "REPLACE_WITH_REVIEWED_FULL_GIT_HEAD"
+repo_arg, expected_head, output_dir, node_bin, claude_bin = sys.argv[1:]
+repository = _absolute(repo_arg)
+state_root = Path(output_dir) / "state"
+config_path = Path(output_dir) / "addition-run.json"
 criterion = "addition handles positive, negative and zero inputs"
-command = ["/trusted/bin/node", "check.mjs"]
+command = [node_bin, "check.mjs"]
 
 if re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", expected_head) is None:
     raise ValueError("Supply the reviewed full Git HEAD")
@@ -319,7 +325,7 @@ config = {
     "expected_head": expected_head,
     "state_root": str(state_root),
     "backend": "claude",
-    "executable": "/trusted/bin/claude",
+    "executable": claude_bin,
     "contract": {
         "goal": "Fix add.mjs to add two numbers; preserve check.mjs",
         "allowed_paths": ["add.mjs"],
@@ -346,9 +352,10 @@ raw = json.dumps(config, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
 with config_path.open("x", encoding="utf-8") as output:
     output.write(raw)
 print(config_path)
+PYTHON
 ```
 
-The only write is creation of the requested configuration file. Exclusive
+After the shell prepares the directory, the Python step writes only the requested configuration file. Exclusive
 creation (`"x"`) fails if that path already exists, including a symlink or hard
 link; choose a fresh path without overwriting the earlier configuration.
 If writing fails, retain any partial file and inspect the error before choosing
@@ -362,11 +369,18 @@ The shared Mercury parser still validates the full configuration and protected
 checker inputs during preview. The recipe does not create state, run a checker or
 agent, grant approval, or invoke preview automatically.
 
-Preview the created file separately using the first command, substituting its
-absolute path. Review the exact protected checker,
+After preparation succeeds, preview the file with the CLI installed alongside
+the selected Python interpreter:
+
+```sh
+"${mercury_python%/*}/local-harness" run --preview --config "$preview_dir/addition-run.json"
+```
+
+Check that `repository` and `expected_head` match the two fixture values,
+`approval_required` is true and `execution_performed` is false.
+Review the exact protected checker,
 allowed edit, criterion mapping, native executable, expected commit and budgets.
-Only after separate authorization, run the second command with the reviewed
-digest. This requests one Claude turn, zero retries, a 90-second native timeout
+Only after separate authorization, use the execution command at the top of this guide with the reviewed digest. This requests one Claude turn, zero retries, a 90-second native timeout
 and a 120-second loop budget; it does not install dependencies. Authentication
 remains external. The Claude backend uses restricted settings sources and does
 not inherit user/project hooks or model preferences; trusted managed policy and
