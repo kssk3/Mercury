@@ -216,9 +216,40 @@ Start with one disposable, committed repository and the existing
 [JavaScript example](../examples/javascript_quickstart.py). Reuse its small
 `add.mjs` and protected `check.mjs` contents, with no packages or framework. The
 example's `--approve-demo` command prepares a fixture and immediately requests
-execution; it is a live demo, not a preview-only setup command. For this recipe,
-create the two files yourself from its `BUG` and `CHECK` constants and commit
-them locally. Do not execute that demo just to produce preview input.
+execution; it is a live demo, not a preview-only setup command. Prepare the fixture in a fresh directory with this shell block.
+It prints the repository path and full commit to use in the configuration below.
+
+```sh
+(
+  set -eu
+  fixture=$(mktemp -d)
+  cd "$fixture"
+  fixture_git() {
+    env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+      git -c core.hooksPath=/dev/null -c commit.gpgsign=false "$@"
+  }
+  fixture_git init -q
+  cat > add.mjs <<'JS'
+export function add(a, b) { return a - b; }
+JS
+  cat > check.mjs <<'JS'
+import assert from 'node:assert/strict';
+import { add } from './add.mjs';
+assert.equal(add(2, 3), 5);
+assert.equal(add(-2, -3), -5);
+assert.equal(add(0, 0), 0);
+assert.equal(add(-2, 3), 1);
+JS
+  fixture_git add -- add.mjs check.mjs
+  fixture_git -c user.name="Mercury Example" -c user.email=example@example.invalid \
+    commit -qm "Prepare addition fixture"
+  pwd -P
+  fixture_git rev-parse HEAD
+)
+```
+
+The subtraction in `add.mjs` is the initial defect for the example task.
+Keep this directory available for preview. Setup stops at the initial commit.
 
 Choose trusted absolute Node and Claude executable paths outside the disposable
 repository. Keep a new external state root and the configuration outside the
