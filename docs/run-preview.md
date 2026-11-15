@@ -421,7 +421,25 @@ how to proceed. An empty listing describes this instant. Ignored files fall
 outside this status query, and index flags can hide tracked edits. Execution
 preflight checks the baseline again and rejects unsupported hidden index flags.
 
-Only after separate authorization, use the execution command at the top of this guide with the reviewed digest. This requests one Claude turn, zero retries, a 90-second native timeout
+### Run this fixture after approval
+
+Stop here until the approver authorizes the exact configuration reviewed in
+the preview. In the same shell, replace the two quoted placeholders below
+with the approved 64-character `config_sha256` and the approver's identifier.
+The command uses the CLI and configuration path from the preview.
+
+```sh
+"${mercury_python%/*}/local-harness" run --config "$preview_dir/addition-run.json" \
+  --approve-config-sha256 'REVIEWED_64_CHARACTER_SHA256' \
+  --approver 'APPROVER_IDENTIFIER'
+```
+
+Even a whitespace edit changes the digest. If the file changed after review,
+preview it again and obtain approval for the new bytes. An approval digest
+that does not match the file produces `local-harness: invalid_run_config`
+and exit code 2 before the agent starts.
+
+This requests one Claude turn, zero retries, a 90-second native timeout
 and a 120-second loop budget; it does not install dependencies. Authentication
 remains external. The Claude backend uses restricted settings sources and does
 not inherit user/project hooks or model preferences; trusted managed policy and
