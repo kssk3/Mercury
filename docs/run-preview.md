@@ -398,8 +398,28 @@ The preview echoes the baseline from the configuration. After matching it to
 
 Stop if Git cannot read the commit or the values differ. Inspect the change.
 If you select a new baseline, prepare a fresh configuration and preview it.
-A match checks commit identity at that moment; uncommitted edits and execution
-readiness still require the normal preflight.
+A matching HEAD can still have pending edits. Before requesting execution
+approval, inspect the fixture's staged changes, unstaged changes and untracked
+files using the same repository path:
+
+```sh
+(
+  set -eu
+  changes=$(env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    git --no-replace-objects --no-optional-locks -c core.fsmonitor=false \
+    -C "$fixture_repo" status --porcelain=v1 --untracked-files=all)
+  if [ -n "$changes" ]; then
+    printf 'Review pending fixture changes before proceeding:\n%s\n' "$changes" >&2
+    exit 1
+  fi
+  printf 'Git status reports no pending fixture changes.\n'
+)
+```
+
+Stop on a Git error or any listed path. Inspect the changes before deciding
+how to proceed. An empty listing describes this instant. Ignored files fall
+outside this status query, and index flags can hide tracked edits. Execution
+preflight checks the baseline again and rejects unsupported hidden index flags.
 
 Only after separate authorization, use the execution command at the top of this guide with the reviewed digest. This requests one Claude turn, zero retries, a 90-second native timeout
 and a 120-second loop budget; it does not install dependencies. Authentication
