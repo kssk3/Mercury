@@ -122,3 +122,31 @@ jobs:
       - name: Offline approved quickstart
         if: ${{ needs.static-checks.outputs.verification == 'full' }}
         run: uv run --no-sync python examples/quickstart.py --approve-demo
+
+  required-ci:
+    name: Required CI
+    if: ${{ always() }}
+    needs: [static-checks, tests-linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Require completed applicable Python checks
+        env:
+          STATIC_RESULT: ${{ needs.static-checks.result }}
+          LINUX_RESULT: ${{ needs.tests-linux.result }}
+          RECORD_ONLY: ${{ needs.static-checks.outputs.record_only }}
+          VERIFICATION: ${{ needs.static-checks.outputs.verification }}
+          STATE_REQUIRED: ${{ needs.static-checks.outputs.state_required }}
+        run: |
+          # Only the classifier's three complete routes admit a result.
+          # Web checks and exact-HEAD Codex approval remain separate gates.
+          case "$STATIC_RESULT:$RECORD_ONLY:$VERIFICATION:$STATE_REQUIRED:$LINUX_RESULT" in
+            success:false:full:true:success|success:true:document:false:skipped|success:true:state:true:skipped)
+              exit 0
+              ;;
+            *)
+              printf '%s\n' 'Required Python CI checks did not complete with an admitted result.' >&2
+              exit 1
+              ;;
+          esac
