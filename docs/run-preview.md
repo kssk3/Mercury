@@ -380,6 +380,27 @@ Check that `repository` and `expected_head` match the two fixture values,
 `approval_required` is true and `execution_performed` is false.
 Review the exact protected checker,
 allowed edit, criterion mapping, native executable, expected commit and budgets.
+The preview echoes the baseline from the configuration. After matching it to
+`reviewed_head`, compare it with the fixture's current commit in the same shell:
+
+```sh
+(
+  set -eu
+  current_head=$(env -i PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    git --no-replace-objects -C "$fixture_repo" rev-parse --verify 'HEAD^{commit}')
+  if [ "$current_head" != "$reviewed_head" ]; then
+    printf 'Baseline changed: reviewed %s, current %s\n' "$reviewed_head" "$current_head" >&2
+    exit 1
+  fi
+  printf 'Fixture HEAD matches the reviewed commit: %s\n' "$current_head"
+)
+```
+
+Stop if Git cannot read the commit or the values differ. Inspect the change.
+If you select a new baseline, prepare a fresh configuration and preview it.
+A match checks commit identity at that moment; uncommitted edits and execution
+readiness still require the normal preflight.
+
 Only after separate authorization, use the execution command at the top of this guide with the reviewed digest. This requests one Claude turn, zero retries, a 90-second native timeout
 and a 120-second loop budget; it does not install dependencies. Authentication
 remains external. The Claude backend uses restricted settings sources and does
