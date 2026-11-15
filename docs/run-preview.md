@@ -443,8 +443,30 @@ This requests one Claude turn, zero retries, a 90-second native timeout
 and a 120-second loop budget; it does not install dependencies. Authentication
 remains external. The Claude backend uses restricted settings sources and does
 not inherit user/project hooks or model preferences; trusted managed policy and
-external authentication remain applicable. Retain the external state and inspect
-the JSON outcome and historical status before deciding on further work.
+external authentication remain applicable.
+
+### Inspect the recorded result
+
+Read the run's JSON output before starting another task. A passing fixture run
+reports `status: "pass"` and `criteria_passed: true`. For any other outcome,
+start with its `reason`. Keep the external state directory for inspection.
+
+If the run produced a history, copy its exact `state_dir` value from that
+JSON into the command below. The configuration's `state_root` is the parent
+storage location for run histories. A preflight failure can report a planned
+directory before creating it. If there is no run JSON or no existing
+`state_dir`, use the original error or outcome; do not create a directory to
+supply this command.
+
+```sh
+run_state_dir='/absolute/state_dir/from/the/run/output'
+"${mercury_python%/*}/local-harness" status --state-dir "$run_state_dir" --details
+```
+
+Read `recorded_status`, `recorded_reason`, and `diagnostics` in the returned
+JSON. A successful status lookup can describe a failed run. Inspect any
+diagnostics before relying on the history. See [historical status details](status-details.md)
+for the fields available from saved process, scope, and verification records.
 
 ## Execution diagnostics after an approved Codex turn
 
