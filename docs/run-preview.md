@@ -217,13 +217,12 @@ Start with one disposable, committed repository and the existing
 `add.mjs` and protected `check.mjs` contents, with no packages or framework. The
 example's `--approve-demo` command prepares a fixture and immediately requests
 execution; it is a live demo, not a preview-only setup command. Prepare the fixture in a fresh directory with this shell block.
-It prints the repository path and full commit to use in the configuration below.
+In the same shell, keep the physical repository path and the initial commit for preview.
 
 ```sh
-(
-  set -eu
-  fixture=$(mktemp -d)
-  cd "$fixture"
+fixture_repo=$(mktemp -d) && fixture_repo=$(cd "$fixture_repo" && pwd -P) &&
+reviewed_head=$(/bin/sh -eu -s -- "$fixture_repo" <<'FIXTURE'
+  cd "$1"
   fixture_git() {
     env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
       git -c core.hooksPath=/dev/null -c commit.gpgsign=false "$@"
@@ -243,23 +242,20 @@ JS
   fixture_git add -- add.mjs check.mjs
   fixture_git -c user.name="Mercury Example" -c user.email=example@example.invalid \
     commit -qm "Prepare addition fixture"
-  pwd -P
   fixture_git rev-parse HEAD
-)
+FIXTURE
+) && printf 'Fixture: %s\nInitial commit: %s\n' "$fixture_repo" "$reviewed_head"
 ```
 
 The subtraction in `add.mjs` is the initial defect for the example task.
-Keep this directory available for preview. Setup stops at the initial commit.
+Continue only after setup prints the fixture path and initial commit. Review both
+values and keep the same shell open so the remaining commands use this baseline.
 
-From a shell outside the fixture, set the inputs once. Copy the repository
-path and reviewed full commit printed above. For the executables, supply the
-trusted absolute paths for your prepared Mercury installation, Node and Claude.
-Keep this shell open for the preparation and preview blocks.
+Supply the trusted absolute paths for your prepared Mercury installation, Node
+and Claude. The setup command leaves your shell outside the fixture.
 
 ```sh
 mercury_python='/absolute/path/to/mercury-venv/bin/python'
-fixture_repo='/absolute/path/printed/by/fixture'
-reviewed_head='REPLACE_WITH_REVIEWED_FULL_GIT_HEAD'
 node_bin='/absolute/path/to/node'
 claude_bin='/absolute/path/to/claude'
 ```
