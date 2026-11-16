@@ -366,8 +366,9 @@ checker inputs during preview. The recipe does not create state, run a checker o
 agent, grant approval, or invoke preview automatically.
 
 After preparation succeeds, preview the configuration and compare the reported
-repository and baseline with the values retained during fixture setup. The same
-block checks that `approval_required` is the JSON boolean `true` and
+repository and baseline with the values retained during fixture setup. The
+preview must report the `claude` backend and the exact executable path saved in
+`claude_bin`. The same block checks that `approval_required` is the JSON boolean `true` and
 `execution_performed` is the JSON boolean `false`. For this fixture, the
 contract must list only `add.mjs` under `allowed_paths` and only `check.mjs`
 under `protected_paths`. Verification must run a single command from the
@@ -397,6 +398,8 @@ preview = json.load(sys.stdin)
 check_fields(preview, {
     "repository": sys.argv[1],
     "expected_head": sys.argv[2],
+    "backend": "claude",
+    "executable": sys.argv[4],
     "approval_required": True,
     "execution_performed": False,
 })
@@ -416,7 +419,7 @@ check_fields(verification, {
     "working_directory": ".",
 }, "verification.")
 check_fields(preview, {"criterion_commands": {criterion: commands}})
-' "$fixture_repo" "$reviewed_head" "$node_bin"
+' "$fixture_repo" "$reviewed_head" "$node_bin" "$claude_bin"
 }
 ```
 
