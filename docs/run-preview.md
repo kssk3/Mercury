@@ -367,8 +367,10 @@ agent, grant approval, or invoke preview automatically.
 
 After preparation succeeds, preview the configuration and compare the reported
 repository and baseline with the values retained during fixture setup. The same
-block checks that the preview reports `approval_required` as the JSON boolean
-`true` and `execution_performed` as the JSON boolean `false`:
+block checks that `approval_required` is the JSON boolean `true` and
+`execution_performed` is the JSON boolean `false`. For this fixture, the
+contract must list only `add.mjs` under `allowed_paths` and only `check.mjs`
+under `protected_paths`.
 
 ```sh
 preview_json=$("${mercury_python%/*}/local-harness" run --preview --config "$preview_dir/addition-run.json") && {
@@ -376,18 +378,29 @@ preview_json=$("${mercury_python%/*}/local-harness" run --preview --config "$pre
   printf '%s\n' "$preview_json" | "$mercury_python" -I -c '
 import json, sys
 
+def check_fields(record, expected_fields, prefix=""):
+    for field, expected in expected_fields.items():
+        name = prefix + field
+        if field not in record:
+            sys.exit(f"Preview {name} missing: expected {expected!r}")
+        actual = record[field]
+        if type(actual) is not type(expected) or actual != expected:
+            sys.exit(f"Preview {name} mismatch: expected {expected!r}, got {actual!r}")
+
 preview = json.load(sys.stdin)
-for field, expected in (
-    ("repository", sys.argv[1]),
-    ("expected_head", sys.argv[2]),
-    ("approval_required", True),
-    ("execution_performed", False),
-):
-    if field not in preview:
-        sys.exit(f"Preview {field} missing: expected {expected!r}")
-    actual = preview[field]
-    if type(actual) is not type(expected) or actual != expected:
-        sys.exit(f"Preview {field} mismatch: expected {expected!r}, got {actual!r}")
+check_fields(preview, {
+    "repository": sys.argv[1],
+    "expected_head": sys.argv[2],
+    "approval_required": True,
+    "execution_performed": False,
+})
+contract = preview.get("contract")
+if not isinstance(contract, dict):
+    sys.exit("Preview contract missing or invalid: expected a JSON object")
+check_fields(contract, {
+    "allowed_paths": ["add.mjs"],
+    "protected_paths": ["check.mjs"],
+}, "contract.")
 ' "$fixture_repo" "$reviewed_head"
 }
 ```
