@@ -370,7 +370,9 @@ repository and baseline with the values retained during fixture setup. The same
 block checks that `approval_required` is the JSON boolean `true` and
 `execution_performed` is the JSON boolean `false`. For this fixture, the
 contract must list only `add.mjs` under `allowed_paths` and only `check.mjs`
-under `protected_paths`.
+under `protected_paths`. Verification must run a single command from the
+repository root (`.`), using the selected Node executable with `check.mjs`
+as its only argument.
 
 ```sh
 preview_json=$("${mercury_python%/*}/local-harness" run --preview --config "$preview_dir/addition-run.json") && {
@@ -401,7 +403,14 @@ check_fields(contract, {
     "allowed_paths": ["add.mjs"],
     "protected_paths": ["check.mjs"],
 }, "contract.")
-' "$fixture_repo" "$reviewed_head"
+verification = preview.get("verification")
+if not isinstance(verification, dict):
+    sys.exit("Preview verification missing or invalid: expected a JSON object")
+check_fields(verification, {
+    "commands": [[sys.argv[3], "check.mjs"]],
+    "working_directory": ".",
+}, "verification.")
+' "$fixture_repo" "$reviewed_head" "$node_bin"
 }
 ```
 
