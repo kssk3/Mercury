@@ -365,15 +365,27 @@ The shared Mercury parser still validates the full configuration and protected
 checker inputs during preview. The recipe does not create state, run a checker or
 agent, grant approval, or invoke preview automatically.
 
-After preparation succeeds, preview the file with the CLI installed alongside
-the selected Python interpreter:
+After preparation succeeds, preview the configuration and compare the reported
+repository and baseline with the values retained during fixture setup:
 
 ```sh
-"${mercury_python%/*}/local-harness" run --preview --config "$preview_dir/addition-run.json"
+preview_json=$("${mercury_python%/*}/local-harness" run --preview --config "$preview_dir/addition-run.json") && {
+  printf '%s\n' "$preview_json"
+  printf '%s\n' "$preview_json" | "$mercury_python" -I -c '
+import json, sys
+
+preview = json.load(sys.stdin)
+for field, expected in (("repository", sys.argv[1]), ("expected_head", sys.argv[2])):
+    actual = preview.get(field)
+    if actual != expected:
+        sys.exit(f"Preview {field} mismatch: expected {expected!r}, got {actual!r}")
+' "$fixture_repo" "$reviewed_head"
+}
 ```
 
-Check that `repository` and `expected_head` match the two fixture values,
-`approval_required` is true and `execution_performed` is false.
+Stop if the block fails. A preview error retains its exit code and stderr;
+a mismatch names the field and shows both values. On success, review the
+printed preview. Check that `approval_required` is true and `execution_performed` is false.
 Review the exact protected checker,
 allowed edit, criterion mapping, native executable, expected commit and budgets.
 The preview echoes the baseline from the configuration. After matching it to
