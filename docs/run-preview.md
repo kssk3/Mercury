@@ -426,12 +426,19 @@ preflight checks the baseline again and rejects unsupported hidden index flags.
 Stop here until the approver authorizes the exact configuration reviewed in
 the preview. In the same shell, replace the two quoted placeholders below
 with the approved 64-character `config_sha256` and the approver's identifier.
-The command uses the CLI and configuration path from the preview.
+Save stdout in a fresh file alongside the preview configuration. Keep this
+shell open for inspection. Stderr stays visible, and `run_exit` retains the
+execution exit code even when a failed check produces a history.
 
 ```sh
-"${mercury_python%/*}/local-harness" run --config "$preview_dir/addition-run.json" \
-  --approve-config-sha256 'REVIEWED_64_CHARACTER_SHA256' \
-  --approver 'APPROVER_IDENTIFIER'
+run_result=$(mktemp "$preview_dir/run-result.XXXXXX") && {
+  run_exit=0
+  "${mercury_python%/*}/local-harness" run --config "$preview_dir/addition-run.json" \
+    --approve-config-sha256 'REVIEWED_64_CHARACTER_SHA256' \
+    --approver 'APPROVER_IDENTIFIER' > "$run_result" || run_exit=$?
+  cat "$run_result"
+  printf 'Run exit code: %s\n' "$run_exit"
+}
 ```
 
 Even a whitespace edit changes the digest. If the file changed after review,
@@ -451,31 +458,31 @@ Read the run's JSON output before starting another task. A passing fixture run
 reports `status: "pass"` and `criteria_passed: true`. For any other outcome,
 start with its `reason`. Keep the external state directory for inspection.
 
-If the run produced a history, copy its exact `state_dir` value from that
-JSON into the command below. The configuration's `state_root` is the parent
-storage location for run histories. A preflight failure can report a planned
-directory before creating it. If there is no run JSON or no existing
-`state_dir`, use the original error or outcome; do not create a directory to
-supply this command.
+Use the saved result to read the run's own `state_dir`. The configuration's
+`state_root` can contain several histories. A preflight failure may report
+a planned run directory without creating it. If there is no result JSON or
+the reported directory does not exist, the block skips both lookups and
+returns the original run exit code.
 
 ```sh
-run_state_dir='/absolute/state_dir/from/the/run/output'
-"${mercury_python%/*}/local-harness" status --state-dir "$run_state_dir" --details
+if [ -s "$run_result" ] &&
+   run_state_dir=$("$mercury_python" -I -c \
+     'import json, sys; print(json.load(sys.stdin).get("state_dir") or "")' < "$run_result") &&
+   [ -d "$run_state_dir" ]; then
+  "${mercury_python%/*}/local-harness" status --state-dir "$run_state_dir" --details &&
+  "${mercury_python%/*}/local-harness" status --state-dir "$run_state_dir" \
+    --explain --config "$preview_dir/addition-run.json"
+else
+  (exit "$run_exit")
+fi
 ```
 
-Read `recorded_status`, `recorded_reason`, and `diagnostics` in the returned
-JSON. A successful status lookup can describe a failed run. Inspect any
-diagnostics before relying on the history. See [historical status details](status-details.md)
-for the fields available from saved process, scope, and verification records.
+The first lookup shows `recorded_status`, `recorded_reason`, and `diagnostics`.
+A successful lookup can describe a failed run. Inspect any diagnostics before
+relying on the history. See [historical status details](status-details.md)
+for the saved process, scope, and verification fields.
 
-To see which check supplied evidence for the addition criterion, reuse the
-same run directory and the original configuration from the preview:
-
-```sh
-"${mercury_python%/*}/local-harness" status --state-dir "$run_state_dir" \
-  --explain --config "$preview_dir/addition-run.json"
-```
-
+The second lookup uses the original preview configuration to explain the addition criterion.
 Look for `explanation.config.state` equal to `bound`. Under
 `explanation.criteria`, find `addition handles positive, negative and zero inputs`
 and read each attempt's `saved_command_outcome` alongside its command exit code.
