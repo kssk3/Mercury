@@ -372,7 +372,9 @@ block checks that `approval_required` is the JSON boolean `true` and
 contract must list only `add.mjs` under `allowed_paths` and only `check.mjs`
 under `protected_paths`. Verification must run a single command from the
 repository root (`.`), using the selected Node executable with `check.mjs`
-as its only argument.
+as its only argument. The fixture has one completion criterion,
+`addition handles positive, negative and zero inputs`, and its
+`criterion_commands` entry must contain exactly that command.
 
 ```sh
 preview_json=$("${mercury_python%/*}/local-harness" run --preview --config "$preview_dir/addition-run.json") && {
@@ -389,6 +391,8 @@ def check_fields(record, expected_fields, prefix=""):
         if type(actual) is not type(expected) or actual != expected:
             sys.exit(f"Preview {name} mismatch: expected {expected!r}, got {actual!r}")
 
+criterion = "addition handles positive, negative and zero inputs"
+commands = [[sys.argv[3], "check.mjs"]]
 preview = json.load(sys.stdin)
 check_fields(preview, {
     "repository": sys.argv[1],
@@ -402,14 +406,16 @@ if not isinstance(contract, dict):
 check_fields(contract, {
     "allowed_paths": ["add.mjs"],
     "protected_paths": ["check.mjs"],
+    "completion_criteria": [criterion],
 }, "contract.")
 verification = preview.get("verification")
 if not isinstance(verification, dict):
     sys.exit("Preview verification missing or invalid: expected a JSON object")
 check_fields(verification, {
-    "commands": [[sys.argv[3], "check.mjs"]],
+    "commands": commands,
     "working_directory": ".",
 }, "verification.")
+check_fields(preview, {"criterion_commands": {criterion: commands}})
 ' "$fixture_repo" "$reviewed_head" "$node_bin"
 }
 ```
