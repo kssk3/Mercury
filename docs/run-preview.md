@@ -366,7 +366,9 @@ checker inputs during preview. The recipe does not create state, run a checker o
 agent, grant approval, or invoke preview automatically.
 
 After preparation succeeds, preview the configuration and compare the reported
-repository and baseline with the values retained during fixture setup:
+repository and baseline with the values retained during fixture setup. The same
+block checks that the preview reports `approval_required` as the JSON boolean
+`true` and `execution_performed` as the JSON boolean `false`:
 
 ```sh
 preview_json=$("${mercury_python%/*}/local-harness" run --preview --config "$preview_dir/addition-run.json") && {
@@ -375,18 +377,24 @@ preview_json=$("${mercury_python%/*}/local-harness" run --preview --config "$pre
 import json, sys
 
 preview = json.load(sys.stdin)
-for field, expected in (("repository", sys.argv[1]), ("expected_head", sys.argv[2])):
-    actual = preview.get(field)
-    if actual != expected:
+for field, expected in (
+    ("repository", sys.argv[1]),
+    ("expected_head", sys.argv[2]),
+    ("approval_required", True),
+    ("execution_performed", False),
+):
+    if field not in preview:
+        sys.exit(f"Preview {field} missing: expected {expected!r}")
+    actual = preview[field]
+    if type(actual) is not type(expected) or actual != expected:
         sys.exit(f"Preview {field} mismatch: expected {expected!r}, got {actual!r}")
 ' "$fixture_repo" "$reviewed_head"
 }
 ```
 
 Stop if the block fails. A preview error retains its exit code and stderr;
-a mismatch names the field and shows both values. On success, review the
-printed preview. Check that `approval_required` is true and `execution_performed` is false.
-Review the exact protected checker,
+a missing or mismatched field is named in the error. On success, review
+the printed preview for the exact protected checker,
 allowed edit, criterion mapping, native executable, expected commit and budgets.
 The preview echoes the baseline from the configuration. After matching it to
 `reviewed_head`, compare it with the fixture's current commit in the same shell:
