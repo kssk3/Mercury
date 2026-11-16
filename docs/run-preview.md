@@ -468,6 +468,21 @@ JSON. A successful status lookup can describe a failed run. Inspect any
 diagnostics before relying on the history. See [historical status details](status-details.md)
 for the fields available from saved process, scope, and verification records.
 
+To see which check supplied evidence for the addition criterion, reuse the
+same run directory and the original configuration from the preview:
+
+```sh
+"${mercury_python%/*}/local-harness" status --state-dir "$run_state_dir" \
+  --explain --config "$preview_dir/addition-run.json"
+```
+
+Look for `explanation.config.state` equal to `bound`. Under
+`explanation.criteria`, find `addition handles positive, negative and zero inputs`
+and read each attempt's `saved_command_outcome` alongside its command exit code.
+These values come from the saved checks. If the configuration is missing or
+its bytes have changed, the criterion mapping is unavailable; the top-level
+`recorded_status` still describes the saved run.
+
 ## Execution diagnostics after an approved Codex turn
 
 New Codex turns retain optional `diagnostics` on the saved `turn_observation`
